@@ -36,7 +36,7 @@ import kotlinx.coroutines.withContext
  * Zip Slip 防护沿用 SkillImportRepository、id 一致性校验（W-48 安全边界）。
  */
 internal class MarketFacade(
-    app: Application,
+    private val app: Application,
     private val importRepo: ImportedSkillRepository,
     private val scope: CoroutineScope,
     private val reloadSkills: () -> Unit,
