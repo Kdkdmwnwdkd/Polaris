@@ -78,7 +78,6 @@ import com.beichen.polaris.core.LlmHttpException
 import com.beichen.polaris.core.LLMClient
 import com.beichen.polaris.core.LLMConfig
 import com.beichen.polaris.core.SystemMessage
-import com.beichen.polaris.core.ModelListFetcher
 import com.beichen.polaris.core.ProviderManager
 import com.beichen.polaris.core.llm.KeyPoolRuntime
 import com.beichen.polaris.core.llm.KeyPoolStore
@@ -134,12 +133,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import com.beichen.polaris.skill.CapabilityRegistry
 import com.beichen.polaris.skill.policyFor
-import com.beichen.polaris.skill.market.MarketClient
-import com.beichen.polaris.skill.market.MarketInstallState
-import com.beichen.polaris.skill.market.MarketPlugin
-import com.beichen.polaris.skill.market.MarketRules
 import com.beichen.polaris.skill.market.MarketSource
-import com.beichen.polaris.skill.market.MarketStore
 import com.beichen.polaris.skill.market.MarketUiItem
 import com.beichen.polaris.skill.checkCapabilityGate
 import com.beichen.polaris.memory.MemoryItem
@@ -550,15 +544,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 导入技能仓库（L7）：从 URL / 本机 zip / 内置示例导入到 filesDir/skills/imported。 */
     private val importRepo = ImportedSkillRepository(app)
 
-    /**
-     * W-48 插件市场：源列表落 SharedPreferences，索引每次刷新现拉（不本地镜像）。
-     *
-     * 为什么不缓存索引：市场里「已下架/已修版本」变化频繁，缓存会让用户装到过期包；
-     * 而索引本身很小（几十 KB），每次刷新重拉的成本可以忽略。
-     */
-    private val marketStore = MarketStore(app)
-    private val marketClient = MarketClient()
-
     /** 已导入技能 id 集合：用于按来源路由资源配置（imported 读 filesDir，否则读 assets）。 */
     private var importedIds: Set<String> = emptySet()
 
@@ -581,36 +566,47 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private val _importStatus = MutableStateFlow<String?>(null)
     override val importStatus: StateFlow<String?> = _importStatus.asStateFlow()
 
-    /* ------------------------- W-48 插件市场状态 ------------------------- */
-
-    /** 已配置的市场源（含顺序即用户添加顺序）。 */
-    private val _marketSources = MutableStateFlow(marketStore.loadSources().also { startup.mark("marketSources") })
-    override val marketSources: StateFlow<List<MarketSource>> = _marketSources.asStateFlow()
-
-    /** 合并去重后的插件列表（含本机安装态）。 */
-    private val _marketItems = MutableStateFlow<List<MarketUiItem>>(emptyList())
-    override val marketItems: StateFlow<List<MarketUiItem>> = _marketItems.asStateFlow()
-
-    /** 正在刷新索引（按钮置灰 + 顶部进度提示的唯一判据）。 */
-    private val _marketLoading = MutableStateFlow(false)
-    override val marketLoading: StateFlow<Boolean> = _marketLoading.asStateFlow()
-
-    /** 正在安装/卸载的插件 id（同一时刻只允许一个，避免并发写同一目录）。 */
-    private val _marketBusyId = MutableStateFlow<String?>(null)
-    override val marketBusyId: StateFlow<String?> = _marketBusyId.asStateFlow()
-
-    /** 面向用户的一行状态（成功/失败/源为空），UI 原样展示。 */
-    private val _marketStatus = MutableStateFlow<String?>(null)
-    override val marketStatus: StateFlow<String?> = _marketStatus.asStateFlow()
+    /* ------------------------- W-48 插件市场（3.1 拆出 MarketFacade） ------------------------- */
 
     /**
-     * 刷新期间又被要求刷新（例如「删源」触发的重刷）。
+     * 市场域整块搬进 [MarketFacade]：字段（五条 StateFlow + 补刷标记）与方法
+     * （刷新/增删源/装/卸）都在那边，这里只留 override 转发——契约一行没动，
+     * 页面拿到的仍是同一个接口。
      *
-     * 不能简单丢弃：刷新开始时已快照源列表，中途删掉的源会继续出现在结果里，
-     * 用户看到「源删了、插件还在」。标记后在 finally 补刷一次，保证最终态与源列表一致。
+     * 与 VM 的全部接触面就三个注入点：已装列表（importRepo）、装/卸后刷新技能快照
+     * （::reloadSkills）、协程作用域。市场不知道会话与工具表的存在。
      */
-    @Volatile
-    private var marketRefreshPending = false
+    private val market = MarketFacade(app, importRepo, viewModelScope, ::reloadSkills, startup)
+
+    /** 已配置的市场源（含顺序即用户添加顺序）。 */
+    override val marketSources: StateFlow<List<MarketSource>> get() = market.marketSources
+
+    /** 合并去重后的插件列表（含本机安装态）。 */
+    override val marketItems: StateFlow<List<MarketUiItem>> get() = market.marketItems
+
+    /** 正在刷新索引（按钮置灰 + 顶部进度提示的唯一判据）。 */
+    override val marketLoading: StateFlow<Boolean> get() = market.marketLoading
+
+    /** 正在安装/卸载的插件 id（同一时刻只允许一个，避免并发写同一目录）。 */
+    override val marketBusyId: StateFlow<String?> get() = market.marketBusyId
+
+    /** 面向用户的一行状态（成功/失败/源为空），UI 原样展示。 */
+    override val marketStatus: StateFlow<String?> get() = market.marketStatus
+
+    /** 刷新全部市场源（同一时刻只允许一次；多源串行拉取，见 facade）。 */
+    override fun refreshMarket() = market.refreshMarket()
+
+    /** 添加市场源（true = 已添加并开始刷新；false = 非法/重复）。 */
+    override fun addMarketSource(raw: String): Boolean = market.addMarketSource(raw)
+
+    /** 删除市场源（同时把它的条目从当前列表里移除，不等下次刷新）。 */
+    override fun removeMarketSource(url: String) = market.removeMarketSource(url)
+
+    /** 安装/更新一个插件（复用 SkillImportRepository，含 id 一致性校验）。 */
+    override fun installMarketPlugin(id: String) = market.installMarketPlugin(id)
+
+    /** 卸载一个已装插件（只删本地目录，市场列表保留该条目）。 */
+    override fun uninstallMarketPlugin(id: String) = market.uninstallMarketPlugin(id)
 
     /** 由 skillsSnapshot 计算技能中心卡片数据（L5 安全策略摘要）。 */
     private fun computeSkillInfos(): List<SkillUiInfo> = skillsSnapshot.map { sk ->
@@ -1705,51 +1701,24 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private val keyPoolStore = KeyPoolStore(app)
     private val keyPoolRuntime = KeyPoolRuntime()
 
-    private val _backupKeys = MutableStateFlow<List<BackupKeyUi>>(emptyList())
-    override val backupKeys: StateFlow<List<BackupKeyUi>> = _backupKeys.asStateFlow()
+    private val keyPool = KeyPoolFacade(configStore, keyPoolStore, keyPoolRuntime, providerManager)
+
+    /** 备用 Key（设置页增删）；实现见 [KeyPoolFacade]。 */
+    override val backupKeys: StateFlow<List<BackupKeyUi>> get() = keyPool.backupKeys
 
     /** Key 池状态一行摘要（几把可用 / 几把冷却 / 最早多久恢复）。 */
-    private val _keyPoolSummary = MutableStateFlow("")
-    override val keyPoolSummary: StateFlow<String> = _keyPoolSummary.asStateFlow()
+    override val keyPoolSummary: StateFlow<String> get() = keyPool.keyPoolSummary
 
-    /** 把当前档案的备用 Key 灌进 ProviderManager（限流时自动切换）。 */
-    private fun refreshKeyPool() {
-        val profileId = configStore.loadActiveId() ?: "default"
-        val slots = keyPoolStore.list(profileId)
-        providerManager.backupKeys = slots
-        providerManager.keyRuntime = if (slots.isEmpty()) null else keyPoolRuntime
-    }
+    /** 转发：buildMainClient 每次取 client 前调用（增删/换档案即时生效）。 */
+    private fun refreshKeyPool() = keyPool.refreshKeyPool()
 
     /** 重新读取备用 Key 并刷新 UI 状态（设置页增删后调用）。 */
-    override fun reloadBackupKeys() {
-        val profileId = configStore.loadActiveId() ?: "default"
-        val slots = keyPoolStore.list(profileId)
-        _backupKeys.value = slots.map {
-            BackupKeyUi(it.id, it.label, keyPoolStore.masked(it.key))
-        }
-        refreshKeyPool()
-        _keyPoolSummary.value = if (slots.isEmpty()) {
-            "未配备用 Key（仅主 Key 在跑）"
-        } else {
-            keyPoolRuntime.summary(slots)
-        }
-    }
+    override fun reloadBackupKeys() = keyPool.reloadBackupKeys()
 
     /** 新增一把备用 Key（空白/已存在则忽略）。 */
-    override fun addBackupKey(rawKey: String, label: String) {
-        val key = rawKey.trim()
-        if (key.isBlank()) return
-        val profileId = configStore.loadActiveId() ?: "default"
-        keyPoolStore.add(profileId, label, key)
-        reloadBackupKeys()
-    }
+    override fun addBackupKey(rawKey: String, label: String) = keyPool.addBackupKey(rawKey, label)
 
-    override fun removeBackupKey(id: String) {
-        val profileId = configStore.loadActiveId() ?: "default"
-        keyPoolStore.remove(profileId, id)
-        keyPoolRuntime.resetAll()
-        reloadBackupKeys()
-    }
+    override fun removeBackupKey(id: String) = keyPool.removeBackupKey(id)
 
     /**
      * 主模型客户端（W-31 抽出，主循环与子代理共用）。
@@ -2281,97 +2250,35 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         }
     }
 
-    // —— 模型列表拉取（模型配置页「选择模型」弹窗）————————————————————————
+    // —— 模型列表拉取（模型配置页「选择模型」弹窗）—— 3.1 拆出 ModelListFacade ——
+
+    /**
+     * 列表拉取域整块搬进 [ModelListFacade]：它只依赖 configStore（收藏落盘）与一个
+     * 协程作用域，与生成链零交集。这里保留 override 转发，契约一行没动。
+     */
+    private val modelListFacade = ModelListFacade(configStore, viewModelScope)
 
     /** 「选择模型」弹窗的模型 id 列表；emptyList = 未拉取或拉到空。 */
-    private val _modelList = MutableStateFlow<List<String>>(emptyList())
-    override val modelList: StateFlow<List<String>> = _modelList.asStateFlow()
+    override val modelList: StateFlow<List<String>> get() = modelListFacade.modelList
 
-    /**
-     * 功能五（P1-6）：收藏的模型名（对标 RikkaHub `favoriteModels`）。
-     *
-     * 收藏区恒在列表最前，跨端点共用——目的是让「每天用的那两三个模型」
-     * 不用每次在几十个列表项里翻。
-     */
-    private val _favoriteModels = MutableStateFlow(configStore.loadFavoriteModels())
-    override val favoriteModels: StateFlow<List<String>> = _favoriteModels.asStateFlow()
+    /** 收藏的模型名（收藏区恒在列表最前，跨端点共用）。 */
+    override val favoriteModels: StateFlow<List<String>> get() = modelListFacade.favoriteModels
 
-    /** 功能五（P1-6）：收藏 / 取消收藏（即时落盘，重启不丢）。 */
-    override fun toggleFavoriteModel(name: String) {
-        val cur = _favoriteModels.value
-        val next = if (name in cur) cur - name else cur + name
-        _favoriteModels.value = next
-        configStore.saveFavoriteModels(next)
-    }
-
-    /** 是否正在拉取模型列表：UI 显示 loading，并作并发守卫（拉取中忽略重复触发）。 */
-    private val _modelListLoading = MutableStateFlow(false)
-    override val modelListLoading: StateFlow<Boolean> = _modelListLoading.asStateFlow()
+    /** 是否正在拉取模型列表：UI 显示 loading，并作并发守卫。 */
+    override val modelListLoading: StateFlow<Boolean> get() = modelListFacade.modelListLoading
 
     /** 拉取失败文案（已脱敏后截断）；null = 无错误。 */
-    private val _modelListError = MutableStateFlow<String?>(null)
-    override val modelListError: StateFlow<String?> = _modelListError.asStateFlow()
+    override val modelListError: StateFlow<String?> get() = modelListFacade.modelListError
 
-    /** 拉取任务句柄：重试 / 关闭时先 cancel 旧 job，避免旧结果覆盖新结果。 */
-    private var modelListJob: Job? = null
+    /** 收藏 / 取消收藏（即时落盘，重启不丢）。 */
+    override fun toggleFavoriteModel(name: String) = modelListFacade.toggleFavoriteModel(name)
 
-    /**
-     * 拉取模型列表（模型配置页「选择模型」弹窗打开即调用）。
-     * 与 [testConnection] 同模式：并发守卫 + Dispatchers.IO + 失败脱敏。
-     *
-     * @param baseUrl 输入框当前的 Base URL（原始值，fetcher 内部先过 ConfigSanitizer）。
-     * @param apiKey 输入框当前的 API Key（原始值）。
-     * @param providerId 当前选中的供应商（"openai" / "claude" / "gemini" / "local-llama"）。
-     */
-    override fun fetchModelList(baseUrl: String, apiKey: String, providerId: String) {
-        // 并发守卫：正在拉取时直接忽略重复点击（与 _testing 同一思路）
-        if (_modelListLoading.value) return
-        // 本地模型不做网络拉取：请在「本地模型」页签的状态卡中选择
-        // （isLocal 时弹窗入口根本不显示，这里是双保险）
-        if (providerId == "local-llama") {
-            _modelListError.value = "本地模型请在下方状态卡中选择"
-            return
-        }
-        modelListJob?.cancel()
-        _modelListLoading.value = true
-        _modelListError.value = null
-        modelListJob = viewModelScope.launch {
-            try {
-                // 先过 ConfigSanitizer（与 testConnection 同模式；fetcher 内部还会再洗一遍做防御双保险）
-                val base = ConfigSanitizer.normalizeBaseUrl(baseUrl)
-                val key = ConfigSanitizer.cleanApiKey(apiKey)
-                val models = withContext(Dispatchers.IO) {
-                    ModelListFetcher().fetch(base, key, providerId)
-                }
-                // OkHttp 的 execute() 是阻塞调用，withContext(IO) 里的挂起不会因
-                // 外层 job cancel 而中断：旧任务可能跑完阻塞调用后走到这里。
-                // isActive 守卫保证旧 job 晚到时不写脏状态（旧配置的列表 / 错误都不覆盖新拉取）。
-                if (!isActive) return@launch
-                _modelList.value = models
-            } catch (e: CancellationException) {
-                // 取消不是错误：向上传播，绝不吞（否则协程树语义被破坏）
-                throw e
-            } catch (e: Throwable) {
-                if (!isActive) return@launch
-                // 异常文案离开 UI 前先脱敏再截断（防御：异常里可能夹带 url 中的 key 片段）
-                _modelListError.value =
-                    (e.message?.let { AgentLogger.sanitize(it) } ?: "未知错误").take(200)
-            } finally {
-                // 只有当期 job 能收 loading：旧 job 的 finally 晚到时 isActive=false，
-                // 不会把新任务刚置的 _modelListLoading=true 误收成 false
-                if (isActive) _modelListLoading.value = false
-            }
-        }
-    }
+    /** 拉取模型列表（并发守卫 + Dispatchers.IO + 失败脱敏，见 facade）。 */
+    override fun fetchModelList(baseUrl: String, apiKey: String, providerId: String) =
+        modelListFacade.fetchModelList(baseUrl, apiKey, providerId)
 
-    /** 清空模型列表三状态（弹窗关闭时调用：cancel 在途任务 + 三态归零，下次打开重新拉）。 */
-    override fun clearModelList() {
-        modelListJob?.cancel()
-        modelListJob = null
-        _modelList.value = emptyList()
-        _modelListLoading.value = false
-        _modelListError.value = null
-    }
+    /** 清空模型列表三状态（弹窗关闭时调用：cancel 在途任务 + 三态归零）。 */
+    override fun clearModelList() = modelListFacade.clearModelList()
 
     // —— L8 运行日志（日记）：出错可定位 ——
 
@@ -3266,203 +3173,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     override fun setConversationPinned(id: String, pinned: Boolean) {
         conversationStore.setPinned(id, pinned)
         refreshConversations()
-    }
-
-    // —— W-48 插件市场 ——
-
-    /**
-     * 刷新全部市场源。
-     *
-     * 并发语义：同一时刻只允许一次刷新（[_marketLoading] 守卫）。多个源**串行**拉取而不是并发，
-     * 是为了让错误信息能按源顺序聚合、且不会在弱网下同时压满连接；索引都很小，串行代价可接受。
-     *
-     * 合并规则：同 id 以**先出现的源**为准（源顺序 = 用户添加顺序），避免后加的源悄悄覆盖。
-     */
-    override fun refreshMarket() {
-        if (_marketLoading.value) {
-            marketRefreshPending = true
-            return
-        }
-        viewModelScope.launch {
-            _marketLoading.value = true
-            try {
-                val sources = _marketSources.value
-                if (sources.isEmpty()) {
-                    _marketItems.value = emptyList()
-                    _marketStatus.value = "还没有市场源。添加一个索引 JSON 地址后即可浏览插件。"
-                    return@launch
-                }
-                // 读已装技能要走文件 IO，不能占主线程
-                val installed = withContext(Dispatchers.IO) { installedVersions() }
-                val merged = LinkedHashMap<String, MarketPlugin>()
-                val errors = ArrayList<String>()
-                sources.forEach { src ->
-                    marketClient.fetchIndex(src.url).fold(
-                        onSuccess = { idx ->
-                            idx.plugins.forEach { merged.putIfAbsent(it.id, it) }
-                            AgentLogger.i("Market", "源「${idx.name.ifBlank { src.url }}」返回 ${idx.plugins.size} 个插件")
-                        },
-                        onFailure = { e ->
-                            errors += "${src.url.take(48)} → ${e.message ?: "未知错误"}"
-                        }
-                    )
-                }
-                _marketItems.value = merged.values
-                    .map { p ->
-                        val local = installed[p.id]
-                        MarketUiItem(p, local, MarketRules.stateOf(p.version, local))
-                    }
-                    // 可更新的排最前，其余按名字；用户进页面第一眼看到的就是「该动手的」
-                    .sortedWith(
-                        compareBy<MarketUiItem> { it.state != MarketInstallState.UPDATE_AVAILABLE }
-                            .thenBy { it.plugin.name }
-                    )
-                _marketStatus.value = when {
-                    errors.isEmpty() -> "共 ${merged.size} 个插件"
-                    merged.isEmpty() -> "刷新失败：" + errors.take(2).joinToString("；")
-                    else -> "部分源失败（${errors.size}）：${errors.first()}"
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                AgentLogger.e("Market", "刷新市场异常", e)
-                _marketStatus.value = "刷新异常：${e.message ?: "未知错误"}"
-            } finally {
-                _marketLoading.value = false
-                // 补刷：期间可能有源被增删，旧快照的结果已过期（只补一次，不递归放大）
-                if (marketRefreshPending) {
-                    marketRefreshPending = false
-                    refreshMarket()
-                }
-            }
-        }
-    }
-
-    /** 只在本地重算安装态（装/卸后调用），不重新拉网络。内部会读技能目录，故切 IO。 */
-    private suspend fun refreshMarketInstallState() {
-        val installed = withContext(Dispatchers.IO) { installedVersions() }
-        _marketItems.value = _marketItems.value
-            .map { item ->
-                val local = installed[item.plugin.id]
-                item.copy(installedVersion = local, state = MarketRules.stateOf(item.plugin.version, local))
-            }
-            .sortedWith(
-                compareBy<MarketUiItem> { it.state != MarketInstallState.UPDATE_AVAILABLE }
-                    .thenBy { it.plugin.name }
-            )
-    }
-
-    /** 已装技能 id → 版本（读失败退空表：市场仍可浏览，只是状态显示为「未安装」）。 */
-    private fun installedVersions(): Map<String, String> =
-        runCatching { importRepo.loadImported(app).associate { it.id to it.version } }
-            .getOrDefault(emptyMap())
-
-    /**
-     * 添加市场源。
-     *
-     * @return true = 已添加并开始刷新；false = 地址非法或重复（原因写进 [marketStatus]）。
-     *   返回值用于 UI 决定「输入框要不要清空」——失败还清空，用户得重打一遍。
-     */
-    override fun addMarketSource(raw: String): Boolean {
-        if (MarketRules.validHttpUrl(raw) == null) {
-            _marketStatus.value = "地址无效：只支持 http/https，且必须带主机名"
-            return false
-        }
-        if (!marketStore.addSource(raw)) {
-            _marketStatus.value = "该地址已存在"
-            return false
-        }
-        _marketSources.value = marketStore.loadSources()
-        refreshMarket()
-        return true
-    }
-
-    /** 删除市场源（同时把它的条目从当前列表里移除，不等下次刷新）。 */
-    override fun removeMarketSource(url: String) {
-        if (!marketStore.removeSource(url)) return
-        _marketSources.value = marketStore.loadSources()
-        val remaining = _marketSources.value.map { it.url }.toSet()
-        // 条目本身不记录来源，删源后统一重刷一遍最准确（源通常只有一两个，代价很小）
-        // 立即清空列表：刷新是异步的，若失败旧条目会一直留着，看起来像「删了源还在」。
-        _marketItems.value = emptyList()
-        if (remaining.isEmpty()) {
-            _marketStatus.value = "已移除全部市场源"
-        } else {
-            refreshMarket()
-        }
-    }
-
-    /**
-     * 安装/更新一个插件。
-     *
-     * 复用 `SkillImportRepository.installZip`：解压、Zip Slip 防护、id 白名单、失败回滚、
-     * **重新导入即撤销旧授权** 全部沿用既有实现——市场只负责「取包 + 校验 + 交给它」。
-     */
-    override fun installMarketPlugin(id: String) {
-        if (_marketBusyId.value != null) return
-        val item = _marketItems.value.firstOrNull { it.plugin.id == id } ?: return
-        viewModelScope.launch {
-            _marketBusyId.value = id
-            _marketStatus.value = "正在下载「${item.plugin.name}」…"
-            try {
-                val bytes = marketClient.downloadPlugin(item.plugin).getOrThrow()
-                // W-48 安全边界：市场条目 id 必须与包内 skill.json 的 id 一致。
-                // 不校验的话，一个「挂着 A 的名、装着 B 的包」会覆盖已装的 B，市场还以为装的是 A。
-                val declaredId = withContext(Dispatchers.IO) { importRepo.peekSkillId(bytes) }
-                if (declaredId != item.plugin.id) {
-                    throw IllegalStateException(
-                        "包内技能 id（${declaredId ?: "无法读取"}）与市场条目（${item.plugin.id}）不一致，已拒绝安装"
-                    )
-                }
-                withContext(Dispatchers.IO) {
-                    importRepo.installZip(bytes).getOrThrow()
-                    // reloadSkills 内部会扫 filesDir 下的技能目录，必须留在 IO 线程
-                    reloadSkills()
-                }
-                refreshMarketInstallState()
-                _marketStatus.value =
-                    "已安装「${item.plugin.name}」${item.plugin.version}" +
-                    "（重新导入会撤销旧授权，请在技能中心重新授权）"
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                AgentLogger.e("Market", "安装 ${item.plugin.id} 失败", e)
-                _marketStatus.value = "安装失败：${e.message ?: "未知错误"}"
-            } finally {
-                // 必须 finally：onSuccess 里的 reloadSkills/重排也可能抛（例如磁盘满），
-                // 漏掉复位会让 busy 永久卡住，整个市场页从此装不了任何东西。
-                _marketBusyId.value = null
-            }
-        }
-    }
-
-    /** 卸载一个已装插件（只删本地目录，市场列表保留该条目）。 */
-    override fun uninstallMarketPlugin(id: String) {
-        if (_marketBusyId.value != null) return
-        val item = _marketItems.value.firstOrNull { it.plugin.id == id } ?: return
-        viewModelScope.launch {
-            _marketBusyId.value = id
-            try {
-                val ok = withContext(Dispatchers.IO) {
-                    val removed = importRepo.uninstall(id)
-                    if (removed) reloadSkills()
-                    removed
-                }
-                if (ok) {
-                    refreshMarketInstallState()
-                    _marketStatus.value = "已卸载「${item.plugin.name}」"
-                } else {
-                    _marketStatus.value = "卸载失败：本地没有该技能目录"
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                AgentLogger.e("Market", "卸载 ${item.plugin.id} 失败", e)
-                _marketStatus.value = "卸载失败：${e.message ?: "未知错误"}"
-            } finally {
-                _marketBusyId.value = null
-            }
-        }
     }
 
     // —— L7 技能导入 / 卸载 / 授权 ——

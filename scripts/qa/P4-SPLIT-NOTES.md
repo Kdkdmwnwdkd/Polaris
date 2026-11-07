@@ -9,12 +9,17 @@
 |---|---|---|
 | `ChatViewModel.kt` | 4363 行，混着生成控制 / 消息投影 / 本地模型 / 备份 | 3914 行（守卫上限同步从 4363 降到 3914） |
 | 新增 | — | `ModelSettings` 260 / `ConversationProjection` 130 / `BackupUseCase` 195 / `GenerationRunController` 160 |
+| `ChatViewModel.kt`（3.1 第一批，2026-11-07） | 3868 行，仍混着模型列表拉取 / 插件市场 / Key 池 | 3578 行（守卫上限同步从 3868 降到 3578） |
+| 新增（3.1 第一批） | — | `ModelListFacade` 124 / `MarketFacade` 279 / `KeyPoolFacade` 75 |
 
 ## 谁拥有什么
 
 | 问题 | 归谁 | 判据 |
 |---|---|---|
 | 谁在跑？跑到哪了？草稿攒了多少？ | `GenerationRunController` | 所有与「一轮」有关的状态。VM 只读它的流，写只经 `start()` |
+| 「选择模型」弹窗的列表 / 收藏 / 拉取错误 | `ModelListFacade` | 只依赖 configStore + 一个协程作用域，与生成链零交集 |
+| 市场源 / 插件列表 / 装 / 卸 | `MarketFacade` | 对 VM 的全部需求是三个注入点：已装列表、装/卸后刷技能快照（回调）、作用域 |
+| 备用 Key 存取 / 灌进 ProviderManager | `KeyPoolFacade` | 与生成链唯一接触面是 providerManager 的两个字段，构造注入看得见 |
 | 这条消息上不上屏？写进哪个会话？ | `ConversationProjection` | 显示态与持久态必须同源；落库目标 = owner ?: active |
 | 本地模型参数 / 文件 / 下载 / GPU 结论 | `ModelSettings` | 只与 `LocalLlamaSetting` + `GgufModelStore` 打交道，唯一外部动作是「切到本地供应商」 |
 | 备份包怎么组装、恢复后谁来刷新 UI | `BackupUseCase` | 六个 store 的快照 ↔ SAF 文件；UI 重载通过 `onRestored` 回调回宿主 |
