@@ -442,6 +442,8 @@ private fun testModelPickerEnhancements() {
     println("— O 区：模型选择器增强（功能五 P1-6） —")
     val cfg = readSource("ui/ModelConfigScreen.kt")
     val vm = readSource("ui/ChatViewModel.kt")
+    // 3.1 第一批：列表拉取域（含收藏落盘）搬进 ModelListFacade，VM 只留 override 转发。
+    val listFacade = readSource("ui/ModelListFacade.kt")
     val store = readSource("core/ConfigStore.kt")
 
     check("O1 收藏持久化：ConfigStore 存取 + 逗号分隔单键（不为一处引入 JSON）") {
@@ -452,7 +454,8 @@ private fun testModelPickerEnhancements() {
     check("O2 VM 暴露收藏流 + 切换即落盘") {
         assertContains("O2", vm, "val favoriteModels: StateFlow<List<String>>")
         assertContains("O2", vm, "fun toggleFavoriteModel(name: String)")
-        assertContains("O2", vm, "configStore.saveFavoriteModels(next)")
+        // 落盘动作跟着实现走：现在在 facade 里，VM 的转发不含它。
+        assertContains("O2", listFacade, "configStore.saveFavoriteModels(next)")
     }
     check("O3 收藏优先排序（稳定排序，收藏组内保持端点原序）") {
         assertContains("O3", cfg, "base.sortedByDescending { it in favorites }")
