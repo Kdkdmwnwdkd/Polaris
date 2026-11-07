@@ -156,6 +156,21 @@ object AgentLogger {
         logDir = dir
     }
 
+    /**
+     * 断开落盘目录（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * 复位 `initialized`：不清的话，下一个用例 `init(另一个临时目录)` 只会走到
+     * 「已初始化 → 补目录」那条分支，不重新回读、也不重置序号，断言全部取决于
+     * 前一个用例跑没跑。
+     *
+     * 代价是：reset 之后再次 init 会**重新回读历史日志尾巴**。这在生产里不该发生
+     * （生产从不在运行期调 reset），在 harness 里正好是想要的干净起点。
+     */
+    fun reset() {
+        logDir = null
+        initialized.set(false)
+    }
+
     /** 初始化标记（保证 [init] 只真正执行一次）。 */
     private val initialized = java.util.concurrent.atomic.AtomicBoolean(false)
 

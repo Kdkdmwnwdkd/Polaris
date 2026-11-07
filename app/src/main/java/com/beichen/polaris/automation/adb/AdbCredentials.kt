@@ -45,6 +45,19 @@ object AdbCredentials {
     fun hasEndpoint(): Boolean =
         !host().isNullOrBlank() && connectPort() > 0
 
+    /**
+     * 丢掉 SharedPreferences 句柄与内存里的密钥对（仅供
+     * [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * **不删任何落盘数据**：`init(context)` 之后读到的仍是同一份配对信息。
+     * 之所以要清 `cached`，是因为 harness 会在不同的临时 Context 之间切换，
+     * 留着上一轮的解密结果等于让用例互相污染。
+     */
+    fun reset() {
+        prefs = null
+        cached = null
+    }
+
     fun host(): String? = prefs?.getString(K_HOST, null)
 
     fun connectPort(): Int = prefs?.getInt(K_CONNECT_PORT, 0) ?: 0

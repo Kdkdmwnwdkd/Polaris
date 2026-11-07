@@ -237,6 +237,18 @@ object AdbSession {
         }
     }
 
+    /**
+     * 断开并清掉错误记忆（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * 复用 [disconnect] 而不是自己 close：`client` 是持锁写的，绕开锁单独置空
+     * 会和 [exec] 的「发现 client 为空就重建」形成竞态，表现是 tests 偶发连两次。
+     * 端点与密钥在 [AdbCredentials]，不受影响——重置不等于取消配对。
+     */
+    fun reset() {
+        disconnect()
+        synchronized(lock) { lastError = null }
+    }
+
     /* ------------------------------------------------------------------ */
 
     private fun ok(r: ShellResult, started: Long): AdbOutcome {

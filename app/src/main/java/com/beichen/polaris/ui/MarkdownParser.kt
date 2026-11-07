@@ -90,6 +90,17 @@ sealed interface MdBlock {
 /** 纯函数 Markdown 解析入口：不依赖任何 Android API，可脱离设备直接断言。 */
 object MarkdownParser {
 
+    /**
+     * 刻意的 no-op（登记在 [com.beichen.polaris.AppGraph] 里，`resettable = false`）。
+     *
+     * 这个 object 只有两个纯函数入口，游标 `i` 属于每次 `parse` 新建的 Parser 实例。
+     * 登记它的原因不是「需要清空」，而是让「它为什么可以安全地是 object」有一个
+     * 写在明面上的答案——否则下一个人只能靠通读全文确认这里真的没有状态。
+     */
+    fun reset() {
+        // 无状态可清。
+    }
+
     /** 把整段文本切成块级 AST。空 / 全空白输入返回空列表。 */
     fun parse(text: String): List<MdBlock> = BlockParser(text).parse()
 

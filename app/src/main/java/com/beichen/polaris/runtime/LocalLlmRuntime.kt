@@ -130,6 +130,20 @@ object LocalLlmRuntime : AgentCapability {
         stateFlow.value = CapabilityState.STOPPED
     }
 
+    /**
+     * 回到「已注册未启动」（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * 只复位能力状态，**不复位 prefs 与租约**：
+     * - prefs 绑的是 `applicationContext`，进程内只有一份，换不掉也不需要换；
+     * - 租约登记由 [LeaseRegistry.reset] 统一清，这里再动一次会清掉刚登记好的句柄。
+     *
+     * 也不调 [stop]：那会 `releaseIfLoaded`，把模型卸掉——reset 的使用方（harness）
+     * 常常只是想重跑一遍状态机，不该连带付一次十几秒的重新加载。
+     */
+    fun reset() {
+        stateFlow.value = CapabilityState.REGISTERED
+    }
+
     // ———— 在途记账（仅供 wrapLocalLlm 使用）———————————————————
 
     /**

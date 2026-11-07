@@ -76,6 +76,20 @@ object CrashLogger {
     /* ============================== 安装 ============================== */
 
     /**
+     * 刻意的 no-op（登记在 [com.beichen.polaris.AppGraph] 里，`resettable = false`）。
+     *
+     * 崩溃捕获是**进程级一次性**设施：handler 一旦挂到 `Thread.getDefaultUncaughtExceptionHandler`
+     * 就无法安全摘下——卸载会让此后的崩溃静默消失（比没有捕获更糟），重装会套娃成
+     * 多层 handler，同一个崩溃写多份报告。它持有的是事实（已安装 / 原 handler 引用 /
+     * 崩溃目录），不是需要清理的运行态。
+     *
+     * 真要在 harness 里换一套崩溃目录，只能新起一个 JVM。
+     */
+    fun reset() {
+        // 故意为空。理由见 KDoc：卸载 handler 会丢掉崩溃证据。
+    }
+
+    /**
      * 安装全局崩溃捕获。**必须在 Application.onCreate 最早处调用**，
      * 这样连后续初始化（ViewModel / ContentProvider / 其他组件）的崩溃都能留下证据。
      *

@@ -142,6 +142,20 @@ object TraceSink {
         dir = null
     }
 
+    /**
+     * 回到「未 init」状态（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * 计数一并归零：[written] 是「跨轮次不清零」的累计值，语义上属于**进程**，
+     * 而 reset 的语义是「当作这个进程还没开始」。留着旧数会让第二个用例的
+     * 「写入了 N 行」断言从 N 变成 2N，且失败信息看起来像重复写入的 bug。
+     */
+    fun reset() {
+        shutdownForTest()
+        dropped = 0L
+        warned = false
+        written = 0L
+    }
+
     // —— 内部 ——
 
     private val EOF = "\u0000EOF"

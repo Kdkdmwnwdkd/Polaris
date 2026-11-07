@@ -34,6 +34,18 @@ object LlamaJni {
     var unavailableReason: String? = null
         private set
 
+    /**
+     * 刻意的 no-op（登记在 [com.beichen.polaris.AppGraph] 里，`resettable = false`）。
+     *
+     * `System.loadLibrary` 不可逆：.so 载入后无法卸载，失败的尝试（ABI 不符、
+     * 缺 CPU 指令集）重试也是同样结果，而 [loadAttempted] 正是用来「只试一次」的
+     * 闸门。把这两个字段清掉只会让下一次调用再走一遍注定失败的加载，
+     * 并在日志里留下一条看起来像「第二次尝试新方法」的噪声。
+     */
+    fun reset() {
+        // 加载状态是不可逆的事实，不清。
+    }
+
     /** 首次调用时加载 .so；失败（如在 x86 模拟器上）只记一次日志，后续直接返回 false。 */
     fun ensureLoaded(): Boolean {
         if (available) return true

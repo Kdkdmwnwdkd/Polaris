@@ -31,6 +31,19 @@ object WorkspaceStore {
     @Volatile
     private var migrated = false
 
+    /**
+     * 让下一次 [dir] 重新走迁移检查（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * `migrated` 是「老目录只需搬一次」的进程级记忆。harness 每轮新建临时 filesDir，
+     * 不复位这个标记的话，第二个用例的工作区会指向第一个用例的目录——而且不报错，
+     * 只是写进了错误的地方。
+     *
+     * 不删除任何文件：迁移动作本身是「目标不存在才搬」，重复执行是安全的。
+     */
+    fun reset() {
+        migrated = false
+    }
+
     /** 工作区根目录；首次调用触发老目录迁移。 */
     fun dir(context: Context): File {
         val target = File(context.filesDir, DIR_NAME)

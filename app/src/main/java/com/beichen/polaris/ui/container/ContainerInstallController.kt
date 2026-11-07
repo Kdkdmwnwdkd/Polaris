@@ -165,6 +165,22 @@ object ContainerInstallController {
     }
 
     /**
+     * 回到「从未安装过」的初始态（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * 与 [clearReport] 的区别：这里连 [running] 和 [finished] 一起清。
+     * 只清 report 的话，跨用例残留的 `finished` 计数会让「装完一次」的断言在
+     * 第一个用例里就成立——那是假绿。
+     *
+     * **不取消正在跑的安装协程**：那个协程持有 proot 进程，硬停会把 pty 留在
+     * 半开状态。harness 里的正确用法是等它结束再 reset。
+     */
+    fun reset() {
+        _running.value = null
+        _report.value = null
+        _finished.value = 0
+    }
+
+    /**
      * 安装 + 失败后自检。
      *
      * 包管理器的退出码不能代表「能不能用」：真机上 `apk add openjdk17 openjdk17-jdk`

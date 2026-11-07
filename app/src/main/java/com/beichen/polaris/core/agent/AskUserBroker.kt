@@ -41,6 +41,25 @@ object AskUserBroker {
     val pending: StateFlow<Question?> = _pending.asStateFlow()
 
     /**
+     * 丢弃待答问题（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * `waiter?.cancel()` 是必要的，不只是清字段：挂起中的 [ask] 持有那个 Deferred，
+     * 只把字段置 null 会让它永远等在那（超时前），harness 里表现为「上一个用例
+     * 的协程泄漏」。cancel 之后 [ask] 走 finally 收尾，状态一致。
+     *
+     * 会向上抛 `CancellationException` 给正在等待的调用方——这是正确语义：
+     * 问题被撤回了，不该假装用户回答了某个值。
+     */
+    fun reset() {
+        synchronized(lock) {
+            runCatching { waiter?.cancel() }
+            waiter = null
+            current = null
+            _pending.value = null
+        }
+    }
+
+    /**
      * 提问并挂起等待回答。
      *
      * @param options 可选项（为空则 UI 显示「输入回答」的自由文本框）

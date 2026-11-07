@@ -175,6 +175,27 @@ object LeaseRegistry {
     }
 
     /**
+     * 停表并清空登记（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * 三个 map 都要清，只清 `leases` 不够：`lastUsed` 与 `outstanding` 是按 id 记的，
+     * 残留条目会让下一个用例的 [outstandingCount] 一上来就非零，
+     * 表现为「刚借出就报泄漏」——错误指向调用方，而真正的问题是上一轮没清。
+     *
+     * 阈值恢复默认：harness 常把 [idleTimeoutMs] 调成 0 来免等待，
+     * 不复位就会带着「立即回收」进入下一个用例，把正常路径也回收掉。
+     */
+    fun reset() {
+        stop()
+        leases.clear()
+        lastUsed.clear()
+        outstanding.clear()
+        idleReleasers.clear()
+        idleTimeoutMs = 30 * 60_000L
+        checkIntervalMs = 30_000L
+        leakDetectMs = 10 * 60_000L
+    }
+
+    /**
      * 执行一轮检查（节拍器调用；测试也可直接调用）。
      *
      * 暴露出来是为了让 harness 能**不依赖真实等待**地断言回收逻辑——

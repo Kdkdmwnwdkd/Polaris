@@ -57,6 +57,21 @@ object PlanBroker {
     val pending: StateFlow<Plan?> = _pending.asStateFlow()
 
     /**
+     * 撤回待批计划（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * 与 [AskUserBroker.reset] 同构：cancel 而非仅清字段，否则等待中的 [propose]
+     * 会挂到超时。撤回归为「未批准」侧，不给模型任何默认放行。
+     */
+    fun reset() {
+        synchronized(lock) {
+            runCatching { waiter?.cancel() }
+            waiter = null
+            current = null
+            _pending.value = null
+        }
+    }
+
+    /**
      * 提交计划并挂起等待用户决定。
      *
      * @param summary 一句话说明要做什么（用户扫一眼就知道）

@@ -48,6 +48,19 @@ object AppearanceState {
     /** 解析后的强调色；非法/未设为 null。 */
     val accent: Color? get() = parseAccentHex(accentHex)
 
+    /**
+     * 回到默认外观（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * **只清内存，不写盘**：reset 若顺手把默认值写回 SharedPreferences，
+     * 一次测试清场就会把用户的自定义配色抹掉——那是比测试污染严重得多的事故。
+     * 用户下次 [load] 读到的仍是自己存的值。
+     */
+    fun reset() {
+        themeMode = ThemeMode.SYSTEM
+        accentHex = null
+        dynamicColor = false
+    }
+
     fun load(context: Context) {
         val p = context.applicationContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)
         themeMode = runCatching {

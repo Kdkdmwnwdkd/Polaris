@@ -37,6 +37,17 @@ object CompletionNotifier {
     @Volatile
     var foregroundProbe: () -> Boolean = { false }
 
+    /**
+     * 把探针退回「未装配」的保守默认（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * 默认值是 `{ false }`（当作后台），这是安全侧：宁可多发一条提醒，也不漏。
+     * 回到默认而不是留着上一轮装配的 lambda，是因为那些 lambda 往往闭包了
+     * 一个已经销毁的 Activity/Application——测试里继续调用它会崩在别人看不见的地方。
+     */
+    fun reset() {
+        foregroundProbe = { false }
+    }
+
     /** 建渠道（幂等；API 26 以下无渠道概念，空实现）。 */
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return

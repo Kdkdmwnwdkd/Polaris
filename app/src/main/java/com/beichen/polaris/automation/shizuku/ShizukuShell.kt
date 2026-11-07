@@ -204,6 +204,23 @@ object ShizukuShell {
         }
     }
 
+    /**
+     * 解绑并清空绑定状态（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * 不调 `unbindUserService`：它需要当初 bind 时那个 Context，而 reset 的调用方
+     * （harness）手里没有真实 Activity。这里只把代理置空——**正在跑的调用会拿到
+     * 「通道不可用」并回落**，不会踩到悬空 binder。绑定监听是匿名实例，Shizuku
+     * 没有提供按引用移除的 API，所以那一个监听会留到进程结束；它回调时
+     * `userService = null` 本身是幂等的，留下的副作用只是多一次空写。
+     */
+    fun reset() {
+        runCatching { pendingBind?.cancel() }
+        pendingBind = null
+        userService = null
+        serviceArgs = null
+        appContext = null
+    }
+
     @Suppress("DEPRECATION")
     private fun appVersionCode(context: Context): Int = runCatching {
         val info = context.packageManager.getPackageInfo(context.packageName, 0)

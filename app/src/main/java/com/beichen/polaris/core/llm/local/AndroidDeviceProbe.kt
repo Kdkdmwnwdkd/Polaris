@@ -47,6 +47,14 @@ object AndroidDeviceProbe {
     }
 
     /**
+     * 让下一次 [profile] 重新采集（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * 直接委托 [invalidate]：这两个动作语义完全一样，各写一份只会在将来某次
+     * 采集逻辑改动时忘掉其中一处。
+     */
+    fun reset() = invalidate()
+
+    /**
      * 已采集的画像；启动阶段的采集还没跑完时为 null。
      *
      * 给不方便拿 Context 的调用方用（例如 [LocalLlamaClient] 只持有 setting 与 modelStore）。

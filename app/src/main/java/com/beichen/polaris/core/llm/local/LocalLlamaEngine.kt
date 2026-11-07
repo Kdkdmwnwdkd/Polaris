@@ -216,6 +216,28 @@ object LocalLlamaEngine {
     }
 
     /**
+     * 卸载并清掉进程级故障记忆（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * 顺序是「先 unload 再清标记」：反过来的话，unload 内部的日志记录会看到
+     * `gpuDisabledReason == null`，把一次正常的清场写成「GPU 恢复可用」。
+     *
+     * `gpuDisabledReason` 一旦置位就**刻意不再清**（见字段注释：同一块坏驱动不赌第二次）。
+     * 这里必须清，是因为 harness 要在同一 JVM 里模拟「新进程」；生产没有人调 reset。
+     *
+     * `generation` 归零而不是递增：它是给 UI 判断「加载中的是不是最新请求」的代际号，
+     * 清场后应当如同从未加载过。若此刻仍有加载在飞，归零会让那一轮的代际号
+     * 看起来「更新」——但 reset 的前置条件就是没有在飞的加载，这一点由调用方保证。
+     */
+    fun reset() {
+        unload()
+        synchronized(lock) {
+            gpuDisabledReason = null
+            generation.set(0L)
+            loadedGeneration = -1L
+        }
+    }
+
+    /**
      * 释放当前实例。
      *
      * 有人正在用这个句柄时**不能立即 free**：free 掉正在 decode 的 context 会让

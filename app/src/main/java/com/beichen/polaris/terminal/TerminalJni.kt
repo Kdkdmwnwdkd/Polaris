@@ -24,6 +24,17 @@ object TerminalJni {
     var available: Boolean = false
         private set
 
+    /**
+     * 刻意的 no-op（登记在 [com.beichen.polaris.AppGraph] 里，`resettable = false`）。
+     *
+     * 与 `LlamaJni` 同理：`libagentkit-termux.so` 一旦载入就无法卸载，
+     * 失败（ABI 未编入）重试也还是失败。[loadAttempted] 是「只试一次」的闸门，
+     * 清掉它只会让下一次 ensureLoaded 再走一遍必然失败的加载。
+     */
+    fun reset() {
+        // 加载状态是不可逆的事实，不清。
+    }
+
     /** 首次调用时加载 .so；失败（如在 x86 模拟器上）只记一次日志，后续直接返回 false。 */
     fun ensureLoaded(): Boolean {
         if (available) return true

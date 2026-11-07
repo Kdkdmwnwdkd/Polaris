@@ -157,4 +157,19 @@ object BrowserHost {
 
     /** 给需要 Context 的调用方（如错误提示）。 */
     fun contextOrNull(): Context? = webRef?.get()?.context
+
+    /**
+     * 释放并回到「未 attach」状态（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。
+     *
+     * 直接复用 [release]：销毁 WebView 必须在主线程做，而 `release` 已经 `main.post`。
+     * reset 的调用方（harness）跑在 JVM 上、没有 Looper，所以这里额外做一次
+     * **同步**的引用清空——`release` 投递的 Runnable 在这些环境里不会被执行，
+     * 只投递不清空等于没重置。
+     */
+    fun reset() {
+        release()
+        webRef = null
+        destroyed = true
+        pageFinishedListeners.clear()
+    }
 }

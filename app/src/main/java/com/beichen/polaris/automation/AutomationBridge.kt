@@ -39,6 +39,19 @@ object AutomationBridge {
 
     /** 服务已连接且总开关已开，才允许执行自动化动作。 */
     fun isReady(): Boolean = service != null && enabled
+
+    /**
+     * 清空运行时状态（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness 使用）。
+     *
+     * 只清**内存镜像**：`enabled` 落盘在 [AutomationPrefs]，用户的开关键值不受影响，
+     * 下次服务连上时按 prefs 重新置位。刻意不做 `detach()`——那会回调
+     * `onConnectionChanged`，把「测试清场」表现成一次真实的断连事件。
+     */
+    fun reset() {
+        service = null
+        enabled = false
+        onConnectionChanged = null
+    }
 }
 
 /** 总开关持久化（SharedPreferences）。 */

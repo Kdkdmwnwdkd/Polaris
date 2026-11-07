@@ -52,6 +52,13 @@ object DeviceContextStore {
         while (recentNotifs.size > MAX_NOTIFS) recentNotifs.poll()
     }
 
+    /** 清空前台应用与通知摘要（仅供 [com.beichen.polaris.AppGraph.resetAll] 与 harness）。 */
+    fun reset() {
+        foregroundPackage = ""
+        foregroundLabel = ""
+        recentNotifs.clear()
+    }
+
     /** 取一份不可变快照，供 UI 与对话层使用。 */
     fun snapshot(): DeviceContext = DeviceContext(
         foregroundPackage = foregroundPackage,
