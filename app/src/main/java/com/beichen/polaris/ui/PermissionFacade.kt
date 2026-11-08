@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 权限 / 调试通道域（3.1 第四批拆分，自 ChatViewModel 原地搬出）。
@@ -83,11 +84,33 @@ internal class PermissionFacade(
     /** 调试通道此刻是否就绪——能力就绪度裁决要这一个布尔，不需要整条状态流。 */
     val shizukuReady: Boolean get() = _shizukuStatus.value == ShizukuShell.Status.READY
 
-    /** 重新探测调试通道状态（进入权限页 / 授权回调后调用）。 */
-    fun refreshShizukuStatus() {
-        _shizukuStatus.value = ShizukuShell.status()
-        _shizukuInstalled.value = ShizukuShell.isInstalled(app)
-        _shizukuUiState.value = ShizukuShell.uiState(_shizukuStatus.value, _shizukuInstalled.value)
+    /** 当前一轮 Shizuku 探测（新的一次会取消旧的，避免慢的探测后到、覆盖新结果）。 */
+    @Volatile
+    private var shizukuProbe: Job? = null
+
+    /**
+     * 重新探测调试通道状态（进入权限页 / 授权回调后调用）。
+     *
+     * **不能在调用线程上同步做**：`status()` = `pingBinder` + `checkSelfPermission`，
+     * 两次 binder IPC；`isInstalled` 是一次 PackageManager 查询。而调用方全在主线程
+     * （权限页的 LaunchedEffect / 按钮回调 / Shizuku 的 Binder 回调），同步执行直接把
+     * 首帧卡在 binder 上。这与本类「字段区不做 IPC」是同一条纪律的另一半：
+     * 字段区不探测，**探到了也不能占着主线程**。
+     *
+     * @param afterProbe 探测完成、三态都已写入后调用（宿主用它重算能力链——必须在
+     *   探测之后，否则读到的是旧状态）。按次传入而不是构造期捕获：facade 若持有宿主
+     *   的 lambda，而宿主的初始化又读 facade 的属性，Kotlin 会绕成递归类型推断（1.607 踩过）。
+     */
+    fun refreshShizukuStatus(afterProbe: () -> Unit = {}) {
+        shizukuProbe?.cancel()
+        shizukuProbe = scope.launch {
+            val status = withContext(Dispatchers.IO) { ShizukuShell.status() }
+            val installed = withContext(Dispatchers.IO) { ShizukuShell.isInstalled(app) }
+            _shizukuStatus.value = status
+            _shizukuInstalled.value = installed
+            _shizukuUiState.value = ShizukuShell.uiState(status, installed)
+            afterProbe()
+        }
     }
 
     /**
@@ -96,6 +119,10 @@ internal class PermissionFacade(
      * 供 shell 工具的执行路径用：`execViaUserService` 报「未运行或未授权」时，通道状态已经
      * 变了，但当轮的执行路径由上层回落处理，能力链留给下一次权限页复检重算即可。
      * 与 [refreshShizukuStatus] 的差别仅此一处，与拆分前的行为一致。
+     *
+     * 这是**同步**调用（一次 `pingBinder` + `checkSelfPermission`），只允许在 IO 线程上
+     * 调用——当前唯一调用点在工具执行链里，满足这个前提。主线程请用
+     * [refreshShizukuStatus]（它会自己切 IO）。
      */
     fun reprobeShizukuStatus() {
         _shizukuStatus.value = ShizukuShell.status()
@@ -107,7 +134,7 @@ internal class PermissionFacade(
      *  - 未授权 → 发起授权请求（弹窗由 Shizuku 提供，结果回调后刷新）；
      *  - 就绪 → 仅刷新状态。
      */
-    fun handleShizukuAction(context: Context) {
+    fun handleShizukuAction(context: Context, afterProbe: () -> Unit = {}) {
         // 按「四态」动作：已装就拉起、未装才去商店——不再一律劝人装
         when (_shizukuUiState.value) {
             ShizukuShell.UiState.NOT_INSTALLED -> {
@@ -134,7 +161,9 @@ internal class PermissionFacade(
             ShizukuShell.UiState.NO_PERMISSION -> ShizukuShell.requestPermission()
             ShizukuShell.UiState.READY -> Unit
         }
-        refreshShizukuStatus()
+        // 拉起的 Shizuku 可能需要一点时间才应答，这次探测是「尽力而为」：
+        // 真正的就绪状态由 Binder 回调 / 用户回到 App 后的复检给出。
+        refreshShizukuStatus(afterProbe)
     }
 
     /**

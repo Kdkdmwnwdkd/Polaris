@@ -486,9 +486,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     /** 重新探测调试通道状态（进入权限页 / 授权回调后调用）。 */
     override fun refreshShizukuStatus() {
-        permissionFacade.refreshShizukuStatus()
-        // 状态变化可能让「跑 shell 命令」的实际路径改变，能力链需重算
-        capabilityReadiness.refresh()
+        // 探测在 IO 上跑（binder IPC 不占主线程）；能力链必须在探测**完成之后**重算——
+        // 跟着 facade 一起同步调的话，读到的还是上一轮的 shizukuReady。
+        permissionFacade.refreshShizukuStatus { capabilityReadiness.refresh() }
     }
 
     /**
@@ -498,8 +498,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      *  - 就绪 → 仅刷新状态。
      */
     override fun handleShizukuAction(context: Context) {
-        permissionFacade.handleShizukuAction(context)
-        capabilityReadiness.refresh()
+        // 探测在 IO 上跑，完成后 facade 回调这里重算能力链。
+        // 不能在这行之后同步 refresh——那一刻 uid/权限都还是旧值。
+        permissionFacade.handleShizukuAction(context) { capabilityReadiness.refresh() }
     }
 
     /** 当前设备上下文快照（L4 主动感知）：供自动化页展示 Agent 实时感知到的手机状态。 */
