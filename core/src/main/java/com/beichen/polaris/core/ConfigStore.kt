@@ -314,6 +314,11 @@ class ConfigStore(context: Context) {
         private const val KEY_COMPLETION_NOTIFY = "completion_notify"
         private const val KEY_PLAN_MODE = "plan_mode"
         private const val KEY_APPROVAL_TIER = "approval_tier"
+        // W-RT5：SSH 连接档案（v1 单档案；只有四项，**没有密码字段**——仅密钥登录）
+        private const val KEY_SSH_HOST = "ssh_host"
+        private const val KEY_SSH_PORT = "ssh_port"
+        private const val KEY_SSH_USER = "ssh_user"
+        private const val KEY_SSH_KEY_PATH = "ssh_key_path"
         private const val KEY_TASK_PROFILE = "task_profile_id"
         // hotfix32：聊天背景图（URI + 不透明度）
         private const val KEY_CHAT_BG_URI = "chat_bg_uri"
@@ -349,6 +354,44 @@ class ConfigStore(context: Context) {
     /** W-RT3：写审批档位（设置页单选即时生效，落盘供下次启动读取）。 */
     fun setApprovalTier(mode: String) {
         sp.edit().putString(KEY_APPROVAL_TIER, mode).apply()
+    }
+
+    // ---- W-RT5：SSH 连接档案（v1 单档案；仅密钥登录，不存密码） ----
+
+    /*
+     * 为什么这里存的是**原始文本**而不是校验过的 SshProfile：
+     * 存储层的职责是「记住用户填了什么」，不是「决定什么合法」。校验（端口范围、空格）
+     * 属于 core/terminal/backend/SshProfiles 的纯函数——它同时被 UI（保存前给理由）
+     * 与后端装配（构造 provider）调用，是唯一判据。在这里再拦一遍只会出现两套规则，
+     * 而其中一套必然先过期（比如哪天允许了 IPv6，只改了纯函数）。
+     */
+
+    /** 主机地址（空 = 未配置）。读出后必须过 normalizeSshProfile 校验。 */
+    fun sshHost(): String = sp.getString(KEY_SSH_HOST, "").orEmpty()
+
+    /** 端口文本（空 = 默认 22）。 */
+    fun sshPort(): String = sp.getString(KEY_SSH_PORT, "").orEmpty()
+
+    /** 用户名。 */
+    fun sshUser(): String = sp.getString(KEY_SSH_USER, "").orEmpty()
+
+    /** 私钥路径（可选；空 = 交给 ssh 默认解析 `~/.ssh/id_*`）。 */
+    fun sshKeyPath(): String = sp.getString(KEY_SSH_KEY_PATH, "").orEmpty()
+
+    /**
+     * 一次性写全四项（设置页「保存」即时生效）。
+     *
+     * 为什么不是四个 setter：四个字段构成**一份档案**，分开写就会出现「新主机 + 旧用户名」
+     * 这种半更新状态——而这一瞬间恰好被后端探测读到的话，用户会看到一条连不上的记录，
+     * 却找不到自己什么时候填错过。一次 edit 里写全是原子的。
+     */
+    fun setSshProfile(host: String, port: String, user: String, keyPath: String) {
+        sp.edit()
+            .putString(KEY_SSH_HOST, host.trim())
+            .putString(KEY_SSH_PORT, port.trim())
+            .putString(KEY_SSH_USER, user.trim())
+            .putString(KEY_SSH_KEY_PATH, keyPath.trim())
+            .apply()
     }
 
     /**

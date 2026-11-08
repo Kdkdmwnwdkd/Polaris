@@ -268,6 +268,9 @@ fun PermissionsScreen(vm: PermissionStatusContract, onStartGuide: () -> Unit = {
             // Shizuku 在权限列表里带授权动作，无线调试在这里配对。
             AdbChannelSection()
 
+            // —— W-RT5：SSH 远程机器（显式路由，不进 shell 自动降级链）——
+            SshChannelSection(vm)
+
             // —— 能力链一次走完（DoD⑤）：预先告诉用户「需要做什么」，而非逐条工具试错 ——
             val plans by vm.capabilityPlans.collectAsStateWithLifecycle()
             if (plans.isNotEmpty()) {

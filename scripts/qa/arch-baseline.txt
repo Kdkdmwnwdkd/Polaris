@@ -61,8 +61,14 @@
 # 归档读写主体（archiveFile / appendArchive / archivedTurns / archivedCount）
 # 与裁剪纯函数都在 core，不计入本文件——和二维码、知识库同一种处理方式。
 #
+# 2026-11-08 第九次上调（ChatViewModel +48）：移植 W-RT5 SSH 远端 shell。
+# 两处：工厂装配处多一个 provider（含 ssh 命令的定位逻辑——Android 不预装 ssh，
+# 只能去容器 rootfs 的 /usr/bin 找），以及 saveSshProfile / sshSavedProfile 两个
+# 契约方法（校验 + 落盘 + 清探测缓存，理由都在注释里）。与旧分支的 +50 基本对上。
+# 后端本体（SshProfiles 纯函数 + SshBackend + provider + 定位器）全在 :core 的新文件里。
+#
 # 以后再抬必须先证明「功能确实需要」——「顺手写的」不算理由。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3528
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3576
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3128
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2422
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504

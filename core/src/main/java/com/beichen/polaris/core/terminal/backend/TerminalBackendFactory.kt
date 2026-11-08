@@ -119,14 +119,19 @@ class TerminalBackendFactory(
         // 任何一个 key，静默失效，而且没有任何地方会响。修 KDoc 里那句「本类一行不用改」
         // 当时是假的：改的是**这里**，不是 provider。
         //
-        // 只追加**本类不认识的** key（su / ssh 之类）：proot 的位置由 preferProot 决定，
+        // 只追加**本类不认识的** key（su 之类）：proot 的位置由 preferProot 决定，
         // 不能被「providers 里出现了 proot」追加回来——那会让 prefer_proot=false 语义失效
         // （B5 一开始就是这么红的：跳过容器，结果容器从后门溜回了候选表）。
+        //
+        // W-RT5：**ssh 也在这个名单里**，且它从不出现在 order 中——等于「既不进降级链，
+        // 也不会因为被注册而混进来」。远端机器一旦混进候选链，本机 shell 起不来时命令就
+        // 悄悄跑到另一台机器上去了，而回执看不出区别。它只经 [obtainByKey] 显式路由。
         val known = setOf(
             TerminalBackend.KEY_PROOT,
             TerminalBackend.KEY_SHIZUKU,
             TerminalBackend.KEY_ADB,
-            TerminalBackend.KEY_USER
+            TerminalBackend.KEY_USER,
+            TerminalBackend.KEY_SSH
         )
         val extra = providers.map { it.backendKey }.filter { it !in known }.distinct()
         // 已在 order 里的 key 位置不变（proot → shizuku → adb → user 的能力顺序是设计意图，
@@ -149,6 +154,20 @@ class TerminalBackendFactory(
     /** 用户偏好（本机 user）后端。 */
     fun getUserPreferred(): TerminalBackend? =
         obtain(TerminalIdentity.User, preferProot = false)
+
+    /**
+     * W-RT5：按后端键显式取后端（[TerminalBackend.KEY_SSH] 这类**不在降级链里**的键）。
+     *
+     * 与 [obtain] 的区别不是「快一点」，而是**根本不看降级顺序**：键是调用方指定的，
+     * 没这个 provider 或它探测不可用就老实返回 null，让上层报「SSH 不可用」，
+     * 而不是顺手拿一条本机 shell 顶上——那会让命令在另一台机器上产出另一种结果，
+     * 而回执看起来一切正常。
+     */
+    override fun obtainByKey(backendKey: String): TerminalBackend? {
+        val provider = providers.firstOrNull { it.backendKey == backendKey } ?: return null
+        if (!isAvailable(provider)) return null
+        return runCatching { provider.create() }.getOrNull()
+    }
 
     /**
      * 可用性查询（带缓存）：命中缓存直接返回；未命中则 [TerminalBackendProvider.probe]
@@ -174,11 +193,20 @@ class TerminalBackendFactory(
         /** proot 会话的默认别名。 */
         const val ALIAS_PROOT = "proot"
 
+        /** SSH 会话的默认别名（W-RT5）：远端 shell 同样独立占池，不与本机 / 容器混用。 */
+        const val ALIAS_SSH = "ssh"
+
         /**
-         * 按后端键取默认别名：proot 用 [ALIAS_PROOT]，其余（本机 user 等）用 [ALIAS_DEFAULT]。
-         * 纯函数：同样 key 两次调用结果相等。
+         * 按后端键取默认别名：proot 用 [ALIAS_PROOT]，SSH 用 [ALIAS_SSH]，
+         * 其余（本机 user 等）用 [ALIAS_DEFAULT]。纯函数：同样 key 两次调用结果相等。
+         *
+         * 为什么必须分开：别名是「同一个 shell 进程」的名字。远端会话与本机会话共用别名，
+         * 第二次调用会**复用到另一台机器上**的那条 shell，`cd` 与变量全对不上。
          */
-        fun defaultAliasFor(backendKey: String): String =
-            if (backendKey == TerminalBackend.KEY_PROOT) ALIAS_PROOT else ALIAS_DEFAULT
+        fun defaultAliasFor(backendKey: String): String = when (backendKey) {
+            TerminalBackend.KEY_PROOT -> ALIAS_PROOT
+            TerminalBackend.KEY_SSH -> ALIAS_SSH
+            else -> ALIAS_DEFAULT
+        }
     }
 }

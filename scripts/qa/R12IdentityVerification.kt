@@ -253,7 +253,9 @@ private fun testIdentitySemantics() {
     }
 
     check("A9 schema 取值不因新增 uid 语义而膨胀（R-20 契约不回归）") {
-        eq(TerminalIdentity.schemaValues(), listOf("user", "shizuku"), "schemaValues()")
+        // W-RT5：ssh 接上后端后按 R-20 的规矩进 schema（它是可用取值，不是占位）。
+        // 这条断言守的是「只有真能跑的才进 schema」，不是「永远只有两个」。
+        eq(TerminalIdentity.schemaValues(), listOf("user", "shizuku", "ssh"), "schemaValues()")
     }
 }
 

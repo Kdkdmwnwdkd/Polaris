@@ -58,7 +58,7 @@ private const val SHELL_BRIDGE_ALIAS = "app_control"
  *
  * 参数：
  *   - command（必填）：要执行的命令原文（一行或整体一次下发）；
- *   - identity（可选）：执行身份，取值见 [TerminalIdentity.schemaValues]（首期 user / shizuku）；
+ *   - identity（可选）：执行身份，取值见 [TerminalIdentity.schemaValues]（user / shizuku / ssh）；
  *   - session（可选）：复用既有会话的 4 位十六进制句柄；缺省则自动开辟一条并返回其句柄；
  *   - prefer_proot（可选）：是否优先 proot 容器，默认 true（不可用自动回落本机 shell）。
  *
@@ -119,12 +119,15 @@ class ShellRunTool(
         JsonSchema.prop(
             "identity", "string",
             // R-20：取值清单与 enum 都由枚举生成。修前这里手写「user/su/shizuku/ssh」，
-            // 而 su / ssh 首期根本没有执行路径——模型照着选，必然失败一次。
+            // 而 su 根本没有执行路径（ssh 在 W-RT5 之前也是）——模型照着选，必然失败一次。
+            // 现在清单只由 usable 决定：接上后端的自动出现，没接上的自动消失。
             // R-12：identity 的语义是**权限下限**，不是「指定走哪条通道」。
             // 说清这一点，模型才不会因为「我传 user 却被告知 uid 2000」而反复调参。
             "所需的最低权限：${TerminalIdentity.schemaValuesText()}，默认 user。" +
                 "这是下限——设备上若有 uid 2000 通道，即使传 user 也可能以 uid 2000 执行（只会更高，不会更低）。" +
-                "shizuku 是特殊值：走一次性提权通道（无句柄、cd 不保持）",
+                "shizuku 是特殊值：走一次性提权通道（无句柄、cd 不保持）；" +
+                "ssh 也是特殊值：在**远端机器**上开持久会话（需先在权限中心配置 SSH，仅密钥登录），" +
+                "它不参与本机降级链——传 ssh 就连远端，不传就只在本机",
             enum = TerminalIdentity.schemaValues()
         ),
         JsonSchema.prop("session", "string", "复用的会话句柄（4 位十六进制），缺省则自动开辟新会话"),
@@ -197,7 +200,7 @@ class ShellRunTool(
                     "${TerminalIdentity.schemaValuesText("、")}）。",
                 hint = "需要 uid 2000（pm / settings / appops）请传 identity=shizuku，" +
                     "或 prefer_proot=false 让会话池优先选 Shizuku / 无线调试；" +
-                    "本应用不提供 su / ssh 通道，不要用这两个值重试。"
+                    "本应用不提供 su 通道，不要用这个值重试。"
             )
         }
 
@@ -312,11 +315,22 @@ class ShellRunTool(
             // 但**必须说出来**：新会话的 cwd 是默认目录，原来 `cd` 过的位置没了。
             // 静默替换会让模型以为还在老目录里，后续命令全跑偏（比直接失败更难查）。
             if (arg != null) staleHandle = arg
-            val opened = pool.open(
-                identity = declaredIdentity ?: TerminalIdentity.User,
-                alias = null,
-                preferProot = preferProot
-            )
+            // W-RT5：identity=ssh 走**显式后端键**路由（远端机器不进本机 / 容器降级链）。
+            // 身份固化仍为 User：远端登录 shell 的身份与本机 uid 不可比，通道由 backendKey 表达。
+            val opened = if (declaredIdentity == TerminalIdentity.Ssh) {
+                pool.open(
+                    identity = TerminalIdentity.User,
+                    alias = null,
+                    preferProot = preferProot,
+                    backendKey = TerminalBackend.KEY_SSH
+                )
+            } else {
+                pool.open(
+                    identity = declaredIdentity ?: TerminalIdentity.User,
+                    alias = null,
+                    preferProot = preferProot
+                )
+            }
             val h = opened.handle
             if (!opened.ok || h == null) {
                 return ToolResult.fail(
@@ -336,7 +350,10 @@ class ShellRunTool(
             leases?.forBackend(key)?.acquire()
         }
         val result = try {
-            pool.run(handle, command, identity = declaredIdentity)
+            // W-RT5：ssh 会话的身份固化为 User，这里**不能再把 ssh 当下限传进去**——
+            // 池的判定是「会话实际身份须满足本次下限」，User 满足不了 Ssh，会在
+            // identity_conflict 上把一条刚开好的远端会话判死。远端语义由 backendKey 承载。
+            pool.run(handle, command, identity = declaredIdentity.takeIf { it != TerminalIdentity.Ssh })
         } finally {
             leaseHandle?.close()
         }
@@ -355,7 +372,15 @@ class ShellRunTool(
                 // R-12：这里报**实际**身份。修前报的是 entry.identity，而 Entry 记的是请求值，
                 // 且所有后端都自称 User——于是 uid 2000 的会话在回执里写「身份 user」，
                 // 模型据此判断「我没有权限」，转头去试 ui_* 或反复换参数。
-                append("（身份 ").append(it.identity.describe())
+                //
+                // W-RT5：ssh 会话存的也是 User，但「App 身份」对它是**错的**——命令其实以
+                // 远端那台机器的用户身份执行。通道已知，按通道如实报（池名同时也在后面给出）。
+                val idText = if (it.backendKey == TerminalBackend.KEY_SSH) {
+                    TerminalIdentity.Ssh.describe()
+                } else {
+                    it.identity.describe()
+                }
+                append("（身份 ").append(idText)
                 if (it.identity != TerminalIdentity.User && it.identity != declaredIdentity) {
                     // 请求是下限，实际档可能更高。不说清楚，模型会以为参数没生效、再传一次。
                     append("，已满足请求下限「").append(declaredIdentity?.wire ?: "默认 user").append("」")

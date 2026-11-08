@@ -198,6 +198,11 @@ import com.beichen.polaris.core.capability.shellCapabilitySnapshot
 import com.beichen.polaris.automation.screenCapabilitySnapshot
 import com.beichen.polaris.core.terminal.TerminalSessionPool
 import com.beichen.polaris.core.terminal.backend.TerminalBackendFactory
+import com.beichen.polaris.core.terminal.backend.SshBackendProvider
+import com.beichen.polaris.core.terminal.backend.SshBinaryLocator
+import com.beichen.polaris.core.terminal.backend.SshProfile
+import com.beichen.polaris.core.terminal.backend.SshProfileResult
+import com.beichen.polaris.core.terminal.backend.normalizeSshProfile
 import com.beichen.polaris.core.terminal.backend.createTerminalBackendFactory
 import com.beichen.polaris.tools.ClipboardTool
 import com.beichen.polaris.tools.HttpRequestTool
@@ -713,7 +718,21 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             // W-53：无线调试作为第三级（proot → adb → user）。provider 在 automation 包，
             // 由这里注入，避免 core 反向依赖 automation。W-56：Shizuku 也做成池后端
             // （uid 2000 + 持久 shell），所以默认会话链是 proot → shizuku → adb → user
-            extraProviders = listOf(ShizukuBackendProvider(), AdbBackendProvider())
+            // W-RT5：SSH 也不进这条降级链（远端机器不能顶替本机 shell），
+            // 只注册 provider 供会话池 obtainByKey(KEY_SSH) 显式路由。
+            // ssh 命令的定位：Android 不预装，实际来源是容器 rootfs 的 /usr/bin（装了 openssh）。
+            extraProviders = listOf(
+                ShizukuBackendProvider(),
+                AdbBackendProvider(),
+                SshBackendProvider(
+                    sshPathProvider = {
+                        val rootfsBin = RootfsManager.listAvailable(app).firstOrNull()
+                            ?.let { File(RootfsManager.rootfsDir(app, it.id), "usr/bin").absolutePath }
+                        SshBinaryLocator.locate(SshBinaryLocator.defaultCandidates(rootfsBin))
+                    },
+                    profileProvider = { sshSavedProfile() }
+                )
+            )
         )
 
     /**
@@ -1334,6 +1353,35 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     override val approvalTier: StateFlow<String> get() = settingsFacade.approvalTier
 
     override fun setApprovalTier(mode: String) = settingsFacade.setApprovalTier(mode)
+
+    /* ------------------- W-RT5：SSH 连接档案（v1 单档案，仅密钥登录） ------------------- */
+
+    /**
+     * UI 回调：保存 SSH 连接档案。
+     *
+     * @return 校验不通过时返回给用户看的理由（UI 直接展示，**不落盘**）；成功返回 null。
+     *
+     * 两件事不能省：
+     *  ① 校验交给 core 的纯函数（`normalizeSshProfile`）——它是唯一判据，UI 与后端装配共用；
+     *  ② 保存后必须 [TerminalBackendFactory.clearCache]：探测结果依赖「有没有档案」，
+     *     不清缓存的话，刚填好的配置要等下次进程启动才生效，用户会以为保存失败了。
+     */
+    override fun saveSshProfile(host: String, port: String, user: String, keyPath: String): String? {
+        val profile = when (val r = normalizeSshProfile(host, port, user, keyPath)) {
+            is SshProfileResult.Invalid -> return r.reason
+            is SshProfileResult.Ok -> r.profile
+        }
+        configStore.setSshProfile(profile.host, profile.port.toString(), profile.user, profile.keyPath)
+        terminalBackendFactory.clearCache()
+        AgentLogger.i("Chat", "SSH 连接档案已保存：${profile.user}@${profile.host}:${profile.port}")
+        return null
+    }
+
+    /** 当前 SSH 档案（设置页回显用；未配置或校验不过返回 null）。 */
+    override fun sshSavedProfile(): SshProfile? =
+        (normalizeSshProfile(
+            configStore.sshHost(), configStore.sshPort(), configStore.sshUser(), configStore.sshKeyPath()
+        ) as? SshProfileResult.Ok)?.profile
 
     /** UI 回调：批准计划。 */
     override fun approvePlan(planId: String) {

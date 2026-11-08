@@ -6,6 +6,7 @@ import com.beichen.polaris.automation.DeviceContext
 import com.beichen.polaris.automation.shizuku.ShizukuShell
 import com.beichen.polaris.core.ConversationSummary
 import com.beichen.polaris.core.capability.CapabilityResolution
+import com.beichen.polaris.core.terminal.backend.SshProfile
 import com.beichen.polaris.memory.MemoryItem
 import com.beichen.polaris.ui.SkillUiInfo
 import kotlinx.coroutines.Job
@@ -68,6 +69,23 @@ interface PermissionStatusContract : PermissionReadout {
     fun refreshShizukuStatus()
     fun handleShizukuAction(context: Context)
     fun openBatteryOptimizationSettings(ctx: Context)
+
+    /**
+     * W-RT5：当前 SSH 连接档案（「SSH 远程机器」分区回显用；未配置返回 null）。
+     *
+     * 为什么放在这个契约里而不是新开一个：SSH 与 Shizuku / 无线调试是同一类东西——
+     * 「shell 能不能跑、以什么身份跑」的一条通道，用户就在这一页配。为两个方法新开
+     * 一个契约，只会让组装根多传一个参数、让这一页多一个「另一半数据从哪来」的问题。
+     */
+    fun sshSavedProfile(): SshProfile?
+
+    /**
+     * W-RT5：保存 SSH 连接档案；校验不过返回理由（UI 就地展示），成功返回 null。
+     *
+     * 返回值是 `String?` 而不是 Boolean：失败时**要能说出哪里不对**（端口越界 / 主机带空格）。
+     * 只说「保存失败」的话，用户唯一的下一步是把四个字段挨个再检查一遍。
+     */
+    fun saveSshProfile(host: String, port: String, user: String, keyPath: String): String?
 }
 
 /**

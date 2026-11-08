@@ -52,8 +52,9 @@ enum class TerminalIdentity(
      * 取决于设备（装了 Shizuku 或配对过无线调试才有），而它对模型是一个有效取值——
      * 只要设备上有任一 uid 2000 通道就能跑。这也正是不能用「后端数量 > 0」表达可用性的原因。
      *
-     * 首期为 false 的两个是**尚未实现**，不是「这台机器上暂时不可用」——
-     * 后者属于运行时状态，不该写进枚举。
+     * false 的那一档是**尚未实现**，不是「这台机器上暂时不可用」——
+     * 后者属于运行时状态，不该写进枚举。（W-RT5 之前这里是 Su / Ssh 两档；
+     * Ssh 接上后端后只剩 Su。）
      */
     val usable: Boolean
 ) {
@@ -75,8 +76,19 @@ enum class TerminalIdentity(
      */
     Shizuku(uid = 2000, usable = true),
 
-    /** SSH 远端：首期**只留接口不实现**，后端工厂返回空候选。 */
-    Ssh(uid = null, usable = false);
+    /**
+     * SSH 远端（W-RT5 起**已实现**）。
+     *
+     * 与其它三档的根本差别：它不是「本机权限的某一层」，而是**另一台机器**。
+     * 因此：
+     *  - 它不满足任何本地身份，本地身份也满足不了它（见 [satisfies]）；
+     *  - 它**不进** shell 的自动降级链（[TerminalBackendFactory.providersFor] 显式排除），
+     *    只能经 `identity=ssh` + [TerminalBackendSource.obtainByKey] 显式路由——
+     *    「本机 shell 起不来就悄悄跑到远端去」是最难查的一类故障；
+     *  - 会话池里它固化的是 User（远端登录 shell 的身份与本机 uid 不可比），
+     *    通道由 [TerminalBackend.KEY_SSH] 表达。
+     */
+    Ssh(uid = null, usable = true);
 
     /** 对外线格式（工具 schema 的 enum 取值）：枚举名小写。 */
     val wire: String get() = name.lowercase()

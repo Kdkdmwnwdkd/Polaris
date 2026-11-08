@@ -57,24 +57,26 @@ fun testSchemaValues() {
 
     val values = TerminalIdentity.schemaValues()
 
-    check("A1 恰好是 user / shizuku（顺序稳定，便于 diff）") {
-        eq(values, listOf("user", "shizuku"), "schemaValues()")
+    check("A1 恰好是 user / shizuku / ssh（顺序稳定，便于 diff）") {
+        // W-RT5 起 ssh 有了真实执行路径（远端持久 shell），按 R-20 的规矩它**必须**进 schema：
+        // 能跑却不出现，等于让模型永远想不起自己还能连远端。
+        eq(values, listOf("user", "shizuku", "ssh"), "schemaValues()")
     }
 
     check("A2 不含 su —— 首期没有执行路径") {
         expect("su" !in values) { "su 又回到 schema 里了：模型会照着选，然后必然失败" }
     }
 
-    check("A3 不含 ssh —— 同上") {
-        expect("ssh" !in values) { "ssh 又回到 schema 里了" }
+    check("A3 ssh 在 schema 里（W-RT5：它有后端了，反过来必须可见）") {
+        expect("ssh" in values) { "ssh 有后端却没进 schema——模型用不到这条通道" }
     }
 
     check("A4 文案默认用「 / 」分隔") {
-        eq(TerminalIdentity.schemaValuesText(), "user / shizuku", "schemaValuesText()")
+        eq(TerminalIdentity.schemaValuesText(), "user / shizuku / ssh", "schemaValuesText()")
     }
 
     check("A5 中文语境可用顿号") {
-        eq(TerminalIdentity.schemaValuesText("、"), "user、shizuku", "schemaValuesText(\"、\")")
+        eq(TerminalIdentity.schemaValuesText("、"), "user、shizuku、ssh", "schemaValuesText(\"、\")")
     }
 
     check("A6 取值全部是小写线格式（schema 与 fromWire 认的是同一个字符串）") {
@@ -102,7 +104,11 @@ fun testUsability() {
 
     check("B3 su 不可用") { expect(!TerminalIdentity.Su.usable) { "su 被标成可用" } }
 
-    check("B4 ssh 不可用") { expect(!TerminalIdentity.Ssh.usable) { "ssh 被标成可用" } }
+    check("B4 ssh 可用（W-RT5：后端已实现，走显式路由）") {
+        expect(TerminalIdentity.Ssh.usable) {
+            "ssh 被判成不可用——它有后端了（远端持久 shell），只是不进降级链"
+        }
+    }
 }
 
 /* ---------------------- C. 不变式：枚举与 schema 双向一致 ---------------------- */

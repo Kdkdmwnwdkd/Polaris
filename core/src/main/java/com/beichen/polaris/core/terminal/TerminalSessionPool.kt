@@ -190,16 +190,39 @@ class TerminalSessionPool(
      *   传 `user` 时设备若有 uid 2000 通道，拿到的会话实际身份就是 uid 2000。
      * @param alias 别名；null = 按后端键取默认别名（[TerminalBackendFactory.defaultAliasFor]）
      * @param preferProot true = 优先 proot 容器，不可用回落本机 user
+     * @param backendKey W-RT5：显式指定后端键（如 [TerminalBackend.KEY_SSH]）。非 null 时
+     *   **不走身份降级链**，直接经 [TerminalBackendSource.obtainByKey] 取该后端——远端机器
+     *   绝不能在本机 shell 起不来时悄悄顶替。此时 [identity] 仅作会话元数据固化。
      * @return [OpenResult]
      */
     suspend fun open(
         identity: TerminalIdentity = TerminalIdentity.User,
         alias: String? = null,
-        preferProot: Boolean = true
+        preferProot: Boolean = true,
+        backendKey: String? = null
     ): OpenResult {
-        // 1) 取候选（W-55：不再只取一个——首个 start 失败时按顺序回落）
-        val candidates = source.obtainCandidates(identity, preferProot)
+        // 1) 取候选：显式后端键 > 身份降级链（W-RT5）
+        val candidates = if (backendKey != null) {
+            listOfNotNull(source.obtainByKey(backendKey))
+        } else {
+            source.obtainCandidates(identity, preferProot)
+        }
         if (candidates.isEmpty()) {
+            // W-RT5：显式路由失败要说「这个后端不可用」，而不是「没有可用的终端后端」——
+            // 后者会让用户去修本机 shell，而真正缺的是 SSH 档案或 ssh 命令。
+            if (backendKey != null) {
+                return OpenResult.failure(
+                    code = "no_backend",
+                    message = "显式指定的后端「$backendKey」当前不可用。",
+                    hint = if (backendKey == TerminalBackend.KEY_SSH) {
+                        "SSH 后端不可用。依次确认：① 权限中心 → SSH 已填好主机 / 端口 / 用户名并保存；" +
+                            "② 目标机器已把本设备的公钥加进 authorized_keys（仅支持密钥登录，不支持密码）；" +
+                            "③ 设备上有可用的 ssh 命令（通常由容器工具链安装 openssh 提供）。"
+                    } else {
+                        "确认后端已正确配置，或改用默认参数（自动降级链）。"
+                    }
+                )
+            }
             // R-12：这里不再按身份写特例分支，而是按「有没有能提供这么高权限的后端」说话。
             // 修前是 `if (identity == User) 无后端 else 身份不支持`——于是 su / ssh 的失败
             // 被归成「身份不存在」，而真相是「本机没有任何以 uid 0 / 远端身份执行的后端」。
@@ -223,8 +246,14 @@ class TerminalSessionPool(
                         "identity=shizuku 走的是**一次性提权通道**，需要 Shizuku 服务在运行且已授权本应用。" +
                             "要 uid 2000 **并且** cwd 保持，改用 prefer_proot=false（会话池会依次试 " +
                             "Shizuku → 无线调试）；两者状态可到「设置 → 调试通道」查看。"
+                    } else if (identity == TerminalIdentity.Ssh) {
+                        // W-RT5：ssh 已有后端，但它**不在降级链里**——走到这里说明调用方只传了
+                        // identity 没传 backendKey。要指路，不能说「没有这条通道」。
+                        "identity=ssh 必须显式路由：会话池不会把远端机器放进降级链。" +
+                            "请确认调用方传了 backendKey=${TerminalBackend.KEY_SSH}；" +
+                            "若 SSH 本身不可用，先到「权限中心 → SSH 远程机器」检查连接配置与 ssh 命令。"
                     } else {
-                        "su / ssh 首期无后端（本应用不提供这两条通道）。要容器用 prefer_proot=true（默认）；" +
+                        "su 首期无后端（本应用不提供 root 通道）。要容器用 prefer_proot=true（默认）；" +
                             "要 uid 2000 用 prefer_proot=false（Shizuku / 无线调试）；普通文件操作用默认参数即可。"
                     }
                 )
