@@ -48,4 +48,7 @@ dependencies {
     api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
     // 模型客户端（OpenAI 兼容 / GitHub 构建服务）全部走 OkHttp
     api("com.squareup.okhttp3:okhttp:4.12.0")
+    // 技能脚本执行引擎（skill/SkillExecutor：ClassShutter + 指令计数熔断）。
+    // 纯 Java，无需 NDK；换 QuickJS 时只替换 JsEngine 实现。
+    api("org.mozilla:rhino-runtime:1.7.14")
 }

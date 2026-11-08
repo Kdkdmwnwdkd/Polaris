@@ -34,12 +34,12 @@
 
 | 模块 | 依赖 |
 |---|---|
-| `:core` | `androidx.core:core-ktx` 1.13.1 / `kotlinx-coroutines-android` 1.8.1 / `kotlinx-serialization-json` 1.6.3 / `okhttp` 4.12.0 —— **全部用 `api` 声明** |
+| `:core` | `androidx.core:core-ktx` 1.13.1 / `kotlinx-coroutines-android` 1.8.1 / `kotlinx-serialization-json` 1.6.3 / `okhttp` 4.12.0 / `rhino-runtime` 1.7.14 —— **全部用 `api` 声明** |
 | `:app` | 上表其余全部（Compose、WorkManager、Shizuku、ML Kit、Rhino…），另有 `implementation(project(":core"))` |
 
 两条约束：
 
-1. **四个共用依赖的版本号必须两边一致**。它们目前各写一份（`core/build.gradle.kts` 与
+1. **五个共用依赖的版本号必须两边一致**。它们目前各写一份（`core/build.gradle.kts` 与
    `app/build.gradle.kts`），没有 version catalog 兜底——升级时两处一起改。`:core` 用 `api`
    是为了让 app 侧能解析出现在 core 公共签名里的 okhttp / serialization 类型。
 2. **`:core` 不得依赖 Compose、WorkManager、Shizuku、ML Kit**。前三者属于界面/宿主调度，
