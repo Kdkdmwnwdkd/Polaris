@@ -1128,7 +1128,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         ownerActive = { isOwnerActive() },
         onStoreChanged = { refreshConversations() },
         lock = msgLock,
-        onHistoryTruncated = ::noticeHistoryTruncated,
+        onHistoryTruncated = { dropped -> noticeHistoryTruncated(dropped) },
     )
     override val messages: StateFlow<List<UiItem>> = projection.items
 
