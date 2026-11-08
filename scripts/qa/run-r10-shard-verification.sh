@@ -77,6 +77,7 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 
 "$KOTLINC_BIN" -nowarn -Xplugin="$PLUGIN" -cp "$CP" -d "$OUT" \
   "$SRC_CORE/core/ConversationStore.kt" \
+  "$SRC_CORE/core/ConversationArchive.kt" \
   "$SRC_CORE/core/ConversationShard.kt" \
   "$SRC_CORE/core/ConversationBranch.kt" \
   "$SRC_CORE/core/UiItem.kt" \

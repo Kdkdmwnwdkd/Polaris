@@ -299,15 +299,18 @@ private fun parseToolArgs(raw: String?): JsonObject {
 /**
  * 聊天记录存储：多会话 + 消息持久化（功能三）。
  *
- * 容量策略：单会话**轮数**封顶 [MAX_TURNS] 轮，超出丢最旧一轮——聊天记录要「有」，
- * 但不能让一个超长会话把文件撑到影响读写性能。
+ * 容量策略：单会话**轮数**封顶 [MAX_TURNS] 轮，超出把最旧一轮挤出工作集——
+ * 聊天记录要「有」，但不能让一个超长会话把文件撑到影响读写性能。
  *
  * 注意这里的单位是「轮」不是「条」：一轮里可能有 1 条 user、N 条助手变体、M 条工具轨迹，
  * 所以 200 轮对应的记录数远大于 200。旧名字 `MAX_MESSAGES` 与作用对象不符，容易让人
  * 按「消息条数」估算容量（也因此误判了截断的触发频率）。
  *
- * 截断是**有损**的：最早的轮次会真的从文件里消失。所以 [appendMessage] 会把丢弃的轮数
- * 返回给调用方，由界面给一次可见提示——静默删数据比删数据本身更糟。
+ * W-RT9 起「挤出」不再等于「删除」：挤出的轮次一条不少地追加进旁路归档文件
+ * （[archivedTurns]，JSONL 一问一件），内存工作集照旧封顶。也就是说
+ * **性能上限不变、数据不再丢**——用户翻旧账、导出 Markdown 都能拿到全档。
+ * [appendMessage] 仍把挤出的轮数返回给调用方，由界面给一次可见提示：
+ * 数据虽然还在，但工作集确实变短了，用户得知道「刚才那几轮去哪了」。
  */
 class ConversationStore(file: File) {
 
@@ -319,7 +322,24 @@ class ConversationStore(file: File) {
      */
     private val shardDir = File(file.parentFile, file.nameWithoutExtension + SHARD_DIR_SUFFIX)
 
+    /**
+     * W-RT9：归档目录。同样按主文件名派生（`conversations-archives/`），
+     * 不用写死的 "archives"：同一目录下若还有别的 store 实例（备份恢复、测试夹），
+     * 写死的名字会让两边的归档互相覆盖。一个会话一个 `<id>.jsonl`，追加式，永不重写。
+     */
+    private val archiveDir = File(file.parentFile, file.nameWithoutExtension + "-archives")
+
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
+
+    /**
+     * W-RT9：归档专用 JSON —— **必须紧凑**（单轮压成一行）。
+     *
+     * 不能用上面那个 [json]：它开了 prettyPrint，一轮会摊成几十行，写进 `.jsonl`
+     * 之后再按行读，每一行都是半截 JSON，逐行解析全部失败、坏行被安静跳过——
+     * 写进去了却永远读不回来，比不归档更糟（用户以为历史还在，导出却是空的）。
+     * 归档文件是给程序读的，没有可读性诉求，紧凑才对。
+     */
+    private val archiveJson = Json { ignoreUnknownKeys = true }
     private val lock = Any()
     private val items = mutableListOf<ConversationRecord>()
 
@@ -468,20 +488,20 @@ class ConversationStore(file: File) {
      * ② 首条 user 消息且标题仍是「新对话」时，title = 内容前 [TITLE_CHARS] 字符
      *    （和别家聊天记录一样自动命名，省用户手打）。
      *
-     * @return 本次因超过 [MAX_TURNS] 而丢弃的轮数；0 = 没发生截断。
-     *   调用方（界面投影）据此给一次可见提示——这条路径会真的删除本地历史，
-     *   不能只在日志里记一笔。
+     * @return 本次因超过 [MAX_TURNS] 而**转入归档**的轮数；0 = 没发生截断。
+     *   调用方（界面投影）据此给一次可见提示——工作集确实变短了，
+     *   用户要知道「刚才那几轮去哪了」，而不是等下次翻历史才发现。
      */
     fun appendMessage(convId: String, rec: MsgRecord): Int {
-        var dropped = 0
+        // W-RT9：被挤出工作集的轮次在这里攒着，出锁后统一落归档。
+        val evicted = mutableListOf<TurnRecord>()
         synchronized(lock) {
             val idx = items.indexOfFirst { it.id == convId }
             // 会话已被删：静默丢弃，不崩溃（VM 有运行中守卫，双保险）
             if (idx < 0) return 0
             val conv = items[idx]
             // Phase 2 DoD②：先并入轮次变体结构，再据其展开为平坦缓存 messages
-            val (turns, dropCount) = appendToTurns(conv.turns, rec)
-            dropped = dropCount
+            val turns = appendToTurns(conv.turns, rec, evicted)
             val messages = ConversationBranch.flatten(turns)
             var title = conv.title
             if (title == DEFAULT_TITLE && rec.role == ROLE_USER && rec.content.isNotBlank()) {
@@ -495,12 +515,15 @@ class ConversationStore(file: File) {
             )
             dirtyIds.add(convId)
         }
+        // W-RT9：归档写在锁外。它是旁路文件，写失败不影响主数据；
+        // 在锁内做 IO 会让同一会话的并发追加排着队等磁盘——主路径不该为「加菜」付这笔钱。
+        if (evicted.isNotEmpty()) appendArchive(convId, evicted)
         // 不在这里打日志：本类被 5 个 harness 以「纯 JVM 源码自编译」的方式测
         // （run-r06 / run-r10 的 SOURCES 逐个列文件），引 AgentLogger 会连带拉进
         // 一套日志设施，把「零依赖可跑」这个前提打破。丢弃量已经通过返回值给了
         // 调用方，记日志由宿主在拿到返回值时做。
         schedulePersist()
-        return dropped
+        return evicted.size
     }
 
     /**
@@ -510,12 +533,18 @@ class ConversationStore(file: File) {
      *    原变体保留可切回）；
      *  - tool → 按 id upsert 进**当前轮的 trace**（ToolStarted 空结果占位 → ToolFinished 终态覆盖，
      *    语义与旧 `messages` 的 replace 一致）。
-     * 轮数超 [MAX_TURNS] 丢最旧轮；无当前轮（异常数据）时安静忽略，绝不崩溃。
+     * 轮数超 [MAX_TURNS] 时最旧轮转入归档（W-RT9 全档保留，见 [archivedTurns]）；
+     * 无当前轮（异常数据）时安静忽略，绝不崩溃。
      *
-     * @return 新的轮次列表 + 丢弃的轮数（0 = 没超限）。丢了多少必须回传：
-     *   这是**有损**操作，调用方要据此提示用户，不能只在日志里留痕。
+     * @param evicted 出口参数：被挤出工作集的轮次按「旧→新」追加进来。
+     *   为什么用可变集合而不是再包一层返回类型：调用点只有一个，
+     *   而返回值已经被「新的轮次列表」占用；多一个 Pair 只会让这里更难读。
      */
-    private fun appendToTurns(turns: List<TurnRecord>, rec: MsgRecord): Pair<List<TurnRecord>, Int> {
+    private fun appendToTurns(
+        turns: List<TurnRecord>,
+        rec: MsgRecord,
+        evicted: MutableList<TurnRecord>
+    ): List<TurnRecord> {
         val out = turns.toMutableList()
         when (rec.role) {
             ROLE_USER -> out.add(TurnRecord(user = rec))
@@ -539,12 +568,8 @@ class ConversationStore(file: File) {
             }
             else -> Unit
         }
-        var dropped = 0
-        while (out.size > MAX_TURNS) {
-            out.removeAt(0)
-            dropped++
-        }
-        return out to dropped
+        while (out.size > MAX_TURNS) evicted.add(out.removeAt(0))
+        return out
     }
 
     /**
@@ -702,7 +727,12 @@ class ConversationStore(file: File) {
         schedulePersist()
     }
 
-    /** 删除会话（含其全部消息，不可恢复——UI 层已有二次确认）。 */
+    /**
+     * 删除会话（含其全部消息，不可恢复——UI 层已有二次确认）。
+     *
+     * W-RT9：分片与归档文件都由落盘线程在 [persist] 里一并清掉（见 `batch.removed`），
+     * 这里只登记「待删」，主线程不碰磁盘。
+     */
     fun delete(convId: String) {
         synchronized(lock) {
             items.removeAll { it.id == convId }
@@ -710,6 +740,61 @@ class ConversationStore(file: File) {
             removedIds.add(convId)
         }
         schedulePersist(urgent = true)
+    }
+
+    /* ------------------ W-RT9：长对话全档保留（归档旁路文件） ------------------ */
+
+    /**
+     * 归档文件名：与分片同一套 id 安全编码——归档也会被读写删，路径穿越在这里同样致命。
+     */
+    private fun archiveFile(convId: String): File = File(archiveDir, "${safeStem(convId)}.jsonl")
+
+    /**
+     * 追加被挤出的轮次（JSONL，一轮一行，旧→新）。
+     *
+     * 整体 runCatching 兜住：归档是「加菜」，磁盘满 / 无权限 / 并发写坏都不能硌着主菜。
+     * 宁可少几轮归档，也不能让一次 appendText 抛异常把整轮回答的落盘带崩。
+     */
+    private fun appendArchive(convId: String, turns: List<TurnRecord>) {
+        if (turns.isEmpty()) return
+        runCatching {
+            archiveDir.mkdirs()
+            val text = buildString {
+                turns.forEach { append(archiveJson.encodeToString(it)).append('\n') }
+            }
+            // 一次 appendText 写完整批：逐轮 append 会让同一批产生 N 次 open/close，
+            // 而这段正处在「用户正在等回答」的路径上。
+            archiveFile(convId).appendText(text)
+        }
+    }
+
+    /**
+     * 读归档：[offset] 起取 [limit] 轮（旧→新；越界由 [ConversationArchive.page] 夹到安全范围）。
+     *
+     * 坏行（手改、写一半、旧版本 prettyPrint 留下的多行残骸）安静跳过——
+     * 归档的诉求是「尽量全」，不是「一个字节不对就全盘拒绝」。
+     * 文件不存在就返回空表（从未超限的会话是常态，不是异常）。
+     */
+    fun archivedTurns(convId: String, offset: Int = 0, limit: Int = Int.MAX_VALUE): List<TurnRecord> {
+        val text = runCatching { archiveFile(convId).readText() }.getOrNull() ?: return emptyList()
+        val all = text.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .mapNotNull { line -> runCatching { archiveJson.decodeFromString<TurnRecord>(line) }.getOrNull() }
+            .toList()
+        return ConversationArchive.page(all, offset, limit)
+    }
+
+    /**
+     * 归档轮数（UI 判断「有没有更早的历史」用）。
+     *
+     * 只数非空行，不解析内容：一行一轮是写入端保证的不变式，全量解析一遍只为报个数字
+     * 是把「翻页按钮要不要亮」的开销抬到和读正文一个量级。坏行会让这个数字偏大，
+     * 可接受的误差——它只用来决定「要不要显示入口」，真正的数据以 [archivedTurns] 为准。
+     */
+    fun archivedCount(convId: String): Int {
+        val text = runCatching { archiveFile(convId).readText() }.getOrNull() ?: return 0
+        return text.count { it == '\n' }
     }
 
     /**
@@ -803,15 +888,19 @@ class ConversationStore(file: File) {
         else runCatching { json.decodeFromString<ConversationShard>(text) }.getOrNull()
 
     /**
-     * 分片文件名：合法 id 原样；其它（备份里可能夹带的历史脏 id）按 UTF-8 hex 编码，
+     * 文件名安全 stem：合法 id 原样；其它（备份里可能夹带的历史脏 id）按 UTF-8 hex 编码，
      * 杜绝 `../` 之类的路径穿越，且保证同一 id 的加载与写入落到同一个文件。
+     *
+     * W-RT9：分片与归档共用这一段（之前内联在 [shardFile] 里）。两处各抄一份的话，
+     * 哪天只有一边放宽了字符集，同一条会话的分片和归档就会算出不同的名字。
      */
-    private fun shardFile(id: String): File {
-        val safe = if (SAFE_ID.matches(id)) id
+    private fun safeStem(id: String): String =
+        if (SAFE_ID.matches(id)) id
         else "h-" + id.toByteArray(Charsets.UTF_8)
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
-        return File(shardDir, "$safe.json")
-    }
+
+    /** 分片文件名（`<stem>.json`，stem 见 [safeStem]）。 */
+    private fun shardFile(id: String): File = File(shardDir, "${safeStem(id)}.json")
 
     /** 读一个分片：主分片坏了回退该分片的 .bak；两者都不可用返回 null（该会话跳过，不崩）。 */
     private fun readShard(id: String): ConversationRecord? {
@@ -969,11 +1058,14 @@ class ConversationStore(file: File) {
 
         val started = System.currentTimeMillis()
         runCatching { shardDir.mkdirs() }
-        // 删除会话：清掉分片与它的 .bak，避免孤儿文件越攒越多
+        // 删除会话：清掉分片、它的 .bak，以及 W-RT9 归档——会话没了，归档也没意义，
+        // 留着只会变成永远没人认领的孤儿文件。清理放在这里而不是 delete() 里，
+        // 是为了守住「主线程不碰磁盘」：delete() 只改内存 + 排任务，IO 全在落盘线程。
         for (id in batch.removed) {
             val shard = shardFile(id)
             runCatching { shard.delete() }
             runCatching { AtomicJsonFile.backupOf(shard).delete() }
+            runCatching { archiveFile(id).delete() }
         }
         val byId = batch.records.associateBy { it.id }
         var bytes = 0

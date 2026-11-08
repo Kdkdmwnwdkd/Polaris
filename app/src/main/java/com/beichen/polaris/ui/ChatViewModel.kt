@@ -1922,10 +1922,14 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     override fun dismissTruncationNotice() { _truncationNotice.value = null }
 
     /**
-     * 本地历史超过 [ConversationStore.MAX_TURNS] 被截断时给一次可见提示。
+     * 本地历史超过 [ConversationStore.MAX_TURNS] 被挤出工作集时给一次可见提示。
      *
-     * 复用截断 banner（用户体验上是同一件事：有内容没留下），但文案必须与「回答达到
-     * 输出上限」区分开——一个是我们这边存不下、删了旧的，一个是模型没写完。
+     * 复用截断 banner（用户体验上是同一件事：屏幕上的对话变短了），但文案必须与
+     * 「回答达到输出上限」区分开——一个是我们的工作集装不下、早期的移走了，
+     * 一个是模型没写完。
+     *
+     * W-RT9 起措辞从「已删除」改成「已转入归档」：数据不再真丢，说「删除」是错的，
+     * 会让用户白心疼一遍。但仍要提示——工作集确实变短了，不吭声才更可疑。
      *
      * 已有提示时不覆盖：同一会话连续追加会连着触发，覆盖只会让文案闪。
      */
@@ -1934,11 +1938,12 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // 的方式测（逐个列源文件），引日志设施会破坏「零依赖可跑」的前提。
         AgentLogger.w(
             "ChatViewModel",
-            "会话历史超过 ${ConversationStore.MAX_TURNS} 轮，已删除最早的 $dropped 轮"
+            "会话历史超过 ${ConversationStore.MAX_TURNS} 轮，最早的 $dropped 轮已转入归档"
         )
         if (_truncationNotice.value == null) {
             _truncationNotice.value =
-                "⚠️ 本会话已超过 ${ConversationStore.MAX_TURNS} 轮，最早的 $dropped 轮已从本地记录删除"
+                "⚠️ 本会话已超过 ${ConversationStore.MAX_TURNS} 轮，最早的 $dropped 轮已转入归档" +
+                    "（导出 Markdown 时仍会完整包含）"
         }
     }
 
@@ -2926,11 +2931,14 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 功能五（P1-4a）：导出指定会话为 Markdown 文本（抽屉长按菜单「导出 Markdown」）。
      * 会话不存在或为空返回空串——调用方（UI）据此不弹分享面板。
      * 纯读不改状态：导出是只读动作，不碰 updatedAt、不触发落盘。
+     *
+     * W-RT9：导出带上归档轮——「导出」在用户心里就是「把这对话完整拿走」，
+     * 只给工作集那 200 轮等于悄悄少了一段。归档读取失败按空表处理（导出照样成立）。
      */
     override fun conversationMarkdown(convId: String): String {
         val rec = conversationStore.load(convId) ?: return ""
         if (rec.messages.isEmpty()) return ""
-        return conversationToMarkdown(rec)
+        return conversationToMarkdown(rec, conversationStore.archivedTurns(convId))
     }
 
     /* -------------------- 功能五（P1-7）：提示词库（快捷指令） -------------------- */

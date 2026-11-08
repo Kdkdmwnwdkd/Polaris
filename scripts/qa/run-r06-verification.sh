@@ -60,6 +60,8 @@ SOURCES=(
   "$SRC_CORE/core/UiItem.kt"
   "$SRC_CORE/core/ToolResult.kt"
   "$SRC_CORE/core/ConversationStore.kt"
+  # W-RT9：存储层现在调 ConversationArchive（同包另一文件），不列进来会编译失败。
+  "$SRC_CORE/core/ConversationArchive.kt"
   "$SRC_CORE/core/ConversationShard.kt"
   "$SRC_CORE/core/lifecycle/AppBackgroundHooks.kt"
   "$SRC_CORE/core/ConversationBranch.kt"

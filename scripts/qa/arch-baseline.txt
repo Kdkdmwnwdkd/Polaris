@@ -55,8 +55,14 @@
 # costDrillDown()（遍历当前消息，几十条的量级，不缓存）；ModelConfigScreen：32 行
 # 的费用参考分区。字段本体（UiItem / MsgRecord）在 core，不计入这两个文件。
 #
+# 2026-11-08 第八次上调（ChatViewModel +8）：移植 W-RT9 长对话归档。
+# 两处都在既有函数里：conversationMarkdown 多传一个归档参数（含三行理由），
+# noticeHistoryTruncated 换成「已转入归档」口径（数据不再丢，说「已删除」是错的）。
+# 归档读写主体（archiveFile / appendArchive / archivedTurns / archivedCount）
+# 与裁剪纯函数都在 core，不计入本文件——和二维码、知识库同一种处理方式。
+#
 # 以后再抬必须先证明「功能确实需要」——「顺手写的」不算理由。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3520
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3528
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3128
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2422
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
