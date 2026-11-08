@@ -631,6 +631,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     override val localAgentMode: StateFlow<Boolean> = modelSettings.agentMode
     override val localGpuMode: StateFlow<GpuMode> = modelSettings.gpuMode
     override val localSafeMode: StateFlow<Boolean> = modelSettings.safeMode
+    override val localResourceTierLock: StateFlow<String> = modelSettings.resourceTierLock
     override val localGpuCrashNote: StateFlow<String> = modelSettings.gpuCrashNote
     override val localGpuSummary: StateFlow<String> = modelSettings.gpuSummary
 
@@ -658,6 +659,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     override fun setLocalSafeMode(on: Boolean) = modelSettings.setSafeMode(on)
 
     override fun setLocalGpuMode(mode: GpuMode) = modelSettings.setGpuMode(mode)
+
+    override fun setLocalResourceTierLock(name: String) = modelSettings.setResourceTierLock(name)
 
     /**
      * W-70：选中本地模型即把当前档案切到本地供应商。

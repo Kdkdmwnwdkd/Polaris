@@ -72,6 +72,18 @@ class LocalLlamaSetting(context: Context) {
         set(value) = sp.edit().putString(KEY_GPU_MODE, value.name).apply()
 
     /**
+     * 资源档位锁：AUTO / ECO / BALANCED / PERFORMANCE（存原始字符串，解析在
+     * [ResourceTier.parse]——这里不做枚举校验，配置写坏时按「跟随自动」处理，
+     * 与 [gpuMode] 的兜底口径一致）。
+     *
+     * AUTO：档位跟着机型画像走，且只减不增（用户手动调高的参数不被覆盖）；
+     * 锁档：点名要这档，按 [ResourcePlanRules.specFor] 直取。
+     */
+    var resourceTierLock: String
+        get() = sp.getString(KEY_RESOURCE_TIER, "AUTO") ?: "AUTO"
+        set(value) = sp.edit().putString(KEY_RESOURCE_TIER, value).apply()
+
+    /**
      * 上次「开 GPU 崩掉」的说明（空串 = 没有）。
      *
      * 由 [NativeCrashMemory.handleStartup] 写入、设置页读取。**必须持久化**：
@@ -148,6 +160,9 @@ class LocalLlamaSetting(context: Context) {
         private const val KEY_AGENT_MODE = "agent_mode"
         private const val KEY_GPU_MODE = "gpu_mode"
         private const val KEY_GPU_CRASH_NOTE = "gpu_crash_note"
+
+        /** 资源档位锁（W-RT2）。缺省 AUTO = 跟机型画像走。 */
+        private const val KEY_RESOURCE_TIER = "resource_tier"
     private const val KEY_SAFE_MODE = "safe_mode"
         const val DEFAULT_N_CTX = 4096
 

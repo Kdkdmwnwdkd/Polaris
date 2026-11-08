@@ -12,6 +12,7 @@ import com.beichen.polaris.core.llm.local.LlamaJni
 import com.beichen.polaris.core.llm.local.LocalDeviceRules
 import com.beichen.polaris.core.llm.local.LocalLlamaEngine
 import com.beichen.polaris.core.llm.local.LocalLlamaSetting
+import com.beichen.polaris.core.llm.local.ResourceTier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -83,6 +84,15 @@ internal class ModelSettings(
 
     private val _safeMode = MutableStateFlow(setting.safeMode)
     val safeMode: StateFlow<Boolean> = _safeMode.asStateFlow()
+
+    /**
+     * 资源档位锁（W-RT2）："AUTO" 或 [ResourceTier] 名。
+     *
+     * 存原始字符串而不是枚举：配置被写坏时 [ResourceTier.parse] 返回 null，
+     * 语义自然退回「跟随自动」，与 [GpuMode] 的兜底口径一致。
+     */
+    private val _resourceTierLock = MutableStateFlow(setting.resourceTierLock)
+    val resourceTierLock: StateFlow<String> = _resourceTierLock.asStateFlow()
 
     private val _gpuCrashNote = MutableStateFlow(setting.lastGpuCrashNote)
     val gpuCrashNote: StateFlow<String> = _gpuCrashNote.asStateFlow()
@@ -245,6 +255,19 @@ internal class ModelSettings(
             if (on) "安全模式已开启：上下文压到 2048、批压到 128，下一条消息生效"
             else "安全模式已关闭：恢复设置里的上下文与批大小，下一条消息生效",
         )
+    }
+
+    /**
+     * 锁定资源档位（"AUTO" 或 [ResourceTier] 名）。
+     *
+     * 只落盘 + 更新 UI：档位在装载模型时读一次，由 `ensureModelLoaded` 统一解析，
+     * 语义是「下一条消息（重载）生效」，与安全模式、GPU 策略同一口径。
+     */
+    fun setResourceTierLock(name: String) {
+        setting.resourceTierLock = name
+        _resourceTierLock.value = name
+        val label = ResourceTier.parse(name)?.label ?: "自动（跟机型走）"
+        AgentLogger.i("LocalLlama", "资源档位改为「$label」，下次加载模型生效")
     }
 
     fun setGpuMode(mode: GpuMode) {

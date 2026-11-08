@@ -126,27 +126,52 @@ class LocalLlamaClient(
         LlamaJni.applySafeMode(setting.safeMode)
 
         val gpu = resolveGpuPlan()
+
+        // 资源档位：机型画像 → 档位参数的落点（AUTO 跟机走且只减不增，锁档按表直取）。
+        // 画像在 resolveGpuPlan 里已经算过一次，这里复用探测缓存，代价是零。
+        val planProfile = AndroidDeviceProbe.cachedProfile
+        val rPlan = ResourcePlanRules.resolve(
+            setting.resourceTierLock,
+            planProfile?.let { LocalDeviceRules.advise(it) },
+        )
+        val planCtx = rPlan.capContext(setting.nCtx)
+        val planThreads = rPlan.effectiveThreads(setting.nThreads)
+        if (planCtx != setting.nCtx || planThreads != setting.nThreads) {
+            AgentLogger.i(
+                "LocalLlama",
+                "资源档位 ${rPlan.tier.label}：线程 ${setting.nThreads}→$planThreads、" +
+                    "上下文 ${setting.nCtx}→$planCtx。${rPlan.reason}。要完整参数请在" +
+                    "「推理参数 › 资源档位」锁定 PERFORMANCE",
+            )
+        }
+        if (rPlan.suggestSafeMode && !setting.safeMode) {
+            AgentLogger.i(
+                "LocalLlama",
+                "资源档位建议：本机内存余量小，建议在「推理参数」里打开安全模式（只建议，不代开）",
+            )
+        }
+
         // 显存保护：GPU 开启时上下文压到安全值。
         //
         // 这一步不能省。真机 2026-10-29：3B + ctx=16384 + 全量卸载，用户发一句话，
         // 进程直接消失（KV 和权重一起把显存顶爆，崩在 native，Java 层一句日志都没有）。
         // 与其让用户「等两分钟然后闪退」，不如用 4096 跑起来——少一点上下文，
         // 换来的是能出字。用户真要长上下文，把 GPU 关掉就是了。
-        val nCtx = LocalDeviceRules.effectiveCtx(setting.nCtx, gpu.layers, setting.safeMode)
-        if (setting.safeMode && nCtx != setting.nCtx) {
+        val nCtx = LocalDeviceRules.effectiveCtx(planCtx, gpu.layers, setting.safeMode)
+        if (setting.safeMode && nCtx != planCtx) {
             AgentLogger.w(
                 "LocalLlama",
-                "安全模式：上下文限制为 $nCtx（设置里是 ${setting.nCtx}）。" +
+                "安全模式：上下文限制为 $nCtx（设置里是 $planCtx）。" +
                     "上次在本机纯 CPU 推理时崩溃过，先把负载压下来；稳定后可在「推理参数」里关闭安全模式",
             )
-        } else if (nCtx != setting.nCtx) {
+        } else if (nCtx != planCtx) {
             AgentLogger.w(
                 "LocalLlama",
-                "GPU 开启时上下文限制为 $nCtx（设置里是 ${setting.nCtx}）：KV 缓存要和权重共用显存，" +
+                "GPU 开启时上下文限制为 $nCtx（设置里是 $planCtx）：KV 缓存要和权重共用显存，" +
                     "超过这个值容易在装载阶段分配失败甚至闪退。需要更长上下文请把 GPU 设为关闭",
             )
         }
-        var handle = engine.acquire(file.absolutePath, nCtx, setting.nThreads, gpu.layers)
+        var handle = engine.acquire(file.absolutePath, nCtx, planThreads, gpu.layers)
 
         // GPU 装载失败要能退回 CPU，而不是把「本地推理」整个打死。
         //
@@ -161,8 +186,8 @@ class LocalLlamaClient(
                     "原因见上一行 llama-jni 记录。若反复出现，请在「推理参数 › GPU 加速」里选「关闭」",
             )
             // 回退也要守安全模式：GPU 崩了说明余量已经不多，再用满 ctx 只会换个地方崩。
-            val cpuCtx = LocalDeviceRules.effectiveCtx(setting.nCtx, 0, setting.safeMode)
-            handle = engine.acquire(file.absolutePath, cpuCtx, setting.nThreads, 0)
+            val cpuCtx = LocalDeviceRules.effectiveCtx(planCtx, 0, setting.safeMode)
+            handle = engine.acquire(file.absolutePath, cpuCtx, planThreads, 0)
         }
         if (handle == 0L) {
             throw LocalInferenceException("本地模型加载失败：${file.name}（详见「运行日志」里的 llama-jni 记录）")

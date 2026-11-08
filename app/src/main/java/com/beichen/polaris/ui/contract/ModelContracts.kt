@@ -77,6 +77,15 @@ interface LocalModelContract {
     val localAgentMode: StateFlow<Boolean>
     val localGpuMode: StateFlow<GpuMode>
     val localSafeMode: StateFlow<Boolean>
+
+    /**
+     * 资源档位锁（W-RT2）：**原始字符串**，`"AUTO"` 或 `ResourceTier` 名。
+     *
+     * 不在这里暴露枚举：配置可能被写坏（手改 SharedPreferences / 老版本遗留），
+     * 解析职责在 `ResourceTier.parse`，它认不出时返回 null（= 跟随自动）。
+     * 接口层只负责搬运，避免「一个字符串在三个地方各自判定合法性」。
+     */
+    val localResourceTierLock: StateFlow<String>
     val localGpuSummary: StateFlow<String>
 
     /** 上次 GPU 崩溃的说明（空串 = 没崩过）。 */
@@ -94,6 +103,9 @@ interface LocalModelContract {
     fun setLocalAgentMode(on: Boolean)
     fun setLocalGpuMode(mode: GpuMode)
     fun setLocalSafeMode(on: Boolean)
+
+    /** 锁档（`"AUTO"` 或档位名）；下次加载模型生效。 */
+    fun setLocalResourceTierLock(name: String)
 }
 
 /** 模型配置页全部能力：远程 provider + 本地 GGUF，两个子接口的合成。 */
