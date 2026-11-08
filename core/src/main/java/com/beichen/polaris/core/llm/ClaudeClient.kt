@@ -115,7 +115,10 @@ class ClaudeClient(
                 if (r.code == 400 && looksLikeCacheRejection(safeBody)) return@use null
                 throw LlmHttpException(r.code, "Claude 请求失败 ${r.code}：${safeBody.take(300)}", safeBody)
             }
-            r.body!!.string()
+            // 空体不能复用下面的 null（null 是「400 缓存被拒、降级重试」的专用信号），
+            // 必须单独抛：否则空响应会被当成「缓存不兼容」，白白重发一次还是空。
+            r.body?.string()
+                ?: throw LlmHttpException(r.code, "Claude 响应体为空（HTTP ${r.code}）", "")
         }
     }
 
@@ -152,7 +155,10 @@ class ClaudeClient(
                         )
                     )
                 }
-                val source = resp.body!!.source()
+                val source = resp.body?.source()
+                    ?: throw LlmHttpException(
+                        resp.code, "Claude 流式响应体为空（HTTP ${resp.code}）", ""
+                    )
                 // hotfix35：兼容加固——个别中转会忽略 stream:true 直接回整段 JSON
                 // （无任何 data: 行）。旧实现产出空回答；这里留一份原文，末尾判定后
                 // 走非流式解析降级成一次性输出。

@@ -387,7 +387,11 @@ class OpenAIClient(
                     parseRetryAfterMs(r.header("Retry-After"))
                 )
             }
-            val text = r.body!!.string()
+            // 空体不是「空回答」而是协议异常：旧写法对 body 直接加了非空断言，
+            // 空体时抛 NPE，文案退化成「请求失败：null」，既看不出是哪种失败、
+            // 也没法按状态码归类。
+            val text = r.body?.string()
+                ?: throw LlmHttpException(r.code, "LLM 响应体为空（HTTP ${r.code}）", "")
             AgentLogger.llmResponse(
                 effectiveModel(),
                 true,
@@ -577,7 +581,9 @@ class OpenAIClient(
                         retryAfterMs = parseRetryAfterMs(resp.header("Retry-After"))
                     )
                 }
-                val source = resp.body!!.source()
+                // 同上：流式请求拿到 2xx 却没有 body，是一次协议级失败，不是「零增量」。
+                val source = resp.body?.source()
+                    ?: throw LlmHttpException(resp.code, "LLM 流式响应体为空（HTTP ${resp.code}）", "")
                 // hotfix35：一边按 SSE 消费，一边留一份原文——若整段都没出现 data:
                 // 前缀，说明供应商忽略 stream:true，原文即非流式响应体
                 var sawData = false

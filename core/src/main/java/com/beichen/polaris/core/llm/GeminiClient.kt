@@ -107,7 +107,8 @@ class GeminiClient(
                 AgentLogger.httpError(r.code, safeBody)
                 throw LlmHttpException(r.code, "Gemini 请求失败 ${r.code}：${safeBody.take(300)}", safeBody)
             }
-            val text = r.body!!.string()
+            val text = r.body?.string()
+                ?: throw LlmHttpException(r.code, "Gemini 响应体为空（HTTP ${r.code}）", "")
             AgentLogger.llmResponse(
                 effectiveModel(), true,
                 System.currentTimeMillis() - startedAt,
@@ -156,7 +157,10 @@ class GeminiClient(
                     )
                 )
             }
-            val source = resp.body!!.source()
+            val source = resp.body?.source()
+                ?: throw LlmHttpException(
+                    resp.code, "Gemini 流式响应体为空（HTTP ${resp.code}）", ""
+                )
             // hotfix35：兼容加固——中转忽略 alt=sse 直接回整段 JSON 时（无 data: 行），
             // 留原文并在末尾走非流式解析降级，避免产出空回答
             var sawData = false
