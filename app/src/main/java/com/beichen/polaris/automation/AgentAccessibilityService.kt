@@ -700,8 +700,20 @@ private fun AccessibilityService.ScreenshotResult.toSoftwareBitmap(): Bitmap? =
                 )
                 false
             } else {
-                AgentLogger.i("UiAutomation", "按文本定位命中：策略=${result.strategy}，节点=${result.matchIndex} → 点击 ${result.clickIndex}")
-                tapNodeByIndex(nodes, result.clickIndex ?: result.matchIndex!!)
+                // matched 已蕴含 matchIndex 非空，这里仍显式兜一层：
+                // 「命中但下标丢了」是数据错误，要和「没命中」区分开——
+                // 靠外层 catch 兜成 false 的话，排障时两次完全不同的失败长得一模一样。
+                val target = result.clickIndex ?: result.matchIndex
+                if (target == null) {
+                    AgentLogger.w(
+                        "UiAutomation",
+                        "按文本命中但目标下标为空：策略=${result.strategy}，候选数=${result.candidates.size}"
+                    )
+                    false
+                } else {
+                    AgentLogger.i("UiAutomation", "按文本定位命中：策略=${result.strategy}，节点=${result.matchIndex} → 点击 ${result.clickIndex}")
+                    tapNodeByIndex(nodes, target)
+                }
             }
         } catch (e: Exception) {
             lastClickCandidates = emptyList()
@@ -732,8 +744,17 @@ private fun AccessibilityService.ScreenshotResult.toSoftwareBitmap(): Bitmap? =
                 )
                 false
             } else {
-                AgentLogger.i("UiAutomation", "按 resource-id 定位命中：策略=${result.strategy}，节点=${result.matchIndex} → 点击 ${result.clickIndex}")
-                tapNodeByIndex(nodes, result.clickIndex ?: result.matchIndex!!)
+                val target = result.clickIndex ?: result.matchIndex
+                if (target == null) {
+                    AgentLogger.w(
+                        "UiAutomation",
+                        "按 resource-id 命中但目标下标为空：策略=${result.strategy}，候选数=${result.candidates.size}"
+                    )
+                    false
+                } else {
+                    AgentLogger.i("UiAutomation", "按 resource-id 定位命中：策略=${result.strategy}，节点=${result.matchIndex} → 点击 ${result.clickIndex}")
+                    tapNodeByIndex(nodes, target)
+                }
             }
         } catch (e: Exception) {
             lastClickCandidates = emptyList()
