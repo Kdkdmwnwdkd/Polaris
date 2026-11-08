@@ -1314,6 +1314,7 @@ private fun testMemoryInteraction() {
     val screen = readSource("ui/MemoryScreen.kt")
     val store = readSource("memory/MemoryStore.kt")
     val vm = readSource("ui/ChatViewModel.kt")
+    val memFacade = readSource("ui/MemoryFacade.kt")
 
     // W-68 起默认回到图谱：上一版默认列表的前提是「图谱只是摆好的环、不能动」，
     // 现在图谱是真力导向（可拖可缩、邻居会跟着走），视觉与交互都成立，没必要再藏起来。
@@ -1333,7 +1334,7 @@ private fun testMemoryInteraction() {
         assertContains("Z2", store, "tags.map { it.trim() }.filter { it.isNotBlank() }.distinct()")
         assertContains("Z2", store, "if (normalized.isBlank()) return false")
         assertContains("Z2", vm, "fun updateMemory(id: String, content: String, salience: Int, tags: List<String>): Boolean")
-        assertContains("Z2", vm, "val ok = memoryStore.update(id, content, salience, tags)")
+        assertContains("Z2", memFacade, "val ok = memoryStore.update(id, content, salience, tags)")
         assertContains("Z2", screen, "onEdit = {")
     }
     check("Z3 编辑对话框：content/salience 滑杆/tags 三件套 + 失败保持不关") {
