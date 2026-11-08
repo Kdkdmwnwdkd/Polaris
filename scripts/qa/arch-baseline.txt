@@ -21,11 +21,11 @@
 # 超标原因各不相同，共同点是「拆分需要一天以上、且拆分本身没有行为收益」。
 # 上限是冻结时的实际行数，只准往下调：改小了就同步改小这里的数字。
 #
-# 2026-11-08 唯一一次上调（+17 / +3）：4.1 修「会话截断静默丢数据」时，
+# 2026-11-08 唯一一次上调（+23 / +3）：4.1 修「会话截断静默丢数据」时，
 # ChatViewModel 多了截断提示的接线与文案，ChatScreen 的审批倒计时换了时钟源。
 # 这不是重构失败，是新增了用户可见行为；抬的幅度就是那一处功能的实际行数。
 # 以后再抬必须先证明「功能确实需要」——「顺手写的」不算理由。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3456
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3462
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3106
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2309
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504

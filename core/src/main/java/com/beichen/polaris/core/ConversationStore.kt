@@ -484,12 +484,10 @@ class ConversationStore(file: File) {
             )
             dirtyIds.add(convId)
         }
-        if (dropped > 0) {
-            AgentLogger.w(
-                "ConversationStore",
-                "会话 $convId 超过 $MAX_TURNS 轮，已从本地记录删除最早的 $dropped 轮"
-            )
-        }
+        // 不在这里打日志：本类被 5 个 harness 以「纯 JVM 源码自编译」的方式测
+        // （run-r06 / run-r10 的 SOURCES 逐个列文件），引 AgentLogger 会连带拉进
+        // 一套日志设施，把「零依赖可跑」这个前提打破。丢弃量已经通过返回值给了
+        // 调用方，记日志由宿主在拿到返回值时做。
         schedulePersist()
         return dropped
     }

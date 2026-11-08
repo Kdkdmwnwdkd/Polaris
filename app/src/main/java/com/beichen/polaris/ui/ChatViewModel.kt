@@ -1872,6 +1872,12 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 已有提示时不覆盖：同一会话连续追加会连着触发，覆盖只会让文案闪。
      */
     private fun noticeHistoryTruncated(dropped: Int) {
+        // 日志留在这里而不是 ConversationStore：那个类被 harness 以「纯 JVM 自编译」
+        // 的方式测（逐个列源文件），引日志设施会破坏「零依赖可跑」的前提。
+        AgentLogger.w(
+            "ChatViewModel",
+            "会话历史超过 ${ConversationStore.MAX_TURNS} 轮，已删除最早的 $dropped 轮"
+        )
         if (_truncationNotice.value == null) {
             _truncationNotice.value =
                 "⚠️ 本会话已超过 ${ConversationStore.MAX_TURNS} 轮，最早的 $dropped 轮已从本地记录删除"

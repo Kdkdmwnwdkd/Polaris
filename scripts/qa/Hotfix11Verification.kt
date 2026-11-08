@@ -987,7 +987,8 @@ private fun testReasoningFold() {
         // 流结束/失败等复位点清 reasoning 草稿（hotfix30 起：清的是 reasoningBuffer，
         // 显示态经 syncDraftDisplay 投影，不能留着上一条的思考）
         assertTrue("U9", gen.split("reasoningBuffer = null").size - 1 >= 3)
-        assertContains("U9", gen, "_reasoning.value = if (isOwnerActive()) reasoningBuffer else null")
+        // 4.3：缓冲改 StringBuilder 后投影要 toString；守的意图不变（切走清显示、切回恢复）
+        assertContains("U9", gen, "_reasoning.value = if (isOwnerActive()) reasoningBuffer?.toString() else null")
     }
     check("U10 UI：ReasoningBlock 流式展开/完成折叠，null 不渲染") {
         assertContains("U10", screen, "reasoning: String? = null")
@@ -1237,8 +1238,9 @@ private fun testConversationSwitchWhileRunning() {
         // P4-4：运行态整体搬进 GenerationRunController，VM 只剩两个转发与四个流
         val gen = readSource("ui/GenerationRunController.kt")
         assertContains("Y1", gen, "var owner: String? = null")
-        assertContains("Y1", gen, "private var draftBuffer: String? = null")
-        assertContains("Y1", gen, "private var reasoningBuffer: String? = null")
+        // 4.3 起缓冲是 StringBuilder（追加摊还 O(1)）；仍是「私有可变字段」，意图不变
+        assertContains("Y1", gen, "private var draftBuffer: StringBuilder? = null")
+        assertContains("Y1", gen, "private var reasoningBuffer: StringBuilder? = null")
         assertContains("Y1", gen, "fun isOwnerActive(): Boolean")
         assertContains("Y1", vm, "private fun isOwnerActive(): Boolean = generation.isOwnerActive()")
         assertContains("Y1", vm, "private fun syncDraftDisplay() = generation.syncDisplay()")
@@ -1275,8 +1277,9 @@ private fun testConversationSwitchWhileRunning() {
         assertTrue("Y3", vm.contains("owner, turnIndex, err.toMsgRecord()"))
         // 流式增量先攒缓冲再条件投影（切走续攒、切回恢复）
         val gen = readSource("ui/GenerationRunController.kt")
-        assertContains("Y3", gen, "draftBuffer = (draftBuffer ?: \"\") + delta")
-        assertContains("Y3", gen, "reasoningBuffer = (reasoningBuffer ?: \"\") + delta")
+        // 4.3：`buf = (buf ?: "") + delta` 改成 StringBuilder 追加；仍守「先攒缓冲再条件投影」
+        assertContains("Y3", gen, "val buf = draftBuffer ?: StringBuilder().also { draftBuffer = it }")
+        assertContains("Y3", gen, "val buf = reasoningBuffer ?: StringBuilder().also { reasoningBuffer = it }")
     }
     check("Y4 显示态守卫：_messages 追加全部带 isOwnerActive()（后台只落盘不上屏）") {
         // W-47 起追加统一走 appendUiItem()（读改写进 msgLock），守卫改在调用处：
