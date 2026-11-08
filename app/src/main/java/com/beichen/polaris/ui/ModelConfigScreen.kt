@@ -147,6 +147,9 @@ fun ModelConfigScreen(vm: ModelConfigContract, onBack: () -> Unit) {
     var tab by rememberSaveable { mutableStateOf(0) }
     // 功能二：新建档案先弹命名框（旧行为静默建副本、新 chip 被挤出屏外，录屏反馈「点＋没反应」）。
     var showAdd by rememberSaveable { mutableStateOf(false) }
+    // W-RT8：二维码导入导出（配置分享；负载无 Key，导入只回填非敏感字段，保存仍走用户确认）
+    var showQrExport by rememberSaveable { mutableStateOf(false) }
+    var showQrImport by rememberSaveable { mutableStateOf(false) }
 
     val dirty = baseUrl != config.baseUrl || apiKey != config.apiKey ||
         model != config.model || providerId != config.providerId ||
@@ -277,6 +280,13 @@ fun ModelConfigScreen(vm: ModelConfigContract, onBack: () -> Unit) {
                         onSave = saveNow,
                         onCancel = onBack
                     )
+
+                    // W-RT8：配置二维码（换机迁移）。入口与两个弹窗都在 QrConfigSection.kt，
+                    // 这里只挂一行——这个文件已经 2400 多行，二维码绘制不该再往里堆。
+                    QrConfigSection(
+                        onExport = { showQrExport = true },
+                        onImport = { showQrImport = true }
+                    )
                 }
 
                 1 -> LocalModelsTab(vm = vm)
@@ -298,6 +308,27 @@ fun ModelConfigScreen(vm: ModelConfigContract, onBack: () -> Unit) {
             visible = visible,
             onConfirm = { vm.addProfile(name.ifBlank { null }); showAdd = false },
             onDismiss = { showAdd = false }
+        )
+    }
+
+    // W-RT8：两个二维码弹窗（内容与渲染都在 QrConfigSection.kt）
+    if (showQrExport) {
+        QrExportDialog(
+            providerId = providerId,
+            baseUrl = baseUrl,
+            model = model,
+            profileName = profiles.firstOrNull { it.id == activeProfileId }?.name.orEmpty(),
+            onDismiss = { showQrExport = false }
+        )
+    }
+    if (showQrImport) {
+        QrImportDialog(
+            onDismiss = { showQrImport = false },
+            onApply = { parsed ->
+                baseUrl = parsed.baseUrl
+                model = parsed.model
+                providerId = parsed.providerId
+            }
         )
     }
 }

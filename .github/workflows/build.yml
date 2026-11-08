@@ -266,6 +266,23 @@ jobs:
           chmod +x /tmp/kotlinc/bin/kotlinc
           /tmp/kotlinc/bin/kotlinc -version
 
+      # 二维码对拍（W-RT8）需要一个现成解码库当「考官」：自写编码器自己看着像没用，
+      # 得让第三方解码器把矩阵解回文本对上才算数。harness 自己也会尝试下载，
+      # 这一步只是提前拿好、失败也不阻塞（拿不到时该 harness 会明确 SKIP 而不是假绿）。
+      - name: Prefetch zxing (二维码对拍考官)
+        if: ${{ vars.QA_HARNESS != 'off' }}
+        continue-on-error: true
+        run: |
+          for u in \
+            "https://repo1.maven.org/maven2/com/google/zxing/core/3.5.3/core-3.5.3.jar" \
+            "https://maven.aliyun.com/repository/public/com/google/zxing/core/3.5.3/core-3.5.3.jar" \
+            "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/com/google/zxing/core/3.5.3/core-3.5.3.jar"
+          do
+            curl -sSL --max-time 120 -o /tmp/zxing-core-3.5.3.jar "$u" && [ -s /tmp/zxing-core-3.5.3.jar ] && break
+            rm -f /tmp/zxing-core-3.5.3.jar
+          done
+          ls -lh /tmp/zxing-core-3.5.3.jar || echo "WARN: 考官包没取到，二维码对拍会 SKIP（编码器未被外部验证）"
+
       # QA harness：把仓库里全部断言跑一遍（纯 JVM + APK 静态反验）。
       #
       # 这一步本身保持「只报告」（continue-on-error）：断言是历史批次陆续写的，

@@ -40,9 +40,15 @@
 # 一个状态变量 + 选择器里的分流 + 填槽弹窗的挂载点，与旧分支的 22 行完全对上——
 # 没有一处是为「顺手整理」加的。弹窗本体在 PromptLibraryScreen（那个文件离 1500 还远）。
 #
+# 2026-11-08 第五次上调（ModelConfigScreen +31）：移植 W-RT8 配置二维码。
+# 旧分支把入口卡片 + 两个弹窗 + 渲染函数全写在这个文件里，要 +144 行。这里拆出
+# QrConfigSection.kt（187 行，只依赖两个纯函数，不碰 vm），本文件只留三处调用
+# 与两个布尔状态——所以只涨 31 行。这是「新增功能区就开新文件」的一次示范：
+# 抬上限不是坏事，但能靠拆文件不抬的，就别抬。
+#
 # 以后再抬必须先证明「功能确实需要」——「顺手写的」不算理由。
 lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3483
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3128
-lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2354
+lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2385
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
 lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1516
