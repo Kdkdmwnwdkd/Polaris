@@ -1,6 +1,8 @@
 package com.beichen.polaris.ui
 
+import com.beichen.polaris.core.PromptItem
 import com.beichen.polaris.core.UiItem
+import com.beichen.polaris.core.extractPromptVariables
 import com.beichen.polaris.core.uiKey
 import android.app.Activity
 import android.content.ClipData
@@ -192,6 +194,8 @@ fun ChatScreen(
     // 功能五（P1-7）：提示词库（快捷指令）——输入栏闪电按钮唤起的选择器数据源
     val prompts by vm.prompts.collectAsStateWithLifecycle()
     var showPromptPicker by remember { mutableStateOf(false) }
+    // W-RT4：待填变量的提示词（非 null 时弹填槽；null = 无流程）
+    var fillPromptItem by remember { mutableStateOf<PromptItem?>(null) }
     val pendingApproval by vm.pendingApproval.collectAsStateWithLifecycle()
     val config by vm.config.collectAsStateWithLifecycle()
     // 功能四（录屏反馈「存了多个模型却换不了、不知道在用哪个」）：常驻模型指示条 + 一键切换，不再深埋三层且切换有反馈。
@@ -656,17 +660,35 @@ fun ChatScreen(
     }
 
     // 功能五（P1-7）：快捷指令选择器（点选填入输入框；「管理」进提示词库全功能页）
+    // W-RT4：带 {{变量}} 的提示词先弹填槽，填好再进输入框；无变量的保持原来直插路径。
     if (showPromptPicker) {
         PromptPickerDialog(
             prompts = prompts,
             onDismiss = { showPromptPicker = false },
             onPick = { item ->
-                vm.insertPromptIntoInput(item.content)
                 showPromptPicker = false
+                if (extractPromptVariables(item.content).isEmpty()) {
+                    vm.insertPromptIntoInput(item.content)
+                } else {
+                    fillPromptItem = item
+                }
             },
             onManage = {
                 showPromptPicker = false
                 onManagePrompts()
+            }
+        )
+    }
+
+    // W-RT4：填槽完成才插入输入框——填到一半的模板不进输入框（见 PromptFillDialog 的注释）
+    fillPromptItem?.let { fillItem ->
+        PromptFillDialog(
+            item = fillItem,
+            variables = extractPromptVariables(fillItem.content),
+            onDismiss = { fillPromptItem = null },
+            onConfirm = { filled ->
+                vm.insertPromptIntoInput(filled)
+                fillPromptItem = null
             }
         )
     }

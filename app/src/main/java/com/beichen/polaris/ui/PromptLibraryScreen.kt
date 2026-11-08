@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
@@ -39,8 +40,10 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.beichen.polaris.core.PromptDeleteResult
+import com.beichen.polaris.core.PromptFillResult
 import com.beichen.polaris.core.PromptItem
 import com.beichen.polaris.core.PromptUpsertResult
+import com.beichen.polaris.core.fillPromptVariables
 import com.beichen.polaris.ui.contract.PromptLibraryContract
 import java.util.UUID
 
@@ -242,6 +245,81 @@ fun PromptPickerDialog(
                             showBuiltinBadge = true
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * W-RT4：提示词填槽弹窗——选中带 `{{变量}}` 的提示词时，先按名收集变量、
+ * 逐个填值，确认后把成品交给 [onConfirm]（插入由调用方决定）。
+ *
+ * 交互规则（与 [fillPromptVariables] 的纯函数语义对齐）：
+ *  - 任一变量为空白时确认键禁用——不做半填，半成品不进输入框；
+ *  - 变量多于 4 个时弹窗内可滚动（模板作者的自由度不设上限）。
+ *
+ * 变量列表由调用方传进来而不是在这里现扫：ChatScreen 那边要用它判断
+ * 「有没有变量、要不要弹这个框」，同一份判定不该在两个地方各算一次。
+ */
+@Composable
+fun PromptFillDialog(
+    item: PromptItem,
+    variables: List<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var values by remember(item.id) { mutableStateOf(variables.associateWith { "" }) }
+    val allFilled = variables.isNotEmpty() && variables.all { values[it]?.isNotBlank() == true }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(AgentSpacing.space5),
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(Modifier.padding(AgentSpacing.space4)) {
+                Text(
+                    text = "填写变量：${item.title}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(AgentSpacing.space3))
+                Column(
+                    Modifier
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    variables.forEach { name ->
+                        AkFieldLabel(name)
+                        AkTextField(
+                            value = values[name].orEmpty(),
+                            onValueChange = { v -> values = values + (name to v) },
+                            placeholder = "{{ $name }}",
+                            singleLine = true
+                        )
+                        Spacer(Modifier.height(AgentSpacing.space2))
+                    }
+                }
+                Spacer(Modifier.height(AgentSpacing.space2))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    AkTextButton(text = "取消", onClick = onDismiss)
+                    Spacer(Modifier.width(AgentSpacing.space2))
+                    AkPrimaryButton(
+                        text = "填入",
+                        enabled = allFilled,
+                        onClick = {
+                            val result = fillPromptVariables(item.content, values)
+                            if (result is PromptFillResult.Ok) onConfirm(result.content)
+                        }
+                    )
                 }
             }
         }

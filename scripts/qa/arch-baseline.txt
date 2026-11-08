@@ -36,9 +36,13 @@
 # 注释比代码长（为什么传 group 不传 grant.key、为什么 STRICT 要绕过截图回合缓存），
 # 这两句是后面最容易被人「优化回去」的地方，删了就会退化成「AUTO 档对 shell 完全失效」。
 #
+# 2026-11-08 第四次上调（ChatScreen +22）：移植 W-RT4 提示词变量。
+# 一个状态变量 + 选择器里的分流 + 填槽弹窗的挂载点，与旧分支的 22 行完全对上——
+# 没有一处是为「顺手整理」加的。弹窗本体在 PromptLibraryScreen（那个文件离 1500 还远）。
+#
 # 以后再抬必须先证明「功能确实需要」——「顺手写的」不算理由。
 lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3483
-lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3106
+lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3128
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2354
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
 lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1516
