@@ -94,16 +94,28 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p app/src/main/assets
-          URL=$(curl -sSL --max-time 60 \
+          # 同时取 browser_download_url 与 asset id：前者走 github.com，后者走
+          # api.github.com → release-assets.githubusercontent.com，是两条不同的链路。
+          # 2026-11-08 起 github.com 的 releases 下载持续 504（Gradle 分发包同一根因），
+          # 只剩 API 这条能用，所以必须留兜底。
+          META=$(curl -sSL --max-time 60 \
                   -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                   -H "Accept: application/vnd.github+json" \
                   https://api.github.com/repos/RikkaApps/Shizuku/releases/latest 2>/dev/null \
-                | python3 -c "import json,sys;d=json.load(sys.stdin);a=[x for x in d.get('assets',[]) if x['name'].endswith('.apk')];print(a[0]['browser_download_url'] if a else '')" 2>/dev/null || true)
+                | python3 -c "import json,sys;d=json.load(sys.stdin);a=[x for x in d.get('assets',[]) if x['name'].endswith('.apk')];print(f\"{a[0]['browser_download_url']} {a[0]['id']}\" if a else '')" 2>/dev/null || true)
+          URL=${META%% *}
+          AID=${META##* }
           if [ -n "$URL" ]; then
             echo "downloading $URL"
-            if ! curl -fL --max-time 180 "$URL" -o app/src/main/assets/shizuku.apk; then
+            if ! curl -fL --retry 3 --retry-delay 5 --max-time 180 "$URL" -o app/src/main/assets/shizuku.apk; then
+              echo "WARN: 直链失败（github.com 504），改走 API asset 接口"
               rm -f app/src/main/assets/shizuku.apk
-              echo "WARN: 下载失败，跳过内置安装包"
+              curl -fL --retry 3 --retry-delay 5 --max-time 180 \
+                -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Accept: application/octet-stream" \
+                "https://api.github.com/repos/RikkaApps/Shizuku/releases/assets/$AID" \
+                -o app/src/main/assets/shizuku.apk \
+                || { rm -f app/src/main/assets/shizuku.apk; echo "WARN: 下载失败，跳过内置安装包"; }
             fi
           else
             echo "WARN: 未找到 Shizuku APK（API 限流或发布变更），跳过内置安装包（应用会退到官方发布页）"
