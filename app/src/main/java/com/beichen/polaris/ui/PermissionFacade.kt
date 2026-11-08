@@ -13,6 +13,7 @@ import com.beichen.polaris.automation.DeviceContext
 import com.beichen.polaris.automation.DeviceContextStore
 import com.beichen.polaris.automation.shizuku.ShizukuInstaller
 import com.beichen.polaris.automation.shizuku.ShizukuShell
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -182,12 +183,17 @@ internal class PermissionFacade(
                 android.os.Process.myUid(),
                 app.packageName
             ) == AppOpsManager.MODE_ALLOWED
-        } catch (_: Throwable) { false }
+        } catch (e: CancellationException) {
+            // 取消是控制流，不是「没权限」——吞掉会让 Job 看似还在、实际没人收尾
+            throw e
+        } catch (_: Exception) { false }
         // 电池优化白名单（P0 引导）：只影响长任务存活，不阻塞任何工具
         _batteryUnrestricted.value = try {
             val pm = app.getSystemService(Context.POWER_SERVICE) as PowerManager
             pm.isIgnoringBatteryOptimizations(app.packageName)
-        } catch (_: Throwable) { false }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) { false }
         // 调试通道（Shizuku）：用户可能刚在 Shizuku 里授权/撤权，或刚从商店装完回来
         _shizukuStatus.value = ShizukuShell.status()
         _shizukuInstalled.value = ShizukuShell.isInstalled(app)
