@@ -46,8 +46,12 @@
 # 与两个布尔状态——所以只涨 31 行。这是「新增功能区就开新文件」的一次示范：
 # 抬上限不是坏事，但能靠拆文件不抬的，就别抬。
 #
+# 2026-11-08 第六次上调（ChatViewModel +4）：移植 W-RT6 本地知识库。
+# 只有一行工具注册 + 三行注释。真正的主体（KnowledgeIndex 158 行 + 工具 120 行）
+# 都在新文件里——和二维码那次同一个处理方式。
+#
 # 以后再抬必须先证明「功能确实需要」——「顺手写的」不算理由。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3483
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3487
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3128
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2385
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504

@@ -173,6 +173,7 @@ import com.beichen.polaris.tools.AskUserTool
 import com.beichen.polaris.tools.PlanTool
 import com.beichen.polaris.tools.CalculatorTool
 import com.beichen.polaris.tools.ConversationSearchTool
+import com.beichen.polaris.tools.KnowledgeSearchTool
 import com.beichen.polaris.tools.EditFileTool
 import com.beichen.polaris.tools.WriteBackupHook
 import com.beichen.polaris.tools.SpeakTool
@@ -828,6 +829,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         register(SpeakTool(speaker))
         // W-18：会话检索 + 计算器
         register(ConversationSearchTool(conversationStore))
+        // W-RT6：本地知识库检索。目录固定 files/knowledge/，用户把 .txt/.md 放进去即可；
+        // 没有独立导入界面——Agent 本身有文件能力，「把这份资料加进知识库」就是一句工具调用。
+        register(KnowledgeSearchTool(java.io.File(app.filesDir, "knowledge")))
         register(CalculatorTool())
         // W-17：定时任务（模型可自建/查询/删除/开关）
         register(WorkflowCreateTool(workflowStore) { refreshWorkflows() })

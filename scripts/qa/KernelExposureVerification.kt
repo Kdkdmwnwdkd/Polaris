@@ -46,12 +46,12 @@ private fun check(name: String, cond: Boolean, detail: String = "") {
 private fun eq(name: String, actual: Any?, expected: Any?) =
     check(name, actual == expected, "实际=$actual 期望=$expected")
 
-/** 仓库里实际注册的 56 个工具名（2026-10-30 从 app/src/main/java 全量提取）。 */
+/** 仓库里实际注册的 57 个工具名（2026-11-08 补 knowledge_search，其余同 10-30 全量提取）。 */
 private val NAMES = listOf(
     "app_install", "app_launch", "app_list", "app_stop", "app_uninstall",
     "ask_user", "calculator", "clipboard", "container_toolchain", "conversation_search",
     "device_foreground_app", "device_notifications", "edit_file", "github_clone", "github_commit",
-    "github_diff", "github_log", "github_status", "http_request", "load_skill",
+    "github_diff", "github_log", "github_status", "http_request", "knowledge_search", "load_skill",
     "memory_forget", "memory_list", "memory_search", "memory_write", "ocr_image",
     "plan_propose", "read_file", "send_notification", "shell_background", "shell_close",
     "shell_jobs", "shell_run", "spawn_agents", "speak", "todo_read",
@@ -152,7 +152,7 @@ private fun estTokens(s: String): Int {
 }
 
 fun main() = runBlocking {
-    println("=== 暴露实现层自检（56 个真实工具名 + 2 个哨兵）===")
+    println("=== 暴露实现层自检（57 个真实工具名 + 2 个哨兵）===")
     println("    注：本表用**假描述**（每个约 90 字）验分组规则，因此体量只能横向比较、")
     println("    不能当真实成本。真实工具的描述长短差 6 倍（web_type 30 字 / ui_screenshot 180 字），")
     println("    真实数字见 `python3 scripts/tool-surface-audit.py`。")

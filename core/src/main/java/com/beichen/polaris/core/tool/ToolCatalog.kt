@@ -82,7 +82,7 @@ object ToolCatalog {
         CatalogGroup("web", "浏览器前进后退、点击、填表"),
         CatalogGroup("app", "安装卸载启停应用"),
         CatalogGroup("shell", "命令行执行与会话管理"),
-        CatalogGroup("memory", "跨会话记忆的读写与检索"),
+        CatalogGroup("memory", "跨会话记忆与本地资料的读写检索"),
         CatalogGroup("skill", "加载与使用技能"),
         CatalogGroup("workflow", "工作流的增删改查与开关"),
         CatalogGroup("device", "设备状态与通知"),
@@ -140,6 +140,11 @@ object ToolCatalog {
         CatalogTool("memory_list", "memory", Capability.SAFE),
         CatalogTool("memory_forget", "memory", Capability.DANGEROUS),
         CatalogTool("conversation_search", "memory", Capability.SAFE),
+        // W-RT6：本地知识库检索。归 memory 组而不是新开一组：两者在用户眼里都是
+        // 「让 Agent 去查东西」（一个查经历、一个查资料），分成两组只会让工具面板
+        // 多一个「我该关哪个」的问题。fail-closed 表里必须登记，否则会被当 DANGEROUS
+        // 整体不可用——旧分支 CI 第 4 轮就是栽在这（报告里写的「真漏网」）。
+        CatalogTool("knowledge_search", "memory", Capability.SAFE),
         // ── skill：加载与使用技能
         CatalogTool("load_skill", "skill", Capability.SAFE),
         CatalogTool("use_skill", "skill", Capability.PRIVILEGED),
