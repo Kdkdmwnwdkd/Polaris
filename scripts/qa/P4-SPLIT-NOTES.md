@@ -15,8 +15,8 @@
 | 新增（3.1 第二批） | — | `LogsFacade` 38 / `MemoryFacade` 66 / `WorkflowFacade` 75 |
 | `ChatViewModel.kt`（3.1 第三批，2026-11-08） | 3540 行，仍混着设置开关 / 聊天外观 | 3527 行（守卫上限同步从 3540 降到 3527） |
 | 新增（3.1 第三批） | — | `SettingsFacade` 70 / `AppearanceFacade` 38 |
-| `ChatViewModel.kt`（3.1 第四批，2026-11-08） | 3527 行，仍混着权限探测 / 调试通道 / 能力就绪度 | 3426 行（守卫上限同步从 3527 降到 3426） |
-| 新增（3.1 第四批） | — | `PermissionFacade` 197 / `CapabilityReadiness` 39 |
+| `ChatViewModel.kt`（3.1 第四批，2026-11-08） | 3527 行，仍混着权限探测 / 调试通道 / 能力就绪度 | 3439 行（守卫上限同步从 3527 降到 3439） |
+| 新增（3.1 第四批） | — | `PermissionFacade` 200 / `CapabilityReadiness` 39 |
 
 ## 谁拥有什么
 
@@ -31,7 +31,7 @@
 | 定时任务增删改查 / 立即运行 | `WorkflowFacade` | store 本体留 VM（四个 Workflow*Tool 共用）；「送进对话」经 isRunning/runPrompt 两回调注入 |
 | 自动化 / 通知 / 计划模式 / 任务模型四个开关 | `SettingsFacade` | 只做「一个状态 + 一次落盘」；读点在工具注册 / 生成链，写点全在 facade。能力重算仍由 VM 转发层调 |
 | 聊天背景图 URI + 浓度 | `AppearanceFacade` | 只依赖 configStore；位图不落盘（SAF URI），浓度 clamp 在 store |
-| 通知 / 使用情况 / 电池白名单 / Shizuku 三态 / 设备上下文 | `PermissionFacade` | 全是「探测一次系统状态 → 写一条流」；写点全在 facade，读点在权限页 / 控制台 / 就绪卡片。状态变化后的能力重算经 `onGrantsChanged` 回调交回宿主 |
+| 通知 / 使用情况 / 电池白名单 / Shizuku 三态 / 设备上下文 | `PermissionFacade` | 全是「探测一次系统状态 → 写一条流」；写点全在 facade，读点在权限页 / 控制台 / 就绪卡片。状态变化后的能力重算由 VM 转发层显式调（facade 不认识就绪度） |
 | 每条能力走哪条路径、降级到哪、最后提示什么 | `CapabilityReadiness` | 只做「快照 → 裁决」；两份 Android 侧快照（shell / 屏幕）由宿主注入，探测不属于这里 |
 | 这条消息上不上屏？写进哪个会话？ | `ConversationProjection` | 显示态与持久态必须同源；落库目标 = owner ?: active |
 | 本地模型参数 / 文件 / 下载 / GPU 结论 | `ModelSettings` | 只与 `LocalLlamaSetting` + `GgufModelStore` 打交道，唯一外部动作是「切到本地供应商」 |
