@@ -22,8 +22,8 @@ if [ ! -f "$KOTLINC" ]; then
   exit 3
 fi
 
-CLASSES=${AGENTKIT_CLASSES:-$ROOT/app/build/tmp/kotlin-classes/debug}
-if [ ! -d "$CLASSES" ]; then
+CLASSES=${AGENTKIT_CLASSES:-$(qa_classpath "$ROOT")}
+if [ -z "$CLASSES" ]; then
   echo "KS_HARNESS_SKIP $(basename "$0") 缺少 Gradle 编译产物：$CLASSES" >&2
   echo "  先执行 ./gradlew :app:compileDebugKotlin，或用 AGENTKIT_CLASSES 指向已有目录" >&2
   exit 3

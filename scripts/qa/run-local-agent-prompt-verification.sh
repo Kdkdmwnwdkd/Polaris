@@ -14,13 +14,13 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
 
-PROMPT="$ROOT/app/src/main/java/com/beichen/polaris/core/llm/local/LocalAgentPrompt.kt"
-PARSER="$ROOT/app/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt"
-CLIENT="$ROOT/app/src/main/java/com/beichen/polaris/core/llm/local/LocalLlamaClient.kt"
-RULES="$ROOT/app/src/main/java/com/beichen/polaris/core/agent/ShellCommandRules.kt"
+PROMPT="$ROOT/core/src/main/java/com/beichen/polaris/core/llm/local/LocalAgentPrompt.kt"
+PARSER="$ROOT/core/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt"
+CLIENT="$ROOT/core/src/main/java/com/beichen/polaris/core/llm/local/LocalLlamaClient.kt"
+RULES="$ROOT/core/src/main/java/com/beichen/polaris/core/agent/ShellCommandRules.kt"
 SHELL="$ROOT/app/src/main/java/com/beichen/polaris/tools/ShellTool.kt"
-CONTRACT="$ROOT/app/src/main/java/com/beichen/polaris/core/AgentContract.kt"
-EXECUTOR="$ROOT/app/src/main/java/com/beichen/polaris/core/agent/ToolExecutor.kt"
+CONTRACT="$ROOT/core/src/main/java/com/beichen/polaris/core/AgentContract.kt"
+EXECUTOR="$ROOT/core/src/main/java/com/beichen/polaris/core/agent/ToolExecutor.kt"
 
 pass=0
 fail=0
@@ -137,7 +137,7 @@ expect "接口默认行为不变" "$CONTRACT" 'fun needsApprovalFor\(args: JsonO
 # 剩下的一半（HINTS）仍然靠这段交叉比对盯着。
 # R-13：工具名的真源从 CapabilityManifest（已变派生视图）搬到 ToolCatalog。
 # 判据不变——仍是「提示词里提到的工具必须真实存在」——只是不再去视图里找名单。
-MANIFEST="$ROOT/app/src/main/java/com/beichen/polaris/core/tool/ToolCatalog.kt"
+MANIFEST="$ROOT/core/src/main/java/com/beichen/polaris/core/tool/ToolCatalog.kt"
 missing=$(python3 - "$PROMPT" "$PARSER" "$MANIFEST" <<'PY'
 import re, sys
 

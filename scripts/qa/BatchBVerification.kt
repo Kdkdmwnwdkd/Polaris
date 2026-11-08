@@ -121,7 +121,7 @@ fun main() {
     }
 
     check("B1-7 SkillManifest 默认 trust 不再是 packaged") {
-        val src = read("app/src/main/java/com/beichen/polaris/skill/SkillProtocol.kt")
+        val src = read("core/src/main/java/com/beichen/polaris/skill/SkillProtocol.kt")
         assertTrue(
             "manifest 默认 trust 应为空（未知）而非 packaged",
             "val trust: String = \"\"" in src
@@ -129,7 +129,7 @@ fun main() {
     }
 
     check("B1-8 assets 内置技能由 SkillLoader 显式标为 packaged") {
-        val src = read("app/src/main/java/com/beichen/polaris/skill/SkillProtocol.kt")
+        val src = read("core/src/main/java/com/beichen/polaris/skill/SkillProtocol.kt")
         // R7：同时要带上资源目录名——内置技能的 id 是包名式，目录名才是短名，
         // 用 id 拼 assets 路径会让 entry 读不到（脚本形态静默退化成提示词形态）。
         assertTrue(
@@ -406,7 +406,7 @@ fun main() {
     }
 
     check("B4-11 一次性命令执行器存在且走独立进程通道") {
-        val runner = read("app/src/main/java/com/beichen/polaris/core/container/ContainerCommandRunner.kt")
+        val runner = read("core/src/main/java/com/beichen/polaris/core/container/ContainerCommandRunner.kt")
         assertTrue("应使用 ProcessBuilder（取退出码）", "ProcessBuilder" in runner)
         assertTrue("应等待退出", "waitFor" in runner)
         val screen = read("app/src/main/java/com/beichen/polaris/ui/ContainerScreen.kt")
@@ -449,7 +449,7 @@ fun main() {
     }
 
     check("B4-13 执行器串行化：同一时刻只允许一个包管理器在跑") {
-        val runner = read("app/src/main/java/com/beichen/polaris/core/container/ContainerCommandRunner.kt")
+        val runner = read("core/src/main/java/com/beichen/polaris/core/container/ContainerCommandRunner.kt")
         assertTrue("应有进程级公平锁", "ReentrantLock(true)" in runner)
         assertTrue("执行必须持锁", "execLock.withLock" in runner)
         assertTrue("重复命令应有专用退出码", "EXIT_BUSY" in runner)
@@ -478,7 +478,7 @@ fun main() {
     }
 
     check("B4-15 执行器必须并发抽干输出（否则管道写满，父子互等到超时）") {
-        val runner = read("app/src/main/java/com/beichen/polaris/core/container/ContainerCommandRunner.kt")
+        val runner = read("core/src/main/java/com/beichen/polaris/core/container/ContainerCommandRunner.kt")
         assertTrue("应有独立读线程", "Thread({ sink.drain" in runner)
         val drainAt = runner.indexOf("sink.drain")
         val waitAt = runner.indexOf("process.waitFor")
@@ -492,7 +492,7 @@ fun main() {
     }
 
     check("B4-17 proot 必须 fake root，且退出时杀掉 tracee") {
-        val proot = read("app/src/main/java/com/beichen/polaris/core/container/ProotRunner.kt")
+        val proot = read("core/src/main/java/com/beichen/polaris/core/container/ProotRunner.kt")
         // 提示符是 "$" 而不是 "#" → 容器里不是 root → trigger 里的 chown 失败 → apk exit 1
         assertTrue("应有 --root-id（fake root）", "\"--root-id\"" in proot)
         // 超时后 destroyForcibly 只杀 proot，残留的 apk 会占着 /lib/apk/db/lock

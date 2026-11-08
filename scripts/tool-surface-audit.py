@@ -40,7 +40,10 @@ import sys
 from collections import OrderedDict
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-SRC = os.path.join(ROOT, "app", "src", "main", "java")
+# 3.5 拆模块：工具类分布在 :app（tools 包）与 :core（skill / 终端等），两边都要扫。
+SRC_APP = os.path.join(ROOT, "app", "src", "main", "java")
+SRC_CORE = os.path.join(ROOT, "core", "src", "main", "java")
+SRC = SRC_APP
 
 # ---- 与 CapabilityManifest 保持一致的组规则 ---------------------------------
 #
@@ -54,7 +57,7 @@ SRC = os.path.join(ROOT, "app", "src", "main", "java")
 # 目录写坏（重复登记、组没定义）时 `run-r13-catalog-verification.sh` 会先红，这里只管照着算。
 
 CATALOG_KT = os.path.join(
-    SRC, "com", "beichen", "polaris", "core", "tool", "ToolCatalog.kt")
+    SRC_CORE, "com", "beichen", "polaris", "core", "tool", "ToolCatalog.kt")
 
 
 def load_manifest(path: str):
@@ -263,10 +266,11 @@ def main():
     verbose = "--verbose" in sys.argv
 
     all_tools = []
-    for dirpath, _, files in os.walk(SRC):
-        for fn in files:
-            if fn.endswith(".kt"):
-                all_tools.extend(parse_file(os.path.join(dirpath, fn)))
+    for base in (SRC_APP, SRC_CORE):
+        for dirpath, _, files in os.walk(base):
+            for fn in files:
+                if fn.endswith(".kt"):
+                    all_tools.extend(parse_file(os.path.join(dirpath, fn)))
 
     # 只保留真实工具（MetaTool 的名字在 KernelExposure 里是构造参数，不会命中 NAME_RE）
     seen, uniq = set(), []
@@ -293,7 +297,7 @@ def main():
     total_tokens = sum(t["tokens"] for t in uniq)
     total_payload = sum(t["payload"] for t in uniq)
     total_hint = sum(t["hint_chars"] for t in uniq)
-    print("读取源码：%s" % os.path.relpath(SRC, ROOT))
+    print("读取源码：%s + %s" % (os.path.relpath(SRC_APP, ROOT), os.path.relpath(SRC_CORE, ROOT)))
     print("解析到工具：%d 个（另有 %d 个动态构造，未计入）" % (len(uniq), len(dynamic)))
     # 清单是唯一真源：源码里有、清单里没有的工具会落进 misc（仍可见，但组索引里查不到）。
     # Kotlin 侧的 audit() 会报，这里再报一次——一个在启动日志里，一个在成本报表里，

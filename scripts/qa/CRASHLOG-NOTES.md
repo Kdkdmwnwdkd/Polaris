@@ -19,7 +19,7 @@
 
 | 文件 | 动作 | 说明 |
 | --- | --- | --- |
-| `app/src/main/java/com/beichen/polaris/core/CrashLogger.kt` | **新增** | 全局崩溃捕获 + 同步落盘 + 保留策略 + 纯函数 |
+| `core/src/main/java/com/beichen/polaris/core/CrashLogger.kt` | **新增** | 全局崩溃捕获 + 同步落盘 + 保留策略 + 纯函数 |
 | `app/src/main/java/com/beichen/polaris/AgentKitApplication.kt` | **新增** | Application 入口，只做一件事：最早时机 `CrashLogger.install(this)` |
 | `app/src/main/AndroidManifest.xml` | 改 1 处 | `<application android:name=".AgentKitApplication" ...>` |
 | `app/src/main/java/com/beichen/polaris/automation/ScreenshotBridge.kt` | 改 | 新增纯函数对象 `ScreenCaptureGuard`（尺寸防御 + 清理序列 + `guardValue`/`guard`）；新增 `ScreenshotBridge.clearError()` |

@@ -14,6 +14,8 @@ cd "$ROOT"
 source "$ROOT/scripts/qa/lib/deps.sh"
 
 SRC=app/src/main/java/com/beichen/polaris
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE=core/src/main/java/com/beichen/polaris
 HARNESS=scripts/qa/R06Verification.kt
 
 CACHE="$QA_GRADLE_CACHE"
@@ -54,17 +56,17 @@ COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS:$COROUTINES"
 
 # 被测文件全部是纯 JVM（无 Android / Compose 依赖），这是它们能在这里真跑的前提。
 SOURCES=(
-  "$SRC/core/AgentContract.kt"
-  "$SRC/core/UiItem.kt"
-  "$SRC/core/ToolResult.kt"
-  "$SRC/core/ConversationStore.kt"
-  "$SRC/core/ConversationShard.kt"
-  "$SRC/core/lifecycle/AppBackgroundHooks.kt"
-  "$SRC/core/ConversationBranch.kt"
-  "$SRC/core/io/AtomicJsonFile.kt"
-  "$SRC/core/telemetry/StoreWriteTrace.kt"
-  "$SRC/core/telemetry/TraceSink.kt"
-  "$SRC/core/llm/JsonSafe.kt"
+  "$SRC_CORE/core/AgentContract.kt"
+  "$SRC_CORE/core/UiItem.kt"
+  "$SRC_CORE/core/ToolResult.kt"
+  "$SRC_CORE/core/ConversationStore.kt"
+  "$SRC_CORE/core/ConversationShard.kt"
+  "$SRC_CORE/core/lifecycle/AppBackgroundHooks.kt"
+  "$SRC_CORE/core/ConversationBranch.kt"
+  "$SRC_CORE/core/io/AtomicJsonFile.kt"
+  "$SRC_CORE/core/telemetry/StoreWriteTrace.kt"
+  "$SRC_CORE/core/telemetry/TraceSink.kt"
+  "$SRC_CORE/core/llm/JsonSafe.kt"
   "$SRC/ui/ConversationProjection.kt"
   "$SRC/ui/GenerationRunController.kt"
 )
@@ -102,7 +104,7 @@ echo ""
 echo "[G] 接线与文案单点"
 VM=app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt
 SCREEN=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
-UIITEM=app/src/main/java/com/beichen/polaris/core/UiItem.kt
+UIITEM=core/src/main/java/com/beichen/polaris/core/UiItem.kt
 
 if grep -q 'onSettling = { owner -> projection.settleInterrupted(owner) },' "$VM"; then
   g_good "G1 收尾时调用 projection.settleInterrupted（owner 传入）"
@@ -140,7 +142,7 @@ else
 fi
 
 # 文案单点：同一句话出现两处，迟早漂移成「一边说未完成、一边说已失败」
-note_defs=$(grep -rl '该调用未完成' app/src/main --include=*.kt | wc -l | tr -d ' ')
+note_defs=$(grep -rl '该调用未完成' app/src/main core/src/main --include=*.kt | wc -l | tr -d ' ')
 if [ "$note_defs" = "1" ]; then
   g_good "G6 中断文案只有一处定义（TOOL_INTERRUPTED_NOTE）"
 else

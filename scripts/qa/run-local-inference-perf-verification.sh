@@ -17,13 +17,13 @@ ROOT=$(pwd)
 
 JNI="$ROOT/app/src/main/cpp/llama-jni.cpp"
 CMAKE="$ROOT/app/src/main/cpp/CMakeLists.txt"
-LOADER="$ROOT/app/src/main/java/com/beichen/polaris/core/llm/local/LlamaJni.kt"
-CLIENT="$ROOT/app/src/main/java/com/beichen/polaris/core/llm/local/LocalLlamaClient.kt"
-LOOP="$ROOT/app/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt"
+LOADER="$ROOT/core/src/main/java/com/beichen/polaris/core/llm/local/LlamaJni.kt"
+CLIENT="$ROOT/core/src/main/java/com/beichen/polaris/core/llm/local/LocalLlamaClient.kt"
+LOOP="$ROOT/core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt"
 VM="$ROOT/app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt"
 # P4-1：本地模型参数（含线程数变更 → 作废绑核结论）已搬到 ModelSettings。
 SETTINGS="$ROOT/app/src/main/java/com/beichen/polaris/ui/ModelSettings.kt"
-SETTING="$ROOT/app/src/main/java/com/beichen/polaris/core/llm/local/LocalLlamaSetting.kt"
+SETTING="$ROOT/core/src/main/java/com/beichen/polaris/core/llm/local/LocalLlamaSetting.kt"
 ABOUT="$ROOT/app/src/main/java/com/beichen/polaris/ui/AboutScreen.kt"
 
 pass=0
@@ -151,9 +151,9 @@ expect "轻聊档改用本地能力声明" "$CLIENT" 'LocalChatPrompt\.TEXT'
 # 再追问一句就掉进「数学物理 / 文学艺术 / 多语互译」的模板腔——它拿到的是一份能力目录，
 # 不是一个说话的人。参考 IRIDIS（默认几乎不写 system prompt）之后改成一句边界 + 语气约束。
 expect "能力声明写清离线与无权限" \
-  app/src/main/java/com/beichen/polaris/core/llm/local/LocalChatPrompt.kt '没有联网'
+  core/src/main/java/com/beichen/polaris/core/llm/local/LocalChatPrompt.kt '没有联网'
 # 断言只看 TEXT 字面量本身（注释里会引用旧版本当反例，不能一起判）。
-PROMPT_FILE=app/src/main/java/com/beichen/polaris/core/llm/local/LocalChatPrompt.kt
+PROMPT_FILE=core/src/main/java/com/beichen/polaris/core/llm/local/LocalChatPrompt.kt
 _text_lit=$(sed -n '/const val TEXT: String =/,/^$/p' "$PROMPT_FILE")
 if printf '%s' "$_text_lit" | grep -q '不能做'; then
   bad "不再罗列「不能做」清单（TEXT 里仍有 /不能做/）"

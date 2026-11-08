@@ -24,8 +24,21 @@ import re
 import sys
 import pathlib
 
-ROOT = pathlib.Path("app/src/main/java")
-GRAPH = ROOT / "com/beichen/polaris/AppGraph.kt"
+# 3.5 拆模块：登记的对象分布在 :app 与 :core 两个模块，扫描必须覆盖两边。
+# 路径归一化统一走 rel()，否则 relative_to 会因为根不同而抛 ValueError。
+APP_ROOT = pathlib.Path("app/src/main/java")
+CORE_ROOT = pathlib.Path("core/src/main/java")
+ROOTS = [APP_ROOT, CORE_ROOT]
+GRAPH = APP_ROOT / "com/beichen/polaris/AppGraph.kt"
+
+
+def rel(f):
+    for r in ROOTS:
+        try:
+            return f.relative_to(r)
+        except ValueError:
+            continue
+    return f
 
 passed = 0
 failed = 0
@@ -88,7 +101,7 @@ member_var_re = re.compile(
 )
 
 objects = {}       # name -> {"file": Path, "has_var": bool}
-for f in ROOT.rglob("*.kt"):
+for f in (p for r in ROOTS for p in r.rglob("*.kt")):
     lines = read(f).splitlines()
     i = 0
     while i < len(lines):
@@ -118,7 +131,7 @@ for e in entries:
     o = objects.get(e["name"])
     if not o:
         continue
-    actual = o["file"].parent.relative_to(ROOT).as_posix().replace("/", ".")
+    actual = rel(o["file"].parent).as_posix().replace("/", ".")
     if e["pkg"] and actual != e["pkg"]:
         wrong_pkg.append(f"{e['name']}: 写 {e['pkg']}，实际 {actual}")
 check("B2 packageName 与实际路径一致", not wrong_pkg, "; ".join(wrong_pkg))
@@ -140,7 +153,7 @@ check("B4 源码里带可变成员的 object 全部已登记", not unregistered,
 print("\n[C] 边界（不接管生产）")
 
 refs = []
-for f in ROOT.rglob("*.kt"):
+for f in (p for r in ROOTS for p in r.rglob("*.kt")):
     if f == GRAPH:
         continue
     for ln, line in enumerate(read(f).splitlines(), 1):
@@ -150,14 +163,14 @@ for f in ROOT.rglob("*.kt"):
         if stripped.startswith(("*", "//", "/*")):
             continue
         if re.search(r'\bAppGraph\b', line):
-            refs.append(f"{f.relative_to(ROOT)}:{ln}")
+            refs.append(f"{rel(f)}:{ln}")
 check("C1 生产代码零引用 AppGraph（只有清单自己）", not refs, f"引用点：{refs[:5]}")
 
 check("C2 AppGraph 不在 core/ 下（否则分层守卫会红）",
-      "core" not in GRAPH.relative_to(ROOT).parts)
+      "core" not in GRAPH.relative_to(APP_ROOT).parts)
 
 only_in_graph = [
-    str(f) for f in ROOT.rglob("*.kt")
+    str(f) for f in (p for r in ROOTS for p in r.rglob("*.kt"))
     if f != GRAPH and re.search(r'\bAppGraph\s*\.\s*resetAll\s*\(', read(f))
 ]
 check("C3 resetAll 只在清单内部被调用", not only_in_graph, f"调用点：{only_in_graph}")

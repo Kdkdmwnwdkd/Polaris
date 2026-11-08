@@ -41,14 +41,16 @@ DEPS="$STDLIB:$SERIALIZATION:$SER_CORE"
 [ -n "${JB_ANNOTATIONS:-}" ] && [ -f "${JB_ANNOTATIONS:-}" ] && DEPS="$DEPS:$JB_ANNOTATIONS"
 
 SRC="$ROOT/app/src/main/java/com/beichen/polaris"
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE="$ROOT/core/src/main/java/com/beichen/polaris"
 SRCS=(
-  "$SRC/core/AgentContract.kt"
-  "$SRC/core/UiItem.kt"
-  "$SRC/core/ToolResult.kt"
-  "$SRC/core/BackupModels.kt"
-  "$SRC/core/BackupArchive.kt"
-  "$SRC/core/llm/JsonSafe.kt"
-  "$SRC/skill/market/MarketModels.kt"
+  "$SRC_CORE/core/AgentContract.kt"
+  "$SRC_CORE/core/UiItem.kt"
+  "$SRC_CORE/core/ToolResult.kt"
+  "$SRC_CORE/core/BackupModels.kt"
+  "$SRC_CORE/core/BackupArchive.kt"
+  "$SRC_CORE/core/llm/JsonSafe.kt"
+  "$SRC_CORE/skill/market/MarketModels.kt"
   "$ROOT/scripts/qa/W47W48Verification.kt"
 )
 

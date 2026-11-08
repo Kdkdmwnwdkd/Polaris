@@ -12,9 +12,9 @@ STDLIB=$KC_HOME/lib/kotlin-stdlib.jar
 SER=${SER_JSON_JAR:-/tmp/w7-jars/kotlinx-serialization-json-jvm-1.6.3.jar}
 SERCORE=${SER_CORE_JAR:-/tmp/w7-jars/kotlinx-serialization-core-jvm-1.6.3.jar}
 
-SRC1="$ROOT/app/src/main/java/com/beichen/polaris/core/text/HeaderParsing.kt"
-SRC2="$ROOT/app/src/main/java/com/beichen/polaris/core/llm/BalanceParsing.kt"
-SRC3="$ROOT/app/src/main/java/com/beichen/polaris/core/text/HeaderParsing.kt"
+SRC1="$ROOT/core/src/main/java/com/beichen/polaris/core/text/HeaderParsing.kt"
+SRC2="$ROOT/core/src/main/java/com/beichen/polaris/core/llm/BalanceParsing.kt"
+SRC3="$ROOT/core/src/main/java/com/beichen/polaris/core/text/HeaderParsing.kt"
 SRC4="$ROOT/scripts/qa/W29Verification.kt"
 
 if [ ! -x "$KC_HOME/bin/kotlinc" ]; then

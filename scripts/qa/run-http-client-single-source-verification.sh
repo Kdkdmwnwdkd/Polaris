@@ -12,7 +12,9 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
 SRC=app/src/main/java/com/beichen/polaris
-HUB="$SRC/core/llm/LlmHttp.kt"
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE=core/src/main/java/com/beichen/polaris
+HUB="$SRC_CORE/core/llm/LlmHttp.kt"
 
 fail=0
 npass=0
@@ -26,7 +28,7 @@ echo "[A] 唯一构造点"
 [ -f "$HUB" ] || { echo "FAIL 缺少 $HUB"; exit 1; }
 
 # 允许出现 OkHttpClient.Builder() 的地方只有一处：LlmHttp 自己的 build()。
-stray=$(grep -rn "OkHttpClient.Builder()" --include=*.kt "$SRC" | grep -v "core/llm/LlmHttp.kt" || true)
+stray=$(grep -rn "OkHttpClient.Builder()" --include=*.kt "$SRC" "$SRC_CORE" | grep -v "core/llm/LlmHttp.kt" || true)
 if [ -z "$stray" ]; then
   good "A1 除 LlmHttp 外无第二处 Builder 构造（全仓收口）"
 else
@@ -34,7 +36,7 @@ else
   echo "$stray" | sed 's/^/         /'
 fi
 
-raw=$(grep -rn "OkHttpClient()" --include=*.kt "$SRC" | grep -v "^.*LlmHttp.kt" || true)
+raw=$(grep -rn "OkHttpClient()" --include=*.kt "$SRC" "$SRC_CORE" | grep -v "^.*LlmHttp.kt" || true)
 if [ -z "$raw" ]; then
   good "A2 无裸 OkHttpClient() （裸构造 = OkHttp 默认 10s 读超时）"
 else
@@ -82,7 +84,7 @@ else
 fi
 
 # 调用点数量：13 处外部 + 1 处 UI，收口后应全部走预设。
-uses=$(grep -rn "LlmHttp\.\(llm\|short\|download\|shared\)" --include=*.kt "$SRC" | grep -v "LlmHttp.kt" | wc -l | tr -d ' ')
+uses=$(grep -rn "LlmHttp\.\(llm\|short\|download\|shared\)" --include=*.kt "$SRC" "$SRC_CORE" | grep -v "LlmHttp.kt" | wc -l | tr -d ' ')
 if [ "$uses" -ge 13 ]; then
   good "C2 $uses 处调用点已切到预设"
 else

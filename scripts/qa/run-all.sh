@@ -23,7 +23,7 @@ LOG_DIR="${QA_LOG_DIR:-qa-logs}"
 mkdir -p "$LOG_DIR"
 pass=0; skip=0; fail=0; xfail=0; failed=""
 
-# 编译产物陈旧检查：35 个 harness 拿 app/build/tmp/kotlin-classes/debug 当 classpath。
+# 编译产物陈旧检查：40 个 harness 拿 kotlin-classes/debug 当 classpath（3.5 起 app + core 两个模块）。
 # 源码改了没重编时，它们会报 `unresolved reference: Xxx`——看着像代码错，实际是产物过期。
 # 这类误诊已经发生过一次（CapabilityManifest 明明在源码里），排查时间比修问题本身还长。
 # 一次拦在源头，并在日志末尾留 ENV STALE 标记，让 gate.sh 把整轮结论判为不可信。

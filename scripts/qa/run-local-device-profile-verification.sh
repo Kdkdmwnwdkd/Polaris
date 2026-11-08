@@ -9,7 +9,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/../.." || exit 1
 
-DIR="app/src/main/java/com/beichen/polaris/core/llm/local"
+DIR="core/src/main/java/com/beichen/polaris/core/llm/local"
 PROFILE="$DIR/LocalDeviceProfile.kt"
 PROBE="$DIR/AndroidDeviceProbe.kt"
 # LocalBackend 枚举住在后端目录里，画像层只是引用它，编的时候要一起带上。

@@ -31,9 +31,9 @@ fi
 [ -f "$STDLIB" ] || { echo "FATAL: 缺少 stdlib $STDLIB" >&2; exit 1; }
 
 SRC="
-$ROOT/app/src/main/java/com/beichen/polaris/core/llm/ConnectionDiagnosis.kt
-$ROOT/app/src/main/java/com/beichen/polaris/core/llm/RetryProfile.kt
-$ROOT/app/src/main/java/com/beichen/polaris/core/llm/ProviderCatalog.kt
+$ROOT/core/src/main/java/com/beichen/polaris/core/llm/ConnectionDiagnosis.kt
+$ROOT/core/src/main/java/com/beichen/polaris/core/llm/RetryProfile.kt
+$ROOT/core/src/main/java/com/beichen/polaris/core/llm/ProviderCatalog.kt
 $ROOT/scripts/qa/ModelSetupVerification.kt
 "
 

@@ -18,6 +18,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 SRC=app/src/main/java/com/beichen/polaris
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE=core/src/main/java/com/beichen/polaris
 STUBS=scripts/qa/r12-verify/stubs
 
 p=0; f=0
@@ -27,7 +29,7 @@ fail() { echo "  FAIL  $*"; f=$((f + 1)); }
 # ---------------------------------------------------------------- [A] 结构
 echo "[A] 文件结构"
 
-[ -f "$SRC/core/terminal/backend/TerminalIdentity.kt" ] \
+[ -f "$SRC_CORE/core/terminal/backend/TerminalIdentity.kt" ] \
   && pass "A1 TerminalIdentity.kt 存在" \
   || fail "A1 缺 TerminalIdentity.kt"
 
@@ -64,12 +66,12 @@ COMPILE_LOG=/tmp/qa-r12-compile.log
 "$KOTLINC_BIN" -nowarn -cp "$COROUTINES" -d "$OUT" \
   "$STUBS/AgentLogger.kt" \
   "$STUBS/AppScope.kt" \
-  "$SRC/core/ToolLimits.kt" \
-  "$SRC/core/terminal/ToolOutputTruncator.kt" \
-  "$SRC/core/terminal/backend/TerminalIdentity.kt" \
-  "$SRC/core/terminal/backend/TerminalBackend.kt" \
-  "$SRC/core/terminal/backend/TerminalBackendFactory.kt" \
-  "$SRC/core/terminal/TerminalSessionPool.kt" \
+  "$SRC_CORE/core/ToolLimits.kt" \
+  "$SRC_CORE/core/terminal/ToolOutputTruncator.kt" \
+  "$SRC_CORE/core/terminal/backend/TerminalIdentity.kt" \
+  "$SRC_CORE/core/terminal/backend/TerminalBackend.kt" \
+  "$SRC_CORE/core/terminal/backend/TerminalBackendFactory.kt" \
+  "$SRC_CORE/core/terminal/TerminalSessionPool.kt" \
   scripts/qa/R12IdentityVerification.kt \
   > "$COMPILE_LOG" 2>&1
 

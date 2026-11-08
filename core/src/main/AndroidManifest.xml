@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  :core 是纯 Kotlin 内核，不声明任何组件。
+  组件（Service / Receiver / Provider）全部在 app 的 manifest 里，类名是全限定名，
+  包名不变，所以迁到库模块后声明仍然有效。
+-->
+<manifest />

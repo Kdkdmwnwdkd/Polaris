@@ -16,6 +16,8 @@ cd "$ROOT"
 source "$ROOT/scripts/qa/lib/deps.sh"
 
 SRC=app/src/main/java/com/beichen/polaris
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE=core/src/main/java/com/beichen/polaris
 HARNESS=scripts/qa/R20Verification.kt
 
 CACHE="$QA_GRADLE_CACHE"
@@ -40,8 +42,8 @@ RUNTIME="$STDLIB"
 COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS"
 
 SOURCES=(
-  "$SRC/core/terminal/backend/TerminalIdentity.kt"
-  "$SRC/core/terminal/backend/ShellRoute.kt"
+  "$SRC_CORE/core/terminal/backend/TerminalIdentity.kt"
+  "$SRC_CORE/core/terminal/backend/ShellRoute.kt"
 )
 
 for f in "${SOURCES[@]}" "$HARNESS"; do
@@ -94,7 +96,7 @@ else
 fi
 
 # G3：全仓不许再有那份四值字面量（两份真相就是漂移的起点）。
-n=$(grep -rc 'listOf("user", "su", "shizuku", "ssh")' --include='*.kt' app/src/main 2>/dev/null | grep -v ':0$' | wc -l | tr -d ' ')
+n=$(grep -rc 'listOf("user", "su", "shizuku", "ssh")' --include='*.kt' app/src/main core/src/main 2>/dev/null | grep -v ':0$' | wc -l | tr -d ' ')
 if [ "$n" = "0" ]; then
   g_good "G3 全仓无四值字面量残留"
 else
@@ -109,7 +111,7 @@ else
 fi
 
 # G5：路由判定只能有一份。还留在 ShellTool 里就是两份，迟早再漂一次。
-if [ "$(grep -rc 'fun shouldUsePrivilegedShell' --include='*.kt' app/src/main | grep -v ':0$' | wc -l | tr -d ' ')" = "1" ]; then
+if [ "$(grep -rc 'fun shouldUsePrivilegedShell' --include='*.kt' app/src/main core/src/main | grep -v ':0$' | wc -l | tr -d ' ')" = "1" ]; then
   g_good "G5 shouldUsePrivilegedShell 全仓只有一处定义"
 else
   g_bad "G5 shouldUsePrivilegedShell 有重复定义"
@@ -127,7 +129,7 @@ fi
 if [ "${AK_ALLOW_SOURCE_MUTATION:-}" = "1" ]; then
   echo ""
   echo "[M] 源码变异：schemaValues 改成「全部暴露」，A2/A3 必须变红"
-  TARGET="$SRC/core/terminal/backend/TerminalIdentity.kt"
+  TARGET="$SRC_CORE/core/terminal/backend/TerminalIdentity.kt"
   BAK=$(mktemp); cp "$TARGET" "$BAK"
   restore() { [ -f "$BAK" ] && cp "$BAK" "$TARGET" && rm -f "$BAK"; }
   trap restore EXIT

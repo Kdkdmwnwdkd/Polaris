@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
-SRC = ROOT / "app/src/main/java/com/beichen/polaris/core"
+SRC = ROOT / "core/src/main/java/com/beichen/polaris/core"
 STORE = (SRC / "ConversationStore.kt").read_text(encoding="utf-8")
 SHARD = (SRC / "ConversationShard.kt").read_text(encoding="utf-8")
 

@@ -69,22 +69,24 @@ echo ""
 # ---------------------------------------------------------------- [B] 行为 harness
 echo "[B] 行为：自编译真跑（临时目录 + 真文件 + 真重启实例）"
 SRC="$ROOT/app/src/main/java/com/beichen/polaris"
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE="$ROOT/core/src/main/java/com/beichen/polaris"
 OUT=/tmp/qa-r10-shard
 COMPILE_LOG=/tmp/qa-r10-shard-compile.log
 rm -rf "$OUT"; mkdir -p "$OUT"
 
 "$KOTLINC_BIN" -nowarn -Xplugin="$PLUGIN" -cp "$CP" -d "$OUT" \
-  "$SRC/core/ConversationStore.kt" \
-  "$SRC/core/ConversationShard.kt" \
-  "$SRC/core/ConversationBranch.kt" \
-  "$SRC/core/UiItem.kt" \
-  "$SRC/core/AgentContract.kt" \
-  "$SRC/core/ToolResult.kt" \
-  "$SRC/core/llm/JsonSafe.kt" \
-  "$SRC/core/io/AtomicJsonFile.kt" \
-  "$SRC/core/lifecycle/AppBackgroundHooks.kt" \
-  "$SRC/core/telemetry/StoreWriteTrace.kt" \
-  "$SRC/core/telemetry/TraceSink.kt" \
+  "$SRC_CORE/core/ConversationStore.kt" \
+  "$SRC_CORE/core/ConversationShard.kt" \
+  "$SRC_CORE/core/ConversationBranch.kt" \
+  "$SRC_CORE/core/UiItem.kt" \
+  "$SRC_CORE/core/AgentContract.kt" \
+  "$SRC_CORE/core/ToolResult.kt" \
+  "$SRC_CORE/core/llm/JsonSafe.kt" \
+  "$SRC_CORE/core/io/AtomicJsonFile.kt" \
+  "$SRC_CORE/core/lifecycle/AppBackgroundHooks.kt" \
+  "$SRC_CORE/core/telemetry/StoreWriteTrace.kt" \
+  "$SRC_CORE/core/telemetry/TraceSink.kt" \
   "$ROOT/scripts/qa/R10ShardVerification.kt" \
   > "$COMPILE_LOG" 2>&1
 

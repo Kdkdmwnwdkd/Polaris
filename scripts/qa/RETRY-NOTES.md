@@ -19,8 +19,8 @@
 
 | # | 文件 | 改动性质 |
 |---|------|----------|
-| 1 | `app/src/main/java/com/beichen/polaris/core/AgentLoop.kt` | 扩展 `AgentEvent`（+2 子类型）|
-| 2 | `app/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt` | `callWithRetry` 抛重试事件 + `retryReason` 纯函数 |
+| 1 | `core/src/main/java/com/beichen/polaris/core/AgentLoop.kt` | 扩展 `AgentEvent`（+2 子类型）|
+| 2 | `core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt` | `callWithRetry` 抛重试事件 + `retryReason` 纯函数 |
 | 3 | `app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt` | `RetryState` + `retryState` StateFlow + `when` 补分支 + 收尾兜底清 |
 | 4 | `app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt` | `RetryBanner` 横幅 + 接线 |
 | 5 | `scripts/qa/RetryVerification.kt` | 新建 harness（9 用例）|

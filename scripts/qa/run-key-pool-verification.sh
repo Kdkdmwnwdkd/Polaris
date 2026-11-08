@@ -29,8 +29,8 @@ if [ -z "${KOTLINC_BIN:-}" ] && [ -z "${KOTLINC_JAR:-}" ]; then
   exit 1
 fi
 
-SRC1="$ROOT/app/src/main/java/com/beichen/polaris/core/llm/KeyPoolPolicy.kt"
-SRC2="$ROOT/app/src/main/java/com/beichen/polaris/core/llm/KeyPoolRuntime.kt"
+SRC1="$ROOT/core/src/main/java/com/beichen/polaris/core/llm/KeyPoolPolicy.kt"
+SRC2="$ROOT/core/src/main/java/com/beichen/polaris/core/llm/KeyPoolRuntime.kt"
 SRC3="$ROOT/scripts/qa/KeyPoolVerification.kt"
 for s in "$SRC1" "$SRC2" "$SRC3"; do
   [ -f "$s" ] || { echo "FATAL: 缺少源文件 $s" >&2; exit 1; }

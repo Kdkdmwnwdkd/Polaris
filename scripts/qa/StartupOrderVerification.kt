@@ -152,8 +152,8 @@ fun main() {
     // 无法实例化。所以本 harness 只验「接线是否存在」，计时器**数得对不对**由
     // ToolLoadProfilerVerification 用假时钟做行为断言。两者分工明确，不是拿文本断言凑数。
     val vm = File("app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt").readText()
-    val registrySrc = File("app/src/main/java/com/beichen/polaris/core/ToolRegistry.kt").readText()
-    val markSrc = File("app/src/main/java/com/beichen/polaris/core/StartupMark.kt").readText()
+    val registrySrc = File("core/src/main/java/com/beichen/polaris/core/ToolRegistry.kt").readText()
+    val markSrc = File("core/src/main/java/com/beichen/polaris/core/StartupMark.kt").readText()
 
     val fieldsAt = vm.indexOf("startup.mark(\"fields\")")
     val skillsAt = vm.indexOf("startup.mark(\"skills\")")

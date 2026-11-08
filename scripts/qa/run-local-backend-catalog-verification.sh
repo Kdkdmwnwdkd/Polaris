@@ -12,8 +12,8 @@ set -uo pipefail
 
 cd "$(dirname "$0")/../.." || exit 1
 
-CATALOG="app/src/main/java/com/beichen/polaris/core/llm/local/LocalBackendCatalog.kt"
-PROFILE="app/src/main/java/com/beichen/polaris/core/llm/local/LocalDeviceProfile.kt"
+CATALOG="core/src/main/java/com/beichen/polaris/core/llm/local/LocalBackendCatalog.kt"
+PROFILE="core/src/main/java/com/beichen/polaris/core/llm/local/LocalDeviceProfile.kt"
 
 PASS=0
 FAIL=0

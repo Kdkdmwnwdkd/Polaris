@@ -16,7 +16,9 @@ set -uo pipefail
 
 cd "$(dirname "$0")/../.."
 SRC=app/src/main/java/com/beichen/polaris
-HUB="$SRC/core/AppScope.kt"
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE=core/src/main/java/com/beichen/polaris
+HUB="$SRC_CORE/core/AppScope.kt"
 
 fail=0
 npass=0
@@ -29,14 +31,14 @@ echo "[A] 上下文统一"
 
 [ -f "$HUB" ] || { echo "FAIL 缺少 $HUB"; exit 1; }
 
-n=$(grep -rn "SupervisorJob() + AppScope.io" --include=*.kt "$SRC" | wc -l | tr -d ' ')
+n=$(grep -rn "SupervisorJob() + AppScope.io" --include=*.kt "$SRC" "$SRC_CORE" | wc -l | tr -d ' ')
 if [ "$n" -ge 6 ]; then
   good "A1 $n 处实例作用域已接入 AppScope.io"
 else
   bad "A1 只有 $n 处接入（收口前是 6 处）"
 fi
 
-naked=$(grep -rn "CoroutineScope(Dispatchers.IO)" --include=*.kt "$SRC" | grep -v "AppScope.kt" || true)
+naked=$(grep -rn "CoroutineScope(Dispatchers.IO)" --include=*.kt "$SRC" "$SRC_CORE" | grep -v "AppScope.kt" || true)
 if [ -z "$naked" ]; then
   good "A2 无裸 CoroutineScope(Dispatchers.IO) 启动（两处已归入 AppScope.app）"
 else
@@ -44,7 +46,7 @@ else
   echo "$naked" | sed 's/^/         /'
 fi
 
-old=$(grep -rn "SupervisorJob() + Dispatchers.IO)" --include=*.kt "$SRC" | grep -v "AppScope.kt" || true)
+old=$(grep -rn "SupervisorJob() + Dispatchers.IO)" --include=*.kt "$SRC" "$SRC_CORE" | grep -v "AppScope.kt" || true)
 if [ -z "$old" ]; then
   good "A3 无遗留的「各写一份 Dispatchers.IO」"
 else
@@ -67,7 +69,7 @@ else
   bad "B1 AppScope 缺 io 上下文"
 fi
 
-cancels=$(grep -rn "scope.cancel()" --include=*.kt "$SRC" | wc -l | tr -d ' ')
+cancels=$(grep -rn "scope.cancel()" --include=*.kt "$SRC" "$SRC_CORE" | wc -l | tr -d ' ')
 if [ "$cancels" -ge 3 ]; then
   good "B2 实例取消点保留（$cancels 处 scope.cancel 未被误删）"
 else
@@ -80,7 +82,7 @@ else
   bad "B3 缺 app 作用域"
 fi
 
-uses=$(grep -rn "AppScope.app.launch" --include=*.kt "$SRC" | wc -l | tr -d ' ')
+uses=$(grep -rn "AppScope.app.launch" --include=*.kt "$SRC" "$SRC_CORE" | wc -l | tr -d ' ')
 if [ "$uses" -ge 2 ]; then
   good "B4 $uses 处「不受实例取消影响」的动作有了归属"
 else

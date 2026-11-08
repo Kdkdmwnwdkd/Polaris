@@ -51,7 +51,7 @@ compile_ctx() {
   local attempt=$1 out
   if [ -n "${KOTLINC_BIN:-}" ]; then
     out=$("$KOTLINC_BIN" ${SER_PLUGIN:+-Xplugin="$SER_PLUGIN"} -classpath "$DEPS" -d "$OUT" \
-      "$ROOT/app/src/main/java/com/beichen/polaris/core/io/AtomicJsonFile.kt" \
+      "$ROOT/core/src/main/java/com/beichen/polaris/core/io/AtomicJsonFile.kt" \
       "$ROOT/app/src/main/java/com/beichen/polaris/memory/MemoryStore.kt" \
       "$ROOT/app/src/main/java/com/beichen/polaris/memory/MemoryAutoCapture.kt" \
       "$ROOT/scripts/qa/MemoryRetrievalVerification.kt" 2>&1) || true
@@ -61,7 +61,7 @@ compile_ctx() {
     if [ -n "${JB_ANNOTATIONS:-}" ] && [ -f "${JB_ANNOTATIONS:-}" ]; then kcp=$kcp:$JB_ANNOTATIONS; fi
     out=$(java -cp "$kcp" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
       -no-stdlib -no-reflect ${SER_PLUGIN:+-Xplugin="$SER_PLUGIN"} -classpath "$DEPS" -d "$OUT" \
-      "$ROOT/app/src/main/java/com/beichen/polaris/core/io/AtomicJsonFile.kt" \
+      "$ROOT/core/src/main/java/com/beichen/polaris/core/io/AtomicJsonFile.kt" \
       "$ROOT/app/src/main/java/com/beichen/polaris/memory/MemoryStore.kt" \
       "$ROOT/app/src/main/java/com/beichen/polaris/memory/MemoryAutoCapture.kt" \
       "$ROOT/scripts/qa/MemoryRetrievalVerification.kt" 2>&1) || true

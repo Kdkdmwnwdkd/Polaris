@@ -20,8 +20,10 @@ cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
 
 SRC=app/src/main/java/com/beichen/polaris
-CATALOG="$SRC/core/llm/ProviderCatalog.kt"
-CLIENT="$SRC/core/LLMClient.kt"
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE=core/src/main/java/com/beichen/polaris
+CATALOG="$SRC_CORE/core/llm/ProviderCatalog.kt"
+CLIENT="$SRC_CORE/core/LLMClient.kt"
 
 fail=0
 npass=0

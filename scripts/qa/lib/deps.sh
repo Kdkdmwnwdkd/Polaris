@@ -74,22 +74,44 @@ qa_require_project() {
     }
 }
 
+# qa_classpath <仓库根>：拼接所有产出 Kotlin class 的模块目录（冒号分隔，跳过不存在的）。
+#
+# 拆模块后（:app + :core），只用 app 的 classes 会让 harness 找不到 core 里的类，
+# 表现是整片 `unresolved reference: AgentLogger` —— 看起来像代码坏了，实际是 classpath 少一段。
+qa_classpath() {
+    local root="$1" d out=""
+    for d in "$root/app/build/tmp/kotlin-classes/debug" \
+             "$root/core/build/tmp/kotlin-classes/debug"; do
+        [ -d "$d" ] && out="${out:+$out:}$d"
+    done
+    printf '%s' "$out"
+}
+
 # qa_classes_stale <仓库根> [class 目录]
 #
 # 输出：陈旧时打印**那个比所有 class 都新的源文件**；新鲜、或产物根本不存在时输出空串。
 #
-# 背景：35 个 harness 拿 app/build/tmp/kotlin-classes/debug 当 classpath。源码改了没重编时，
-# 它们会报 `unresolved reference: Xxx` —— 看起来是代码写错，实际是产物过期。
-# 2026-11-04 已经误诊过一次（CapabilityManifest 明明在源码里），排查时间比修问题本身还长。
+# 背景：harness 拿 kotlin-classes 当 classpath。源码改了没重编时，它们会报
+# `unresolved reference: Xxx`——看着像代码写错，实际是产物过期（2026-11-04 误诊过一次）。
 #
-# 判据：取最新 .class 的时间戳当参照，找有没有 .kt 比它新。
-# `-printf` 是 GNU find 的扩展（CI 是 Linux）。macOS 上该选项不支持 → find 报错 →
-# 输出空串，行为退化为「不做判断」，宁可漏报也不把正常构建误判成陈旧。
+# 判据：逐模块取最新 .class 的时间戳，找该模块 src/main 里有没有 .kt 比它新。
+# 拆模块后必须**分模块比较**：拿 core 的 class 去比 app 的源码，会把正常状态误判成陈旧。
 qa_classes_stale() {
-    local root="$1" classes="${2:-$1/app/build/tmp/kotlin-classes/debug}"
-    [ -d "$classes" ] || return 0
-    local newest
-    newest=$(find "$classes" -name '*.class' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-    [ -n "$newest" ] && [ -e "$newest" ] || return 0
-    find "$root/app/src/main" -name '*.kt' -newer "$newest" -print -quit 2>/dev/null
+    local root="$1" classes="${2:-}"
+    local -a pairs
+    if [ -n "$classes" ]; then
+        pairs=("$classes:$root/app/src/main")
+    else
+        pairs=("$root/app/build/tmp/kotlin-classes/debug:$root/app/src/main"
+               "$root/core/build/tmp/kotlin-classes/debug:$root/core/src/main")
+    fi
+    local pair d src newest
+    for pair in "${pairs[@]}"; do
+        d=${pair%%:*}
+        src=${pair#*:}
+        [ -d "$d" ] || continue
+        newest=$(find "$d" -name '*.class' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+        [ -n "$newest" ] && [ -e "$newest" ] || continue
+        find "$src" -name '*.kt' -newer "$newest" -print -quit 2>/dev/null
+    done
 }

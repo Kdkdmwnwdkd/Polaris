@@ -13,6 +13,8 @@ cd "$ROOT"
 source "$ROOT/scripts/qa/lib/deps.sh"
 
 SRC=app/src/main/java/com/beichen/polaris
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE=core/src/main/java/com/beichen/polaris
 HARNESS=scripts/qa/R03Verification.kt
 
 CACHE="$QA_GRADLE_CACHE"
@@ -41,7 +43,7 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 RUNTIME="$STDLIB:$COROUTINES"
 COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS:$COROUTINES"
 
-SOURCES=("$SRC/core/agent/ApprovalDeadline.kt")
+SOURCES=("$SRC_CORE/core/agent/ApprovalDeadline.kt")
 for f in "${SOURCES[@]}" "$HARNESS"; do
   [ -f "$f" ] || { echo "FAIL 缺少源文件 $f（无法判定，视为失败）"; exit 1; }
 done
@@ -72,7 +74,7 @@ echo ""
 echo "[G] 接线与单点"
 VM=app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt
 SCREEN=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
-DEADLINE=$SRC/core/agent/ApprovalDeadline.kt
+DEADLINE=$SRC_CORE/core/agent/ApprovalDeadline.kt
 
 # G1：VM 必须真的走 awaitApprovalDecision。函数写得再对，没人调用等于没修。
 if grep -qE '^ *val ok = try \{ awaitApprovalDecision\(deferred\) \} finally' "$VM"; then
@@ -102,7 +104,7 @@ else
 fi
 
 # G4：时限只有一处定义。
-n=$(grep -rl 'const val APPROVAL_TIMEOUT_MS' app/src/main --include=*.kt | wc -l | tr -d ' ')
+n=$(grep -rl 'const val APPROVAL_TIMEOUT_MS' app/src/main core/src/main --include=*.kt | wc -l | tr -d ' ')
 if [ "$n" = "1" ] && grep -q 'const val APPROVAL_TIMEOUT_MS: Long = 30_000L' "$DEADLINE"; then
   g_good "G4 时限单点定义（30_000ms）"
 else

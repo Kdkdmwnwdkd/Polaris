@@ -21,9 +21,9 @@
 
 | 文件 | 行数 | 变更 |
 | --- | --- | --- |
-| `app/src/main/java/com/beichen/polaris/core/ConversationBranch.kt` | 157 | **新增**：`TurnRecord` + `ConversationBranch` 纯函数引擎（normalize / fromMessages / flatten / appendVariant / select / reaskAfter） |
-| `app/src/main/java/com/beichen/polaris/core/ConversationStore.kt` | 506 | `ConversationRecord` 加 `turns`（默认空）；`appendMessage` 维护 turns + 展开 messages；`load()` 旧格式迁移；新增 `selectVariant` / `appendVariant` / `truncateAfter`；新增 `ConversationRecord.toUiItems()`；`ROLE_*` 改 internal |
-| `app/src/main/java/com/beichen/polaris/core/AgentLoop.kt` | 126 | 适配层透传 `onTextDelta`（T01 流式打字机，默认 null 行为不变） |
+| `core/src/main/java/com/beichen/polaris/core/ConversationBranch.kt` | 157 | **新增**：`TurnRecord` + `ConversationBranch` 纯函数引擎（normalize / fromMessages / flatten / appendVariant / select / reaskAfter） |
+| `core/src/main/java/com/beichen/polaris/core/ConversationStore.kt` | 506 | `ConversationRecord` 加 `turns`（默认空）；`appendMessage` 维护 turns + 展开 messages；`load()` 旧格式迁移；新增 `selectVariant` / `appendVariant` / `truncateAfter`；新增 `ConversationRecord.toUiItems()`；`ROLE_*` 改 internal |
+| `core/src/main/java/com/beichen/polaris/core/AgentLoop.kt` | 126 | 适配层透传 `onTextDelta`（T01 流式打字机，默认 null 行为不变） |
 | `app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt` | 1525 | `UiItem.User/Assistant` 加变体游标元数据；`_streamDraft` 流式草稿 + `handleTextDelta`；`regenerate` / `switchVariant` / `reaskFromTurn` / `reloadActiveMessages`；`send` finally 重载以补元数据 |
 | `app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt` | 1328 | 助手气泡操作区 `← n/m →` + 「重新生成」；用户气泡「重新发问」入口 + 编辑对话框；流式草稿气泡 |
 | `scripts/qa/BranchVerification.kt` | 427 | **新增** harness（20 断言，main + 手写断言） |

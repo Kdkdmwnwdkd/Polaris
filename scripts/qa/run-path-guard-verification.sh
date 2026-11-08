@@ -13,6 +13,6 @@ KOTLINC_BIN="$KC_HOME/bin/kotlinc"
 [ -x "$KOTLINC_BIN" ] || { echo "FATAL: 找不到 kotlinc（$KOTLINC_BIN）" >&2; exit 1; }
 rm -rf "$OUT" && mkdir -p "$OUT"
 "$KOTLINC_BIN" -d "$OUT" \
-  "$ROOT/app/src/main/java/com/beichen/polaris/core/workspace/PathGuard.kt" \
+  "$ROOT/core/src/main/java/com/beichen/polaris/core/workspace/PathGuard.kt" \
   "$ROOT/scripts/qa/PathGuardVerification.kt"
 java -cp "$OUT:$KC_HOME/lib/kotlin-stdlib.jar" PathGuardVerificationKt

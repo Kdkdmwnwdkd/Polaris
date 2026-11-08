@@ -45,8 +45,8 @@ cd "$(dirname "$0")/../.."
 # ---------------------------------------------------------------------------
 ALLOW_MUTATION="${AK_ALLOW_SOURCE_MUTATION:-0}"
 
-CORE="app/src/main/java/com/beichen/polaris/core/agent/ToolExecutor.kt"
-LOOP="app/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt"
+CORE="core/src/main/java/com/beichen/polaris/core/agent/ToolExecutor.kt"
+LOOP="core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt"
 HARNESS="scripts/qa/run-localmodel-verification.sh"
 # 断言**源码**在 .kt 里（runner 只是编译并执行它）——查错文件会误报。
 ASSERT_SRC="scripts/qa/LocalModelVerification.kt"
@@ -62,8 +62,13 @@ bad() { fail=$((fail+1)); echo "  ❌ $1"; }
 
 run_harness() {
   # 需要 AGP 编译产物（集成型 harness）。缺产物就明确 SKIP，不假装通过。
-  local classes=${AGENTKIT_CLASSES:-app/build/tmp/kotlin-classes/debug}
-  if [ ! -d "$classes" ]; then
+  # 拆模块后（:app + :core）要拼两个目录；只用 app 会让 harness 找不到 core 的类
+  local classes=${AGENTKIT_CLASSES:-}
+  if [ -z "$classes" ]; then
+    [ -d app/build/tmp/kotlin-classes/debug ] && classes=app/build/tmp/kotlin-classes/debug
+    [ -d core/build/tmp/kotlin-classes/debug ] && classes="${classes:+$classes:}core/build/tmp/kotlin-classes/debug"
+  fi
+  if [ -z "$classes" ]; then
     echo "  (缺少 AGP 编译产物 $classes，跳过)"
     return 3
   fi
@@ -121,7 +126,7 @@ out=$(run_harness); rc=$?
 if [ $rc -eq 3 ]; then
   # R-17：走统一协议并带上绝对路径——run-all 会去 stat 这个目录，
   # 若它其实存在，本轮就不是「环境不具备」，而是判定坏了。
-  echo "KS_HARNESS_SKIP $(basename "$0") 缺 AGP 编译产物：$(pwd)/${AGENTKIT_CLASSES:-app/build/tmp/kotlin-classes/debug}" >&2
+  echo "KS_HARNESS_SKIP $(basename "$0") 缺 AGP 编译产物：$(pwd)/app/build/tmp/kotlin-classes/debug" >&2
   exit 3
 fi
 if [ $rc -eq 0 ]; then

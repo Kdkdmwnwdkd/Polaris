@@ -34,7 +34,7 @@ if [ -z "${KOTLINC_BIN:-}" ] && [ -z "${KOTLINC_JAR:-}" ]; then
 fi
 if [ ! -f "${STDLIB:-}" ]; then echo "FATAL: 缺少 kotlin-stdlib：${STDLIB:-<empty>}" >&2; exit 1; fi
 
-SRC_FILTER="$ROOT/app/src/main/java/com/beichen/polaris/core/text/ConversationFilter.kt"
+SRC_FILTER="$ROOT/core/src/main/java/com/beichen/polaris/core/text/ConversationFilter.kt"
 SRC_TEST="$ROOT/scripts/qa/ConversationsScreenVerification.kt"
 for f in "$SRC_FILTER" "$SRC_TEST"; do
   [ -f "$f" ] || { echo "FATAL: 缺少源文件 $f" >&2; exit 1; }

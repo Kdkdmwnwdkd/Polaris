@@ -47,10 +47,10 @@ compile_ctx() {
   local attempt=$1 out
   if [ -n "${KOTLINC_BIN:-}" ]; then
     out=$("$KOTLINC_BIN" -classpath "$DEPS" -d "$OUT" \
-      "$ROOT/app/src/main/java/com/beichen/polaris/core/AgentContract.kt" \
-      "$ROOT/app/src/main/java/com/beichen/polaris/core/ToolResult.kt" \
-      "$ROOT/app/src/main/java/com/beichen/polaris/core/ToolLimits.kt" \
-      "$ROOT/app/src/main/java/com/beichen/polaris/core/agent/ContextBudget.kt" \
+      "$ROOT/core/src/main/java/com/beichen/polaris/core/AgentContract.kt" \
+      "$ROOT/core/src/main/java/com/beichen/polaris/core/ToolResult.kt" \
+      "$ROOT/core/src/main/java/com/beichen/polaris/core/ToolLimits.kt" \
+      "$ROOT/core/src/main/java/com/beichen/polaris/core/agent/ContextBudget.kt" \
       "$ROOT/scripts/qa/ContextBudgetVerification.kt" 2>&1) || true
   else
     local kcp="$KOTLINC_JAR:$STDLIB"
@@ -58,10 +58,10 @@ compile_ctx() {
     if [ -n "${JB_ANNOTATIONS:-}" ] && [ -f "${JB_ANNOTATIONS:-}" ]; then kcp=$kcp:$JB_ANNOTATIONS; fi
     out=$(java -cp "$kcp" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
       -no-stdlib -no-reflect -classpath "$DEPS" -d "$OUT" \
-      "$ROOT/app/src/main/java/com/beichen/polaris/core/AgentContract.kt" \
-      "$ROOT/app/src/main/java/com/beichen/polaris/core/ToolResult.kt" \
-      "$ROOT/app/src/main/java/com/beichen/polaris/core/ToolLimits.kt" \
-      "$ROOT/app/src/main/java/com/beichen/polaris/core/agent/ContextBudget.kt" \
+      "$ROOT/core/src/main/java/com/beichen/polaris/core/AgentContract.kt" \
+      "$ROOT/core/src/main/java/com/beichen/polaris/core/ToolResult.kt" \
+      "$ROOT/core/src/main/java/com/beichen/polaris/core/ToolLimits.kt" \
+      "$ROOT/core/src/main/java/com/beichen/polaris/core/agent/ContextBudget.kt" \
       "$ROOT/scripts/qa/ContextBudgetVerification.kt" 2>&1) || true
   fi
   if echo "$out" | grep -q "error:"; then

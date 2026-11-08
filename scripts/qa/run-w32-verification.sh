@@ -10,7 +10,7 @@ OUT=/tmp/qa-verify-w32
 KC_HOME=${KOTLINC_HOME:-/tmp/kotlinc}
 STDLIB=$KC_HOME/lib/kotlin-stdlib.jar
 
-SRC1="$ROOT/app/src/main/java/com/beichen/polaris/core/build/GitHubGitLogic.kt"
+SRC1="$ROOT/core/src/main/java/com/beichen/polaris/core/build/GitHubGitLogic.kt"
 SRC2="$ROOT/scripts/qa/W32Verification.kt"
 
 if [ ! -x "$KC_HOME/bin/kotlinc" ]; then

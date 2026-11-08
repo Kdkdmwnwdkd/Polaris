@@ -28,6 +28,23 @@
 | `androidx.core:core-ktx` | 1.13.1 | AndroidX 基础扩展 | Apache-2.0 |
 | `com.google.mlkit:text-recognition-chinese` | 16.0.1 | 离线中文 OCR（模型打进 APK，不需要 GMS） | Google ML Kit 条款 |
 
+### 1.1 模块归属（3.5 拆模块，2026-11-08）
+
+工程从单模块拆成 `:core` + `:app` 两个 Gradle 模块。依赖的归属因此变得可判定：
+
+| 模块 | 依赖 |
+|---|---|
+| `:core` | `androidx.core:core-ktx` 1.13.1 / `kotlinx-coroutines-android` 1.8.1 / `kotlinx-serialization-json` 1.6.3 / `okhttp` 4.12.0 —— **全部用 `api` 声明** |
+| `:app` | 上表其余全部（Compose、WorkManager、Shizuku、ML Kit、Rhino…），另有 `implementation(project(":core"))` |
+
+两条约束：
+
+1. **四个共用依赖的版本号必须两边一致**。它们目前各写一份（`core/build.gradle.kts` 与
+   `app/build.gradle.kts`），没有 version catalog 兜底——升级时两处一起改。`:core` 用 `api`
+   是为了让 app 侧能解析出现在 core 公共签名里的 okhttp / serialization 类型。
+2. **`:core` 不得依赖 Compose、WorkManager、Shizuku、ML Kit**。前三者属于界面/宿主调度，
+   ML Kit 只被 `ui/MediaScreen` 用。要加新依赖先问：它是不是内核跑起来就必需的？
+
 ## 2. 构建期依赖（不进 APK）
 
 | 项 | 版本 | 说明 |

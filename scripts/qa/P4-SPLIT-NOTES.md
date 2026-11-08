@@ -63,3 +63,32 @@
 - `send()` 的编排体：它读 `input` / 附件 / 设备上下文 / 工作区规则，搬走要暴露十几个成员，
   换来的只是文件更短。
 - `KernelExposure` 的裁剪算法：它已经在读清单，再合并等于把两个职责塞进一个 object。
+
+## 3.5 拆模块（2026-11-08）
+
+3.1 拆的是文件，3.5 拆的是**编译单元**。前者让答案唯一，后者让答案**无法被绕过**：
+文件可以被随手 import 回去，模块不能。
+
+| | 拆前 | 拆后 |
+|---|---|---|
+| Gradle 模块 | `:app` 单模块 | `:core` + `:app` |
+| 归属 | 228 个 .kt 全在一个编译单元 | `:core` 174 个文件 / 35,019 行（`core` + `skill` + `terminal` 三个包），`:app` 其余 |
+| 分层约束 | arch guard 文本检查「core 不得 import ui/tools」 | Kotlin 编译器：`ui` / `tools` 在另一个模块，import 直接编译失败 |
+
+**为什么是这三个包一起搬**：`core → skill`（ModelConfig / CapabilityRegistry）、
+`core → terminal`（TerminalSession），同时 `skill/terminal → core`（AgentLogger /
+ToolRegistry / AppScope）。双向引用意味着拆开任何一边都是循环依赖——它们本来就是一个整体。
+
+**搬的两个显式代价**（都已处理，记在这里免得下次重新踩）：
+
+1. `internal` 是模块级可见性。`:core` 独立后，`UiItem.toMsgRecord()` /
+   `ConversationRecord.toUiItems()` 这两个被 app 调用的映射函数必须放宽为 `public`。
+   其余 51 个 `internal` 声明经全量核对，没有被 app 引用。
+2. harness 的 classpath 从 `app/build/tmp/kotlin-classes/debug` 变成 app + core 两个目录
+   （`deps.sh` 的 `qa_classpath`）。同时 40 个 runner 的「缺产物 → SKIP」判断从
+   `[ ! -d "$CLASSES" ]` 改为 `[ -z "$CLASSES" ]`——冒号拼接后的字符串不是目录。
+
+**哪些判据跟着改了**（都只改扫描范围，断言条数不变）：
+`arch guard`（行数与分层扩到 core 模块）、`startup-order`、`permission-guide`、
+`appgraph`、`app-scope`、`r03`/`r05`/`r06`/`r07`/`r09`/`r13`/`r19`/`r20`、
+`tool-surface`、`http-client-single-source`。改法统一是「扫描根从 app 扩到 app+core」。

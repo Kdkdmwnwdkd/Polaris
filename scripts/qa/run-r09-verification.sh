@@ -11,6 +11,8 @@ cd "$ROOT"
 source "$ROOT/scripts/qa/lib/deps.sh"
 
 SRC=app/src/main/java/com/beichen/polaris
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE=core/src/main/java/com/beichen/polaris
 HARNESS=scripts/qa/R09Verification.kt
 
 CACHE="$QA_GRADLE_CACHE"
@@ -34,7 +36,7 @@ OUT=/tmp/qa-r09
 RUNTIME="$STDLIB"
 COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS"
 
-SOURCES=("$SRC/core/agent/RetryVisibility.kt")
+SOURCES=("$SRC_CORE/core/agent/RetryVisibility.kt")
 for f in "${SOURCES[@]}" "$HARNESS"; do
   [ -f "$f" ] || { echo "FAIL 缺少源文件 $f（无法判定，视为失败）"; exit 1; }
 done
@@ -63,7 +65,7 @@ g_good() { echo "  PASS  $*"; gp=$((gp + 1)); }
 
 echo ""
 echo "[G] 接线"
-LOOP=$SRC/core/agent/RealAgentLoop.kt
+LOOP=$SRC_CORE/core/agent/RealAgentLoop.kt
 VM=$SRC/ui/ChatViewModel.kt
 
 # G1：闸门必须真的被调用。纯函数写得再对，没人调等于没修。
@@ -96,7 +98,7 @@ else
 fi
 
 # G5：常量只有一处定义。两处各写一个阈值，改一处忘另一处就是行为漂移。
-n=$(grep -rl 'const val RETRY_VISIBLE_CHARS' app/src/main --include='*.kt' | wc -l | tr -d ' ')
+n=$(grep -rl 'const val RETRY_VISIBLE_CHARS' app/src/main core/src/main --include='*.kt' | wc -l | tr -d ' ')
 if [ "$n" = "1" ]; then
   g_good "G5 阈值单点定义"
 else
@@ -107,7 +109,7 @@ fi
 if [ "${AK_ALLOW_SOURCE_MUTATION:-}" = "1" ]; then
   echo ""
   echo "[M] 源码变异：让闸门恒放行（忽略可见输出），B 段必须变红"
-  TARGET="$SRC/core/agent/RetryVisibility.kt"
+  TARGET="$SRC_CORE/core/agent/RetryVisibility.kt"
   BAK=$(mktemp); cp "$TARGET" "$BAK"
   restore() { [ -f "$BAK" ] && cp "$BAK" "$TARGET" && rm -f "$BAK"; }
   trap restore EXIT

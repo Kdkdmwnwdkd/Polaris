@@ -14,9 +14,9 @@
 
 | 文件 | 类型 | 说明 |
 |---|---|---|
-| `app/src/main/java/com/beichen/polaris/core/ToolExposurePolicy.kt` | 新增 | 中心化优先级表 + `ToolExposure` 快照 + 纯函数 `exposureFor(...)` |
-| `app/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt` | 改造 | 回合级按 provider 裁剪：`runTurn` 算 exposure / 回合级工具视图；`chatOnce` 发 ≤7 工具；`buildSystemPrompt(tools)` 同步裁剪片段；`logExposure` 打 INFO；新增 `forceFullTools` 开关 |
-| `app/src/main/java/com/beichen/polaris/core/AgentLoop.kt` | 改造 | 适配层透传 `forceFullTools`（构造参数，默认 false） |
+| `core/src/main/java/com/beichen/polaris/core/ToolExposurePolicy.kt` | 新增 | 中心化优先级表 + `ToolExposure` 快照 + 纯函数 `exposureFor(...)` |
+| `core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt` | 改造 | 回合级按 provider 裁剪：`runTurn` 算 exposure / 回合级工具视图；`chatOnce` 发 ≤7 工具；`buildSystemPrompt(tools)` 同步裁剪片段；`logExposure` 打 INFO；新增 `forceFullTools` 开关 |
+| `core/src/main/java/com/beichen/polaris/core/AgentLoop.kt` | 改造 | 适配层透传 `forceFullTools`（构造参数，默认 false） |
 | `scripts/qa/LocalModelVerification.kt` | 新增 | 19 项行为验证 harness |
 | `scripts/qa/run-localmodel-verification.sh` | 新增 | 离线编译 + 运行（形态学 run-retry-verification.sh） |
 | `scripts/qa/LOCALMODEL-NOTES.md` | 新增 | 本文件 |

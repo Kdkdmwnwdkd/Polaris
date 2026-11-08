@@ -15,6 +15,8 @@ cd "$ROOT"
 source "$ROOT/scripts/qa/lib/deps.sh"
 
 SRC=app/src/main/java/com/beichen/polaris
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE=core/src/main/java/com/beichen/polaris
 HARNESS=scripts/qa/R07Verification.kt
 
 CACHE="$QA_GRADLE_CACHE"
@@ -50,14 +52,14 @@ RUNTIME="$STDLIB:$COROUTINES:$SER_JSON:$SER_CORE"
 COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS:$COROUTINES"
 
 SOURCES=(
-  "$SRC/core/AgentContract.kt"
-  "$SRC/core/ToolResult.kt"
-  "$SRC/core/agent/ToolDescriptor.kt"
-  "$SRC/core/ToolLoadProfiler.kt"
-  "$SRC/core/ToolLimits.kt"
-  "$SRC/core/ToolRegistry.kt"
-  "$SRC/core/mcp/McpModels.kt"
-  "$SRC/core/mcp/McpToolSync.kt"
+  "$SRC_CORE/core/AgentContract.kt"
+  "$SRC_CORE/core/ToolResult.kt"
+  "$SRC_CORE/core/agent/ToolDescriptor.kt"
+  "$SRC_CORE/core/ToolLoadProfiler.kt"
+  "$SRC_CORE/core/ToolLimits.kt"
+  "$SRC_CORE/core/ToolRegistry.kt"
+  "$SRC_CORE/core/mcp/McpModels.kt"
+  "$SRC_CORE/core/mcp/McpToolSync.kt"
 )
 
 compile_and_run() {
@@ -116,7 +118,7 @@ else
 fi
 
 # G3：注册必须走「按持有者整体替换」，不能再逐条 register。
-if grep -q 'registry.registerOwned(' "$SRC/core/mcp/McpToolSync.kt"; then
+if grep -q 'registry.registerOwned(' "$SRC_CORE/core/mcp/McpToolSync.kt"; then
   g_good "G3 同步器用 registerOwned 整体替换"
 else
   g_bad "G3 同步器没有调用 registerOwned"
@@ -130,7 +132,7 @@ else
 fi
 
 # G5：撤销要真有人调。修前 ToolRegistry.unregister 全仓零调用，就是这条缺陷。
-n=$(grep -rl 'unregisterOwner(' app/src/main --include='*.kt' | wc -l | tr -d ' ')
+n=$(grep -rl 'unregisterOwner(' app/src/main core/src/main --include='*.kt' | wc -l | tr -d ' ')
 if [ "$n" -ge 2 ]; then
   g_good "G5 unregisterOwner 有真实调用点（$n 个文件）"
 else
@@ -141,7 +143,7 @@ fi
 if [ "${AK_ALLOW_SOURCE_MUTATION:-}" = "1" ]; then
   echo ""
   echo "[M] 源码变异：把 unregisterOwner 改成 no-op，行为断言必须变红"
-  TARGET="$SRC/core/ToolRegistry.kt"
+  TARGET="$SRC_CORE/core/ToolRegistry.kt"
   BAK=$(mktemp); cp "$TARGET" "$BAK"
   restore() { [ -f "$BAK" ] && cp "$BAK" "$TARGET" && rm -f "$BAK"; }
   trap restore EXIT

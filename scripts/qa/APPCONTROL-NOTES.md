@@ -53,7 +53,7 @@
 
 前一批 T07/T08 可能正在构建，编译前确认无并发 `assembleDebug` 且 T07/T08 产物就位：
 ```
-ls app/src/main/java/com/beichen/polaris/core/terminal/TerminalSessionPool.kt scripts/qa/T07T08Verification.kt
+ls core/src/main/java/com/beichen/polaris/core/terminal/TerminalSessionPool.kt scripts/qa/T07T08Verification.kt
 pgrep -f assembleDebug    # 应无输出
 ```
 不满足则继续代码走读，间隔 2 分钟重查，最多等 40 分钟。

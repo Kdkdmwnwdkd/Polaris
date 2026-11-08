@@ -15,7 +15,7 @@ set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 
 SCREEN=app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt
-SETTING=app/src/main/java/com/beichen/polaris/core/llm/local/LocalLlamaSetting.kt
+SETTING=core/src/main/java/com/beichen/polaris/core/llm/local/LocalLlamaSetting.kt
 
 PASS=0
 FAIL=0

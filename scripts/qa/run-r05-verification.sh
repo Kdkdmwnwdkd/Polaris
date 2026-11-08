@@ -11,6 +11,8 @@ cd "$ROOT"
 source "$ROOT/scripts/qa/lib/deps.sh"
 
 SRC=app/src/main/java/com/beichen/polaris
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE=core/src/main/java/com/beichen/polaris
 HARNESS=scripts/qa/R05Verification.kt
 
 CACHE="$QA_GRADLE_CACHE"
@@ -47,9 +49,9 @@ RUNTIME="$STDLIB:$COROUTINES:$SER_JSON:$SER_CORE"
 COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS:$COROUTINES"
 
 SOURCES=(
-  "$SRC/core/AgentContract.kt"
-  "$SRC/core/ToolResult.kt"
-  "$SRC/core/UiItem.kt"
+  "$SRC_CORE/core/AgentContract.kt"
+  "$SRC_CORE/core/ToolResult.kt"
+  "$SRC_CORE/core/UiItem.kt"
 )
 for f in "${SOURCES[@]}" "$HARNESS"; do
   [ -f "$f" ] || { echo "FAIL 缺少源文件 $f（无法判定，视为失败）"; exit 1; }
@@ -92,7 +94,7 @@ else
 fi
 
 # G2：key 函数只有一处实现。两处各写一版，改一处忘另一处就是身份漂移。
-n=$(grep -rl 'fun UiItem.uiKey' app/src/main --include=*.kt | wc -l | tr -d ' ')
+n=$(grep -rl 'fun UiItem.uiKey' app/src/main core/src/main --include=*.kt | wc -l | tr -d ' ')
 if [ "$n" = "1" ]; then
   g_good "G2 uiKey 单点定义"
 else

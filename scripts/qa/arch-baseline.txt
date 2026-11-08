@@ -23,5 +23,5 @@
 lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3439
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3103
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2309
-lines app/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
+lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
 lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1516

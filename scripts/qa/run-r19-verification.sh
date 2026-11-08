@@ -19,7 +19,16 @@ cd "$ROOT"
 
 INV=scripts/qa/contract-inventory.txt
 SRC=app/src/main/java/com/beichen/polaris
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE=core/src/main/java/com/beichen/polaris
 EXPECTED_ENTRIES=14
+
+# 台账的 FILE 列写的是相对包根的路径（如 core/ConversationStore.kt）。
+# 3.5 拆模块后同一个相对路径可能落在 :app 也可能落在 :core，先找 app 再找 core。
+src_of() {
+  local f="$1"
+  if [ -f "$SRC/$f" ]; then printf '%s' "$SRC/$f"; else printf '%s' "$SRC_CORE/$f"; fi
+}
 
 p=0; f=0
 pass() { echo "  PASS  $*"; p=$((p + 1)); }
@@ -72,7 +81,7 @@ fi
 missing_file=0
 for row in "${rows[@]}"; do
   file=$(printf '%s' "$row" | cut -d'|' -f3 | xargs)
-  [ -f "$SRC/$file" ] || { echo "        缺文件：$SRC/$file"; missing_file=$((missing_file + 1)); }
+  [ -f "$(src_of "$file")" ] || { echo "        缺文件：$SRC/$file"; missing_file=$((missing_file + 1)); }
 done
 if [ "$missing_file" -eq 0 ]; then
   pass "A5 每条登记的文件都还在（台账没有指路指到坟头）"
@@ -91,17 +100,17 @@ for row in "${rows[@]}"; do
   # 只在**登记的那个文件**里找：`stop` / `unregister` 这种名字全仓有一堆同名方法
   # （服务、蓝牙发现、TTS 都有 stop），跨文件 grep 会把别人的方法算成「没删干净」。
   # 这条判据的语义是「AgentLoop.kt 里不再有 stop」，不是「全宇宙没有 stop」。
-  hits=$(grep -c "fun ${sym}(" "$SRC/$file" 2>/dev/null || true)
+  hits=$(grep -c "fun ${sym}(" "$(src_of "$file")" 2>/dev/null || true)
   hits=${hits:-0}
   if [ "$hits" = "0" ]; then
     pass "B $sym 在 ${file} 已无定义（台账说删了，就真删了）"
   else
     fail "B $sym 在 ${file} 仍有 $hits 处定义——台账写 DELETED 但代码还在（登记不等于修复）"
-    grep -n "fun ${sym}(" "$SRC/$file" | head -3 | sed 's/^/        /'
+    grep -n "fun ${sym}(" "$(src_of "$file")" | head -3 | sed 's/^/        /'
   fi
   # 方法删了，它自己文件里残留的 [sym] KDoc 链接就是死链：IDE 会淡化，
   # 读代码的人却会以为这个方法还在。
-  docref=$(grep -c "\[${sym}\]" "$SRC/$file" 2>/dev/null || true)
+  docref=$(grep -c "\[${sym}\]" "$(src_of "$file")" 2>/dev/null || true)
   docref=${docref:-0}
   if [ "$docref" = "0" ]; then
     pass "B $sym 所在文件无 KDoc 死链"
@@ -111,7 +120,7 @@ for row in "${rows[@]}"; do
   # 跨文件死链更隐蔽：别的文件写 `[AgentLoop.stop]`，读的人以为方法还在，
   # IDE 只把链接淡化成灰字，不会报错。类名从文件名推（AgentLoop.kt → AgentLoop）。
   cls=$(basename "$file" .kt)
-  cross=$(grep -rn "\[${cls}\.${sym}\]" --include='*.kt' "$SRC" 2>/dev/null | wc -l | tr -d ' ')
+  cross=$(grep -rn "\[${cls}\.${sym}\]" --include='*.kt' "$SRC" "$SRC_CORE" 2>/dev/null | wc -l | tr -d ' ')
   if [ "$cross" = "0" ]; then
     pass "B 无跨文件死链（[${cls}.${sym}]）"
   else
@@ -133,7 +142,7 @@ for row in "${rows[@]}"; do
     continue
   fi
   # 固定串匹配：EXPECT 里有括号和点，正则会被它们坑。
-  hits=$(grep -rF "$expect" --include='*.kt' "$SRC" 2>/dev/null | wc -l | tr -d ' ')
+  hits=$(grep -rF "$expect" --include='*.kt' "$SRC" "$SRC_CORE" 2>/dev/null | wc -l | tr -d ' ')
   if [ "$hits" -ge 1 ]; then
     pass "C $sym 的调用片段存在（$hits 处）：$expect"
   else
@@ -150,7 +159,7 @@ for row in "${rows[@]}"; do
   sym=$(printf '%s' "$row" | cut -d'|' -f2 | xargs)
   file=$(printf '%s' "$row" | cut -d'|' -f3 | xargs)
   # 跨文件引用 = 「接线了却没更新台账」。定义文件内部的调用不算（那还是内部实现）。
-  hits=$(grep -rn "${sym}\s*(" --include='*.kt' "$SRC" 2>/dev/null \
+  hits=$(grep -rn "${sym}\s*(" --include='*.kt' "$SRC" "$SRC_CORE" 2>/dev/null \
          | grep -v "/${file}:" | grep -v "fun ${sym}(" | wc -l | tr -d ' ')
   if [ "$hits" = "0" ]; then
     pass "D $sym 仍然零生产调用（保留理由成立）"
@@ -171,7 +180,7 @@ else
 fi
 
 # E2：存储层必须注册。没有注册方，广播就是空转。
-if grep -q "AppBackgroundHooks.register" "$SRC/core/ConversationStore.kt"; then
+if grep -q "AppBackgroundHooks.register" "$SRC_CORE/core/ConversationStore.kt"; then
   pass "E2 ConversationStore 在 init 里注册了 flush"
 else
   fail "E2 ConversationStore 没有注册——flush 仍然是死的"
@@ -179,7 +188,7 @@ fi
 
 # E3：register 的 lambda 不许捕获 store 实例。捕获了就意味着弱引用白做：
 # hooks 表里的闭包会强引用 store，实例被 ViewModel 丢弃后仍然活着。
-if grep -qE "register\(this\) \{ *[a-zA-Z_]+ *->" "$SRC/core/ConversationStore.kt"; then
+if grep -qE "register\(this\) \{ *[a-zA-Z_]+ *->" "$SRC_CORE/core/ConversationStore.kt"; then
   pass "E3 注册闭包用参数接收 owner（不捕获 this，弱引用语义成立）"
 else
   fail "E3 注册闭包疑似捕获 this（写成 { flush() } 会让弱引用失效）"
@@ -209,7 +218,7 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANN"
 java -cp "$COMPILER_CP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -no-reflect -cp "$STDLIB" -d "$OUT" -nowarn \
-  "$SRC/core/lifecycle/AppBackgroundHooks.kt" scripts/qa/R19HooksVerification.kt \
+  "$SRC_CORE/core/lifecycle/AppBackgroundHooks.kt" scripts/qa/R19HooksVerification.kt \
   2>&1 | grep -v '^warning:' | head -20
 
 if [ ! -d "$OUT/com" ]; then

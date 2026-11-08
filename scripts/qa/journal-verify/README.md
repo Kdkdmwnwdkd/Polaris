@@ -23,10 +23,10 @@ java -cp $CP org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -classpath $STD:$CO -d /tmp/vc \
   stubs/AgentLogger.kt stubs/ToolCall.kt stubs/ToolCallOutcome.kt \
   RepairVerification.kt JournalIoVerification.kt TurnJournalVerification.kt \
-  ../../app/src/main/java/com/beichen/polaris/core/agent/journal/RunEvent.kt \
-  ../../app/src/main/java/com/beichen/polaris/core/agent/journal/RunJournalRepair.kt \
-  ../../app/src/main/java/com/beichen/polaris/core/agent/journal/RunJournal.kt \
-  ../../app/src/main/java/com/beichen/polaris/core/agent/journal/TurnJournal.kt
+  ../../core/src/main/java/com/beichen/polaris/core/agent/journal/RunEvent.kt \
+  ../../core/src/main/java/com/beichen/polaris/core/agent/journal/RunJournalRepair.kt \
+  ../../core/src/main/java/com/beichen/polaris/core/agent/journal/RunJournal.kt \
+  ../../core/src/main/java/com/beichen/polaris/core/agent/journal/TurnJournal.kt
 
 java -cp /tmp/vc:$STD:$CO RepairVerificationKt        # 24 条
 java -cp /tmp/vc:$STD:$CO JournalIoVerificationKt     #  9 条

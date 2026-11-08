@@ -65,6 +65,7 @@ private fun realToolNames(srcRoot: File): List<String> {
 fun main(args: Array<String>) {
     val root = File(args.getOrElse(0) { "." })
     val src = File(root, "app/src/main/java")
+    val coreSrc = File(root, "core/src/main/java")
     println("== 能力清单（P3-1）==")
 
     // —— 1. 清单本身的常量自检 ——
@@ -181,14 +182,14 @@ fun main(args: Array<String>) {
 
     // —— 6. 单点纪律（静态） ——
     println("\n[6] 单点（静态）")
-    val exposure = File(src, "com/beichen/polaris/core/KernelExposure.kt").readText(Charsets.UTF_8)
+    val exposure = File(coreSrc, "com/beichen/polaris/core/KernelExposure.kt").readText(Charsets.UTF_8)
     check("KernelExposure 不再自持分组表", !exposure.contains("GROUP_NOTES =") && !exposure.contains("GROUP_PATCH ="))
     check("KernelExposure 的 groupOf 委托给清单", exposure.contains("CapabilityManifest.groupOf("))
 
     // P5-1 起自检搬进 core/capability（UI 层不该做能力自检），所以这里锚三处：
     // 宿主有没有调用、实现有没有真的跑 audit、调用点是否在 MCP 注册之前。
     val vm = File(src, "com/beichen/polaris/ui/ChatViewModel.kt").readText(Charsets.UTF_8)
-    val reporter = File(src, "com/beichen/polaris/core/capability/CapabilityAuditReporter.kt")
+    val reporter = File(coreSrc, "com/beichen/polaris/core/capability/CapabilityAuditReporter.kt")
         .readText(Charsets.UTF_8)
     val auditAt = vm.indexOf("CapabilityAuditReporter.report(")
     // R-07 起 MCP 工具同步改名为 refreshMcpTools()（注册/撤销统一在 McpToolSync 里决策）。
@@ -198,7 +199,7 @@ fun main(args: Array<String>) {
     check("审计在 MCP 注册之前", auditAt in 1 until mcpAt, "audit=$auditAt mcp=$mcpAt")
     check("自检实现在 core（不在 UI 层）", reporter.indexOf("CapabilityManifest.audit(tools)") >= 0)
     check("McpToolAdapter 强制审批（外部工具不得免审）",
-        File(src, "com/beichen/polaris/core/mcp/McpToolAdapter.kt")
+        File(coreSrc, "com/beichen/polaris/core/mcp/McpToolAdapter.kt")
             .readText(Charsets.UTF_8).contains("override val needsApproval: Boolean = true"))
 
     println("\n==== 结果：PASS=$pass FAIL=${fails.size} ====")

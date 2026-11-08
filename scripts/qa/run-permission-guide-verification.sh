@@ -31,7 +31,7 @@ fi
 [ -f "$STDLIB" ] || { echo "FATAL: 缺少 stdlib $STDLIB" >&2; exit 1; }
 
 SRC="
-$ROOT/app/src/main/java/com/beichen/polaris/core/capability/PermissionGuide.kt
+$ROOT/core/src/main/java/com/beichen/polaris/core/capability/PermissionGuide.kt
 $ROOT/scripts/qa/PermissionGuideVerification.kt
 "
 

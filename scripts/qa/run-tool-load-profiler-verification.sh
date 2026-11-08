@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
 OUT=/tmp/qa-verify-tool-load-profiler
-CORE="$ROOT/app/src/main/java/com/beichen/polaris/core"
+CORE="$ROOT/core/src/main/java/com/beichen/polaris/core"
 
 : "${QA_GRADLE_CACHE:=${AGENTKIT_GRADLE_CACHE:-${GRADLE_USER_HOME:-$HOME/.gradle}/caches/modules-2/files-2.1}}"
 CACHE="$QA_GRADLE_CACHE"

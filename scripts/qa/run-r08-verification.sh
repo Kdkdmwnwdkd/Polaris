@@ -15,6 +15,8 @@ cd "$ROOT"
 source "$ROOT/scripts/qa/lib/deps.sh"
 
 SRC=app/src/main/java/com/beichen/polaris
+# 3.5 拆模块：core/skill/terminal 已移到 :core 模块
+SRC_CORE=core/src/main/java/com/beichen/polaris
 HARNESS=scripts/qa/R08Verification.kt
 
 CACHE="$QA_GRADLE_CACHE"
@@ -49,11 +51,11 @@ RUNTIME="$STDLIB:$COROUTINES:$SER_JSON:$SER_CORE"
 COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS:$COROUTINES"
 
 SOURCES=(
-  "$SRC/core/llm/JsonSafe.kt"
-  "$SRC/core/agent/ShellCommandRules.kt"
-  "$SRC/core/tool/ToolCatalog.kt"
-  "$SRC/core/agent/ApprovalGrouping.kt"
-  "$SRC/core/agent/ApprovalScope.kt"
+  "$SRC_CORE/core/llm/JsonSafe.kt"
+  "$SRC_CORE/core/agent/ShellCommandRules.kt"
+  "$SRC_CORE/core/tool/ToolCatalog.kt"
+  "$SRC_CORE/core/agent/ApprovalGrouping.kt"
+  "$SRC_CORE/core/agent/ApprovalScope.kt"
 )
 
 compile_and_run() {
@@ -132,7 +134,7 @@ fi
 if [ "${AK_ALLOW_SOURCE_MUTATION:-}" = "1" ]; then
   echo ""
   echo "[M] 源码变异：把 isDestructive 改成恒 false，行为断言必须变红"
-  TARGET="$SRC/core/agent/ShellCommandRules.kt"
+  TARGET="$SRC_CORE/core/agent/ShellCommandRules.kt"
   BAK=$(mktemp); cp "$TARGET" "$BAK"
   restore() { [ -f "$BAK" ] && cp "$BAK" "$TARGET" && rm -f "$BAK"; }
   trap restore EXIT

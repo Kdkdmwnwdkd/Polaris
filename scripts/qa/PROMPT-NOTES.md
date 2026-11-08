@@ -28,7 +28,7 @@ ui_screenshot                   ❌ 屏幕捕获未开启
 
 | 文件 | 改动 |
 |------|------|
-| `app/src/main/java/com/beichen/polaris/core/AgentLoop.kt` | **A** `DEFAULT_SYSTEM_PROMPT` 新增「界面操作协议」段；新增 `SYSTEM_PROMPT_MAX_CHARS = 4000` 预算常量 |
+| `core/src/main/java/com/beichen/polaris/core/AgentLoop.kt` | **A** `DEFAULT_SYSTEM_PROMPT` 新增「界面操作协议」段；新增 `SYSTEM_PROMPT_MAX_CHARS = 4000` 预算常量 |
 | `app/src/main/java/com/beichen/polaris/automation/UiAutomationTools.kt` | **B** `ui_tree` 描述/系统提示、`ui_tap` 描述、`ui_click` 描述 + 失败 hint 同步 |
 | `app/src/main/java/com/beichen/polaris/tools/ShellTool.kt` | **B** `shell_run` 描述 + 系统提示：「不能操控界面」 |
 | `app/src/main/java/com/beichen/polaris/automation/UiScreenshotTool.kt` | **B** 失败返回改为可行动指引常量 `SCREEN_CAPTURE_OFF_GUIDANCE`（「权限中心 → 屏幕捕获 → 去开启」） |

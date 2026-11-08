@@ -34,9 +34,9 @@ if [ -z "${COROUTINES:-}" ] || [ ! -f "$COROUTINES" ]; then
 fi
 
 JV="$ROOT/scripts/qa/journal-verify"
-SRC="$ROOT/app/src/main/java/com/beichen/polaris/core/agent/journal"
+SRC="$ROOT/core/src/main/java/com/beichen/polaris/core/agent/journal"
 # P5-1：RunJournal 的修复路径要记「重放了几次」，故连上遥测（两个纯 JVM 文件，零 Android 依赖）
-TELEMETRY="$ROOT/app/src/main/java/com/beichen/polaris/core/telemetry"
+TELEMETRY="$ROOT/core/src/main/java/com/beichen/polaris/core/telemetry"
 OUT=/tmp/qa-verify-journal
 
 rm -rf "$OUT" && mkdir -p "$OUT"

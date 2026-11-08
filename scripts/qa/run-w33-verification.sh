@@ -11,8 +11,8 @@ KC_HOME=${KOTLINC_HOME:-/tmp/kotlinc}
 STDLIB=$KC_HOME/lib/kotlin-stdlib.jar
 SERCORE=${SER_CORE_JAR:-/tmp/w7-jars/kotlinx-serialization-core-jvm-1.6.3.jar}
 
-SRC1="$ROOT/app/src/main/java/com/beichen/polaris/core/job/JobModels.kt"
-SRC2="$ROOT/app/src/main/java/com/beichen/polaris/core/job/JobLogic.kt"
+SRC1="$ROOT/core/src/main/java/com/beichen/polaris/core/job/JobModels.kt"
+SRC2="$ROOT/core/src/main/java/com/beichen/polaris/core/job/JobLogic.kt"
 SRC3="$ROOT/scripts/qa/W33Verification.kt"
 
 if [ ! -x "$KC_HOME/bin/kotlinc" ]; then

@@ -22,8 +22,8 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
-STORE = 'app/src/main/java/com/beichen/polaris/core/ConversationStore.kt'
-SHARD = 'app/src/main/java/com/beichen/polaris/core/ConversationShard.kt'
+STORE = 'core/src/main/java/com/beichen/polaris/core/ConversationStore.kt'
+SHARD = 'core/src/main/java/com/beichen/polaris/core/ConversationShard.kt'
 HARNESS = 'scripts/qa/R10ShardVerification.kt'
 GUARD = 'scripts/qa/lib/r10_shard_guard.py'
 RUNNER = 'scripts/qa/run-r10-shard-verification.sh'

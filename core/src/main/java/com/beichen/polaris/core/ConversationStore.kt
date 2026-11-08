@@ -162,7 +162,14 @@ data class ConversationRecord(
  * tool 消息的 images（data URL）不落盘：截图动辄数百 KB，存进去文件会失控；
  * 重进会话时工具卡无图但结果文字还在——可接受的取舍（录屏反馈要的是「有记录」）。
  */
-internal fun UiItem.toMsgRecord(): MsgRecord = when (this) {
+/**
+ * 3.5 拆模块：从 internal 放宽为 public。
+ *
+ * internal 是**模块级**可见性，`:core` 独立成模块后 app 侧（ChatViewModel /
+ * ConversationProjection）就看不见了。这两个映射函数是宿主写会话与渲染会话的必经之路，
+ * 属于模块对外的稳定契约，放宽是结构变化带来的必要调整，不是封装被破坏。
+ */
+fun UiItem.toMsgRecord(): MsgRecord = when (this) {
     is UiItem.User -> MsgRecord(
         id = UUID.randomUUID().toString(),
         role = ROLE_USER,
@@ -243,7 +250,7 @@ internal fun List<MsgRecord>.toUiItems(): List<UiItem> = map { it.toUiItem() }
  * 单轮顺序：`user → trace（工具卡等）→ 选中变体`，与 [ConversationBranch.flatten] 一致。
  * trace 里的消息按 [MsgRecord.toUiItem] 还原（工具卡元数据默认，不参与切换）。
  */
-internal fun ConversationRecord.toUiItems(): List<UiItem> = buildList {
+fun ConversationRecord.toUiItems(): List<UiItem> = buildList {
     turns.forEachIndexed { turnIndex, turn ->
         add(UiItem.User(turn.user.content, turnIndex, timeMs = turn.user.timeMs))
         turn.trace.forEach { add(it.toUiItem()) }

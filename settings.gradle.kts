@@ -15,4 +15,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "AgentKit"
+include(":core")
 include(":app")

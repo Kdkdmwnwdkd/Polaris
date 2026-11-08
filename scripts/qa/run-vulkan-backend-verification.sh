@@ -16,11 +16,11 @@ set -uo pipefail
 
 cd "$(dirname "$0")/../.." || exit 1
 
-DIR="app/src/main/java/com/beichen/polaris/core/llm/local"
+DIR="core/src/main/java/com/beichen/polaris/core/llm/local"
 PROFILE="$DIR/LocalDeviceProfile.kt"
 CATALOG="$DIR/LocalBackendCatalog.kt"
 PROBE="$DIR/AndroidDeviceProbe.kt"
-JNI="app/src/main/java/com/beichen/polaris/core/llm/local/LlamaJni.kt"
+JNI="core/src/main/java/com/beichen/polaris/core/llm/local/LlamaJni.kt"
 CLIENT="$DIR/LocalLlamaClient.kt"
 CMAKELISTS="app/src/main/cpp/CMakeLists.txt"
 CPP="app/src/main/cpp/llama-jni.cpp"

@@ -12,12 +12,12 @@
 
 | 文件 | 改动 | 说明 |
 |---|---|---|
-| `app/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt` | 改 | A1 退避序列改可配常量 `3s → 10s → 25s`；新增 `networkRecovery` / `backoffPlan` 两个可注入参数；默认退避钩子改为「网络感知」`RetryBackoffPolicy.networkAware(plan, waiter)`；`callWithRetry` 语义不变 |
-| `app/src/main/java/com/beichen/polaris/core/agent/NetworkRecovery.kt` | **新增** | `NetworkRecoveryWaiter`（可注入接口，纯 Kotlin）+ `TIMER_ONLY`（纯定时降级）+ `ConnectivityNetworkRecoveryWaiter`（Android 默认实现，`registerDefaultNetworkCallback`） |
+| `core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt` | 改 | A1 退避序列改可配常量 `3s → 10s → 25s`；新增 `networkRecovery` / `backoffPlan` 两个可注入参数；默认退避钩子改为「网络感知」`RetryBackoffPolicy.networkAware(plan, waiter)`；`callWithRetry` 语义不变 |
+| `core/src/main/java/com/beichen/polaris/core/agent/NetworkRecovery.kt` | **新增** | `NetworkRecoveryWaiter`（可注入接口，纯 Kotlin）+ `TIMER_ONLY`（纯定时降级）+ `ConnectivityNetworkRecoveryWaiter`（Android 默认实现，`registerDefaultNetworkCallback`） |
 | `app/src/main/java/com/beichen/polaris/automation/AgentAccessibilityService.kt` | 改 | 新增纯函数决策层 `UiNodeMatcher` + `UiNodeSummary` / `UiMatchResult`（internal，纯数据/纯函数）；`clickByText` / `clickByResourceId` 改为「取数据 → 纯函数决策 → 执行动作」；新增只读 `lastClickCandidates` |
 | `app/src/main/java/com/beichen/polaris/automation/UiAutomationTools.kt` | 改（6 行） | `ui_click` 失败时把候选写进 `hint`（见 §5 越界说明） |
 | `app/src/main/java/com/beichen/polaris/automation/ScreenshotBridge.kt` | 改（≤5 行） | C：确认 `lastError` 已进日志；补统一关键字出口 `logLastError()` 并在 3 处写入点调用 |
-| `app/src/main/java/com/beichen/polaris/core/AgentLoop.kt` | 改（3 行） | 透传 `networkRecovery`（见 §5 越界说明） |
+| `core/src/main/java/com/beichen/polaris/core/AgentLoop.kt` | 改（3 行） | 透传 `networkRecovery`（见 §5 越界说明） |
 | `app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt` | 改（2 行） | 注入 `ConnectivityNetworkRecoveryWaiter(app)`（见 §5 越界说明） |
 
 ### QA

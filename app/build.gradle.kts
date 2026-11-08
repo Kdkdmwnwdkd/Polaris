@@ -164,6 +164,8 @@ android {
 }
 
 dependencies {
+    // 内核模块：Agent 循环 / 工具协议 / 会话存储 / 终端 / 模型客户端
+    implementation(project(":core"))
     // W-13 B 方案：Shizuku 提权通道（用户需安装 Shizuku 并授权一次）
     implementation("dev.rikka.shizuku:api:13.1.5")
     // W-17：定时任务调度（WorkManager 周期最长 15 分钟，与我们的最小间隔一致）

@@ -10,7 +10,11 @@ Android 本地 AI Agent —— Kotlin / Jetpack Compose，原创实现，四层�
 
 > 规模：Kotlin 源码 **301 文件 / 75,202 行** ｜ 源码级 QA **95 个 Kotlin harness + 116 个 shell 校验** ｜ 版本号 = CI 构建号（`1.N`）
 >
-> 上面这两个数字会随提交漂移，别当契约看：`find app/src/main -name '*.kt' | wc -l` 自己数一遍更快。
+> 上面这两个数字会随提交漂移，别当契约看：`find app/src/main core/src/main -name '*.kt' | wc -l` 自己数一遍更快。
+>
+> 工程是两个 Gradle 模块：`:core`（内核：Agent 循环 / 工具协议 / 会话存储 / 终端 / 模型客户端 / 技能执行）
+> 与 `:app`（界面与装配）。`:core` 不依赖 Compose，也不 import `ui` / `tools`——这条边界由编译器守，
+> 不再只是 arch guard 的文本检查。
 
 ---
 

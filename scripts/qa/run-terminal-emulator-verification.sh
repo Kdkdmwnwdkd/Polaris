@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
 OUT=/tmp/qa-verify-terminal-emulator
-SRC="$ROOT/app/src/main/java/com/beichen/polaris/terminal/TerminalEmulator.kt"
+SRC="$ROOT/core/src/main/java/com/beichen/polaris/terminal/TerminalEmulator.kt"
 
 : "${QA_GRADLE_CACHE:=${AGENTKIT_GRADLE_CACHE:-${GRADLE_USER_HOME:-$HOME/.gradle}/caches/modules-2/files-2.1}}"
 CACHE="$QA_GRADLE_CACHE"
