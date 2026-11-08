@@ -13,6 +13,8 @@
 | 新增（3.1 第一批） | — | `ModelListFacade` 124 / `MarketFacade` 279 / `KeyPoolFacade` 75 |
 | `ChatViewModel.kt`（3.1 第二批，2026-11-08） | 3578 行，仍混着运行日志 / 记忆库 / 定时任务 | 3540 行（守卫上限同步从 3578 降到 3540） |
 | 新增（3.1 第二批） | — | `LogsFacade` 38 / `MemoryFacade` 66 / `WorkflowFacade` 75 |
+| `ChatViewModel.kt`（3.1 第三批，2026-11-08） | 3540 行，仍混着设置开关 / 聊天外观 | 3527 行（守卫上限同步从 3540 降到 3527） |
+| 新增（3.1 第三批） | — | `SettingsFacade` 70 / `AppearanceFacade` 38 |
 
 ## 谁拥有什么
 
@@ -25,6 +27,8 @@
 | 运行日志卡片展示 / 清空 / 导出 | `LogsFacade` | 零依赖：只读写 AgentLogger 的内存缓冲，188 个成员里依赖最少的一域 |
 | 记忆列表 / 增删改查 / 检索 | `MemoryFacade` | store 本体留 VM（四个 Memory*Tool + prompt 注入共用），facade 持引用 |
 | 定时任务增删改查 / 立即运行 | `WorkflowFacade` | store 本体留 VM（四个 Workflow*Tool 共用）；「送进对话」经 isRunning/runPrompt 两回调注入 |
+| 自动化 / 通知 / 计划模式 / 任务模型四个开关 | `SettingsFacade` | 只做「一个状态 + 一次落盘」；读点在工具注册 / 生成链，写点全在 facade。能力重算仍由 VM 转发层调 |
+| 聊天背景图 URI + 浓度 | `AppearanceFacade` | 只依赖 configStore；位图不落盘（SAF URI），浓度 clamp 在 store |
 | 这条消息上不上屏？写进哪个会话？ | `ConversationProjection` | 显示态与持久态必须同源；落库目标 = owner ?: active |
 | 本地模型参数 / 文件 / 下载 / GPU 结论 | `ModelSettings` | 只与 `LocalLlamaSetting` + `GgufModelStore` 打交道，唯一外部动作是「切到本地供应商」 |
 | 备份包怎么组装、恢复后谁来刷新 UI | `BackupUseCase` | 六个 store 的快照 ↔ SAF 文件；UI 重载通过 `onRestored` 回调回宿主 |

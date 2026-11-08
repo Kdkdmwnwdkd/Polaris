@@ -451,9 +451,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 自动化总开关持久化。 */
     private val automationPrefs = AutomationPrefs(app)
 
-    /** 自动化状态流：供设置页实时反映开关与服务连接情况。 */
-    private val _automationEnabled = MutableStateFlow(automationPrefs.enabled)
-    override val automationEnabled: StateFlow<Boolean> = _automationEnabled.asStateFlow()
+    /**
+     * 自动化状态流：供设置页实时反映开关与服务连接情况。
+     * 3.1 第三批拆出，实现见 [SettingsFacade]（getter 惰性求值，构造期无人读它）。
+     */
+    override val automationEnabled: StateFlow<Boolean> get() = settingsFacade.automationEnabled
 
     private val _serviceConnected = MutableStateFlow(AutomationBridge.service != null)
     override val serviceConnected: StateFlow<Boolean> = _serviceConnected.asStateFlow()
@@ -908,7 +910,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // W-14：结构化追问 + 任务清单
         register(AskUserTool())
         // W-25：先计划后执行——提交多步计划并等待用户批准
-        register(PlanTool(broker = PlanBroker, planModeEnabled = { _planMode.value }))
+        register(PlanTool(broker = PlanBroker, planModeEnabled = { settingsFacade.planMode.value }))
         register(TodoWriteTool(todoStore) { _activeConversationId.value })
         register(TodoReadTool(todoStore) { _activeConversationId.value })
         // 应用操控（Phase 1 补口）：列出/启动/停止任意已安装应用——「叫它打开快手就能打开」。
@@ -1096,9 +1098,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     /** 设置页：切换自动化总开关（同时持久化并同步到桥）。 */
     override fun setAutomationEnabled(v: Boolean) {
-        automationPrefs.enabled = v
-        AutomationBridge.enabled = v
-        _automationEnabled.value = v
+        settingsFacade.setAutomationEnabled(v)
         refreshCapabilityPlans() // 总开关变化 → 刷新「操作手机界面」能力就绪度
     }
 
@@ -1221,37 +1221,33 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 模型配置持久化：进程重启也能还原，避免「明明填过却退回默认值」的不一致。 */
     private val configStore = ConfigStore(app)
 
-    // —— 功能五（P1-10）：回答完成提醒开关（设置页消费；落盘，与主题偏好不同纪律：
-    // 通知是用户显式 opt-in 的能力，跨启动应保持）——
-    private val _completionNotifyEnabled = MutableStateFlow(configStore.isCompletionNotifyEnabled())
-    override val completionNotifyEnabled: StateFlow<Boolean> = _completionNotifyEnabled.asStateFlow()
+    // —— 3.1 第三批：设置开关 / 聊天外观 —— 实现见 SettingsFacade / AppearanceFacade ——
+
+    /**
+     * 四个设置开关（自动化 / 通知 / 任务模式 / 任务模型）。
+     * 声明必须晚于 [configStore] 与 [automationPrefs]——两者由 facade 构造时读取。
+     */
+    private val settingsFacade = SettingsFacade(configStore, automationPrefs)
+
+    /** 聊天背景图（SAF URI + 浓度），见 [AppearanceFacade]。 */
+    private val appearanceFacade = AppearanceFacade(configStore)
+
+    /** 回答完成提醒开关（用户显式 opt-in，跨启动保持）。 */
+    override val completionNotifyEnabled: StateFlow<Boolean> get() = settingsFacade.completionNotifyEnabled
 
     /** 设置页开关：写回 ConfigStore（即时生效 + 跨启动保持）。 */
-    override fun setCompletionNotifyEnabled(enabled: Boolean) {
-        configStore.setCompletionNotifyEnabled(enabled)
-        _completionNotifyEnabled.value = enabled
-    }
+    override fun setCompletionNotifyEnabled(enabled: Boolean) = settingsFacade.setCompletionNotifyEnabled(enabled)
 
-    // —— hotfix32：聊天背景图（设置页选图 + 浓度；落盘跨启动）——
-    // 真机反馈「我可以用我照片的壁纸当成壁纸」——动态取色只染控件色，
-    // 这里给的是照片本体当对话页背景（位图不落 App 存储，只存 SAF URI）
-    private val _chatBackgroundUri = MutableStateFlow(configStore.chatBackgroundUri())
-    override val chatBackgroundUri: StateFlow<String?> = _chatBackgroundUri.asStateFlow()
+    /** 对话页背景图（SAF content:// 字符串；null = 无背景）。 */
+    override val chatBackgroundUri: StateFlow<String?> get() = appearanceFacade.chatBackgroundUri
 
-    private val _chatBackgroundAlpha = MutableStateFlow(configStore.chatBackgroundAlpha())
-    override val chatBackgroundAlpha: StateFlow<Float> = _chatBackgroundAlpha.asStateFlow()
+    override val chatBackgroundAlpha: StateFlow<Float> get() = appearanceFacade.chatBackgroundAlpha
 
     /** 设置/清除背景图（uri = SAF content:// 字符串；null = 清除）。 */
-    override fun setChatBackground(uri: String?) {
-        configStore.setChatBackgroundUri(uri)
-        _chatBackgroundUri.value = configStore.chatBackgroundUri()
-    }
+    override fun setChatBackground(uri: String?) = appearanceFacade.setChatBackground(uri)
 
     /** 调背景图浓度（clamp 在 ConfigStore 内，这里只透传）。 */
-    override fun setChatBackgroundAlpha(alpha: Float) {
-        configStore.setChatBackgroundAlpha(alpha)
-        _chatBackgroundAlpha.value = configStore.chatBackgroundAlpha()
-    }
+    override fun setChatBackgroundAlpha(alpha: Float) = appearanceFacade.setChatBackgroundAlpha(alpha)
 
     // —— 功能二：多模型配置（用户真机录屏反馈：「别人的模型可以搞好几个，你就只能搞一个」）——
     // _profiles = 全部档案，_activeProfileId = 当前生效档案；config 同名同型保留
@@ -1374,17 +1370,13 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     override val askUserPending: StateFlow<AskUserBroker.Question?> = AskUserBroker.pending
 
     // —— W-25：任务模式（PLAN / AUTO）与待批计划 ——
-    private val _planMode = MutableStateFlow(configStore.isPlanModeEnabled())
-    override val planMode: StateFlow<Boolean> = _planMode.asStateFlow()
+    // 开关状态见 [SettingsFacade]；待批计划仍在 PlanBroker。
+    override val planMode: StateFlow<Boolean> get() = settingsFacade.planMode
 
     /** UI 观察：有可批准的计划时显示计划卡片。 */
     override val planPending: StateFlow<PlanBroker.Plan?> = PlanBroker.pending
 
-    override fun setPlanMode(enabled: Boolean) {
-        _planMode.value = enabled
-        configStore.setPlanModeEnabled(enabled)
-        AgentLogger.i("Chat", "任务模式切换为 ${if (enabled) "先计划后执行" else "自动执行"}")
-    }
+    override fun setPlanMode(enabled: Boolean) = settingsFacade.setPlanMode(enabled)
 
     /** UI 回调：批准计划。 */
     override fun approvePlan(planId: String) {
@@ -1399,15 +1391,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     }
 
     // —— W-26：任务模型（标题生成等轻量任务用便宜模型，省钱降延迟）——
-    private val _taskProfileId = MutableStateFlow(configStore.taskProfileId())
-    override val taskProfileId: StateFlow<String> = _taskProfileId.asStateFlow()
+    override val taskProfileId: StateFlow<String> get() = settingsFacade.taskProfileId
 
     /** 设置任务模型档案；传空串 = 跟随主配置。 */
-    override fun setTaskProfile(id: String) {
-        _taskProfileId.value = id
-        configStore.setTaskProfileId(id)
-        AgentLogger.i("Chat", "任务模型切换为 ${id.ifBlank { "跟随主配置" }}")
-    }
+    override fun setTaskProfile(id: String) = settingsFacade.setTaskProfile(id)
 
     /** UI 回调：用户点了某个选项 / 提交了自由输入。 */
     override fun answerAskUser(questionId: String, choice: String) {
@@ -2757,7 +2744,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     // 功能五（P1-10）：回答完成提醒——开了开关且 App 在后台才发通知
                     // （前台提醒是噪音；权限被拒/被关由 CompletionNotifier 内部静默降级）。
                     // 只挂 send 路径：regenerate 是「重做这题」的主动操作，用户盯着概率极高
-                    if (_completionNotifyEnabled.value) {
+                    if (settingsFacade.completionNotifyEnabled.value) {
                         CompletionNotifier.notifyAnswerComplete(
                             app,
                             lastAnswer?.content.orEmpty()
@@ -3420,7 +3407,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 注意：任务请求**不**走 Key 池切换（轻量任务失败就放弃，不占用备用 Key 的冷却额度）。
      */
     private fun buildTaskClient(): LLMClient {
-        val taskId = _taskProfileId.value
+        val taskId = settingsFacade.taskProfileId.value
         val profile = if (taskId.isNotBlank()) _profiles.value.firstOrNull { it.id == taskId } else null
         val cfg = profile?.config ?: _config.value
         return providerManager.create(

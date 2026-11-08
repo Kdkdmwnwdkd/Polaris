@@ -1013,6 +1013,8 @@ private fun testAppearanceEnhancements() {
     val store = readSource("core/ConfigStore.kt")
     val vm = readSource("ui/ChatViewModel.kt")
     val settings = readSource("ui/SettingsScreen.kt")
+    // 3.1 第三批：设置开关状态随 SettingsFacade 搬出 VM，判据跟着读 facade
+    val settingsFacadeSrc = readSource("ui/SettingsFacade.kt")
     // W-67：动态取色开关从设置页搬到「壁纸与颜色」子页，断言跟着搬
     val appearance = readSource("ui/AppearanceScreen.kt")
     val scaffold = readSource("ui/AppScaffold.kt")
@@ -1062,8 +1064,8 @@ private fun testAppearanceEnhancements() {
         assertContains("V5", store, "sp.edit().putBoolean(KEY_COMPLETION_NOTIFY, enabled).apply()")
     }
     check("V6 VM：开关 StateFlow + 通知钩子只挂 send 成功路径") {
-        assertContains("V6", vm, "private val _completionNotifyEnabled = MutableStateFlow(configStore.isCompletionNotifyEnabled())")
-        assertContains("V6", vm, "val completionNotifyEnabled: StateFlow<Boolean> = _completionNotifyEnabled.asStateFlow()")
+        assertContains("V6", settingsFacadeSrc, "private val _completionNotifyEnabled = MutableStateFlow(configStore.isCompletionNotifyEnabled())")
+        assertContains("V6", settingsFacadeSrc, "val completionNotifyEnabled: StateFlow<Boolean> = _completionNotifyEnabled.asStateFlow()")
         assertContains("V6", vm, "fun setCompletionNotifyEnabled(enabled: Boolean)")
         assertContains("V6", vm, "CompletionNotifier.notifyAnswerComplete(")
         // 只挂 send：regenerate 是「重做这题」的主动操作，用户盯着概率极高，不通知
@@ -1387,6 +1389,8 @@ private fun testChatBackground() {
     // W-67：背景图分区从设置页搬到「壁纸与颜色」子页（ChatBackgroundSection → BackgroundSection）
     val appearance = readSource("ui/AppearanceScreen.kt")
     val loader = File("app/src/main/java/com/beichen/polaris/ui/BackgroundLoader.kt").readText()
+    // 3.1 第三批：背景图状态随 AppearanceFacade 搬出 VM，判据跟着读 facade
+    val bgFacade = readSource("ui/AppearanceFacade.kt")
 
     check("AA1 ConfigStore：URI + 浓度两键（URI 存轻量字符串，位图不占存储）") {
         assertContains("AA1", config, "private const val KEY_CHAT_BG_URI = \"chat_bg_uri\"")
@@ -1397,9 +1401,9 @@ private fun testChatBackground() {
         assertContains("AA1", config, "alpha.coerceIn(0.05f, 1.0f)")
     }
     check("AA2 VM：chatBackgroundUri/Alpha 状态 + setter（落盘即时生效）") {
-        assertContains("AA2", vm, "private val _chatBackgroundUri = MutableStateFlow(configStore.chatBackgroundUri())")
-        assertContains("AA2", vm, "val chatBackgroundUri: StateFlow<String?> = _chatBackgroundUri.asStateFlow()")
-        assertContains("AA2", vm, "val chatBackgroundAlpha: StateFlow<Float> = _chatBackgroundAlpha.asStateFlow()")
+        assertContains("AA2", bgFacade, "private val _chatBackgroundUri = MutableStateFlow(configStore.chatBackgroundUri())")
+        assertContains("AA2", bgFacade, "val chatBackgroundUri: StateFlow<String?> = _chatBackgroundUri.asStateFlow()")
+        assertContains("AA2", bgFacade, "val chatBackgroundAlpha: StateFlow<Float> = _chatBackgroundAlpha.asStateFlow()")
         assertContains("AA2", vm, "fun setChatBackground(uri: String?)")
         assertContains("AA2", vm, "fun setChatBackgroundAlpha(alpha: Float)")
     }
