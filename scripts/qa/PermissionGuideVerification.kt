@@ -195,7 +195,8 @@ fun main() {
     }
 
     check("电池白名单探测走 PowerManager.isIgnoringBatteryOptimizations") {
-        val src = read("app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt")
+        // 3.1 第四批起探测实现搬到 PermissionFacade（VM 只留转发），判据跟着实现走。
+        val src = read("app/src/main/java/com/beichen/polaris/ui/PermissionFacade.kt")
         assertTrue(
             "未使用 isIgnoringBatteryOptimizations",
             src.contains("isIgnoringBatteryOptimizations")

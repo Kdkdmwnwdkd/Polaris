@@ -200,9 +200,12 @@ fun main() {
     // 也不能用「第一个 fun / init 之前」当字段区：本类第一个方法是 `dismissInterruptedNotice`（413 行），
     // 而 `_shizukuStatus` 在 474 行——按那个切法会把要检查的字段**排除在外**，断言变成永远绿。
     // 这是上一版写法踩过的坑：变异（把探测加回去）跑完仍然全绿。
-    val statusDecl = fieldBlock(vm, "private val _shizukuStatus")
-    val installedDecl = fieldBlock(vm, "private val _shizukuInstalled")
-    val deviceCtxDecl = fieldBlock(vm, "private val _deviceContext")
+    // 3.1 第四批起，权限 / 调试通道的字段搬到 `PermissionFacade`（VM 只留 getter 转发）。
+    // 判据本身不变，只是被检查的文件换了：字段区仍然不许有 IPC，真值仍然由 refreshGrants 在 IO 上填。
+    val grants = File("app/src/main/java/com/beichen/polaris/ui/PermissionFacade.kt").readText()
+    val statusDecl = fieldBlock(grants, "private val _shizukuStatus")
+    val installedDecl = fieldBlock(grants, "private val _shizukuInstalled")
+    val deviceCtxDecl = fieldBlock(grants, "private val _deviceContext")
     check(
         "字段区不做 Shizuku 探测（status() = binderAlive + hasPermission，两次 binder IPC）",
         statusDecl.isNotEmpty() && installedDecl.isNotEmpty() &&
@@ -215,7 +218,7 @@ fun main() {
     )
     check(
         "真值仍由 refreshGrants 在 IO 上填（不是把探测整个删掉）",
-        "ShizukuShell.status()" in vm && "DeviceContextStore.snapshot()" in vm
+        "ShizukuShell.status()" in grants && "DeviceContextStore.snapshot()" in grants
     )
 
     println("\n== 结果：$pass 通过 / $fail 失败 ==")
