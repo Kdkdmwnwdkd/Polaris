@@ -4,6 +4,7 @@ import com.beichen.polaris.memory.MemoryItem
 import com.beichen.polaris.memory.MemoryStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 记忆库域（L9 / 3.1 第二批拆分，自 ChatViewModel 原地搬出）。

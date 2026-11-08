@@ -5,6 +5,7 @@ import com.beichen.polaris.workflow.Workflow
 import com.beichen.polaris.workflow.WorkflowStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 定时任务域（W-17 / 3.1 第二批拆分，自 ChatViewModel 原地搬出）。

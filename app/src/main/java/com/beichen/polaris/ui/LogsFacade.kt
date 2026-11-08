@@ -3,6 +3,7 @@ package com.beichen.polaris.ui
 import com.beichen.polaris.core.AgentLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 运行日志域（L8 / 3.1 第二批拆分，自 ChatViewModel 原地搬出）。
