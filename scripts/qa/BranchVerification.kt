@@ -356,7 +356,39 @@ private fun testSelectedVariantWritesHistory() {
     }
 }
 
-/* ------------------------------ 6. 边界 ------------------------------ */
+/* ------------------------------ 6. 容量上限 ------------------------------ */
+
+/**
+ * 轮数上限：超过 [ConversationStore.MAX_TURNS] 时丢最旧轮，并把丢弃数回传给调用方。
+ *
+ * 为什么这条要单独测：截断是这个类里**唯一会丢用户数据**的路径。旧实现静默丢掉，
+ * `appendMessage` 返回 Unit，界面没有任何办法知道「刚才悄悄删了一轮」。
+ * 这里把三件事钉死：恰好到上限不丢、超一轮丢一轮、丢完仍是上限且丢的是最早那条。
+ */
+private fun testTurnCap() {
+    check("E1 超过 MAX_TURNS：丢最旧轮并回传丢弃数") {
+        val dir = Files.newTempDir("branch-cap")
+        val store = ConversationStore(File(dir, "conversations.json"))
+        val id = store.create()
+        val cap = ConversationStore.MAX_TURNS
+
+        var dropped = -1
+        repeat(cap) { i ->
+            dropped = store.appendMessage(id, MsgRecord("u$i", ROLE_USER, "q$i"))
+        }
+        assertEquals("刚好 $cap 轮不该丢", 0, dropped)
+
+        dropped = store.appendMessage(id, MsgRecord("u-over", ROLE_USER, "q-over"))
+        assertEquals("第 ${cap + 1} 轮应丢 1 轮", 1, dropped)
+
+        val turns = store.load(id)!!.turns
+        assertEquals("总轮数封顶", cap, turns.size)
+        assertEquals("丢的是最早那轮", "q1", turns.first().user.content)
+        assertEquals("留的是最新那轮", "q-over", turns.last().user.content)
+    }
+}
+
+/* ------------------------------ 7. 边界 ------------------------------ */
 
 private fun testBoundaries() {
     println("\n== ⑥ 边界：空会话 / 单变体 / 异常数据 ==")
@@ -411,6 +443,7 @@ fun main() {
     testLegacyMigration()
     testReaskFromMiddle()
     testSelectedVariantWritesHistory()
+    testTurnCap()
     testBoundaries()
 
     println("\n=== 结果：$passed passed, ${failures.size} failed ===")

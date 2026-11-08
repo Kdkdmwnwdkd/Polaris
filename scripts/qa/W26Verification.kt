@@ -1,6 +1,9 @@
 import com.beichen.polaris.core.BackupArchive
 import com.beichen.polaris.core.BackupManifest
 import com.beichen.polaris.core.agent.TitleLogic
+import java.io.ByteArrayOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 /**
  * W-26 harness：AI 标题清洗（TitleLogic）+ 备份含备用 Key 池（BackupArchive）。
@@ -37,6 +40,32 @@ private fun manifest(conv: Int, mem: Int) = BackupManifest(
     promptCount = 0,
     hasPrompts = false
 )
+
+/**
+ * 手工打一个 ZIP，用来构造 [BackupArchive.create] 造不出来的非法组合
+ * （多余成员 / 版本过新 / 条数不符 / 缺成员）。
+ *
+ * 为什么不用 create：这些恰恰是**恶意或损坏**的包，正常的打包入口不可能产出它们；
+ * 用 create 构造等于「用被测函数验证自己」。
+ */
+private fun zipOf(vararg entries: Pair<String, String>): ByteArray {
+    val bos = ByteArrayOutputStream()
+    ZipOutputStream(bos).use { zip ->
+        for ((name, text) in entries) {
+            zip.putNextEntry(ZipEntry(name))
+            zip.write(text.toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
+        }
+    }
+    return bos.toByteArray()
+}
+
+/** 与 [BackupManifest] 的字段名一一对应；promptCount/hasPrompts 有默认值，可省。 */
+private fun manifestJson(
+    version: Int = BackupArchive.VERSION,
+    conv: Int = 0,
+    mem: Int = 0
+) = """{"version":$version,"createdAt":1700000000000,"conversationCount":$conv,"memoryCount":$mem,"hasConfig":false}"""
 
 fun main() {
     println("=== W-26 标题清洗 + 备份 Key 池 ===")
@@ -136,6 +165,51 @@ fun main() {
     check("损坏的 zip / 缺 manifest 仍被拒（新成员不放宽校验）") {
         val bad = BackupArchive.read("not a zip".toByteArray())
         assertTrue("拒绝", bad is BackupArchive.ReadResult.Invalid)
+    }
+
+    // ---------- BackupArchive：信封与白名单的**负向**契约 ----------
+    // 上面三条是 happy path；下面四条守的是「包不对劲时会怎样」。
+    // 这些包正常的 create() 造不出来，只能手工拼 ZIP——用 create 造等于拿被测函数
+    // 自己验证自己。
+
+    check("非白名单成员被忽略：包里塞 ../ 穿越名与陌生文件，不影响合法成员解析") {
+        val bytes = zipOf(
+            "manifest.json" to manifestJson(),
+            "conversations.json" to "[]",
+            "memories.json" to "[]",
+            "../evil.json" to """{"pwned":true}""",
+            "extra.bin" to "junk"
+        )
+        val read = BackupArchive.read(bytes)
+        assertTrue("多余成员不应导致整包被拒", read is BackupArchive.ReadResult.Ok)
+        read as BackupArchive.ReadResult.Ok
+        assertTrue("合法成员照读", read.conversationsJson == "[]")
+    }
+
+    check("manifest 版本高于 VERSION 被拒（不猜未来格式）") {
+        val bytes = zipOf(
+            "manifest.json" to manifestJson(version = BackupArchive.VERSION + 1),
+            "conversations.json" to "[]",
+            "memories.json" to "[]"
+        )
+        assertTrue("拒绝", BackupArchive.read(bytes) is BackupArchive.ReadResult.Invalid)
+    }
+
+    check("条数与清单不符被拒（清单说 3 条，实际 0 条）") {
+        val bytes = zipOf(
+            "manifest.json" to manifestJson(conv = 3),
+            "conversations.json" to "[]",
+            "memories.json" to "[]"
+        )
+        assertTrue("拒绝", BackupArchive.read(bytes) is BackupArchive.ReadResult.Invalid)
+    }
+
+    check("缺 conversations 成员的包被拒（不能恢复一半）") {
+        val bytes = zipOf(
+            "manifest.json" to manifestJson(),
+            "memories.json" to "[]"
+        )
+        assertTrue("拒绝", BackupArchive.read(bytes) is BackupArchive.ReadResult.Invalid)
     }
 
     println("\n=== 汇总: PASS=$pass FAIL=$fail ===")
