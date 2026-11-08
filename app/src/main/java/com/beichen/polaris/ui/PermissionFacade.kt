@@ -28,8 +28,8 @@ import kotlinx.coroutines.launch
  * 通知监听、使用情况访问、电池白名单、Shizuku 三态、设备上下文快照，没有任何一个
  * 参与生成链的决策——它们只在权限页 / 控制台 / 就绪卡片被**读**，写点全在这里。
  *
- * 与宿主的唯一接触面是 [onGrantsChanged]：权限或通道状态变化后，能力就绪度需要重算
- * （`refreshCapabilityPlans` 的逻辑在宿主，facade 不反向依赖 ViewModel，也不持有
+ * 与宿主的唯一接触面是 `refreshGrants(afterProbe)` 的那个回调：权限探测结束后，
+ * 能力就绪度需要重算（逻辑在宿主，facade 不反向依赖 ViewModel，也不持有
  * `TerminalBackendFactory`——那是 shell 能力快照的事，属于就绪度域）。
  *
  * 字段与方法体逐行照搬，包括注释里记录的历史坑：
@@ -39,7 +39,6 @@ import kotlinx.coroutines.launch
 internal class PermissionFacade(
     private val app: Application,
     private val scope: CoroutineScope,
-    private val onGrantsChanged: () -> Unit = {},
 ) {
 
     /** 通知访问权限是否已授予（供感知层卡片展示）。 */
@@ -88,8 +87,6 @@ internal class PermissionFacade(
         _shizukuStatus.value = ShizukuShell.status()
         _shizukuInstalled.value = ShizukuShell.isInstalled(app)
         _shizukuUiState.value = ShizukuShell.uiState(_shizukuStatus.value, _shizukuInstalled.value)
-        // 状态变化可能让「跑 shell 命令」的实际路径改变，能力链需重算
-        onGrantsChanged()
     }
 
     /**
@@ -162,8 +159,14 @@ internal class PermissionFacade(
         }
     }
 
-    /** 刷新权限授予状态。**异步**：5 处 IPC 实测 700~1000ms（启动最慢段、不吃类热缓存），压主线程=首帧白等一秒。 */
-    fun refreshGrants(): Job = scope.launch(Dispatchers.IO) {
+    /**
+     * 刷新权限授予状态。**异步**：5 处 IPC 实测 700~1000ms（启动最慢段、不吃类热缓存），压主线程=首帧白等一秒。
+     *
+     * [afterProbe] 在探测结束后、仍在同一协程内执行——能力就绪度重算挂在这里，
+     * 保证「读到的是这一轮探测的结果」。回调由调用方按次传入，不是构造期捕获：
+     * 双向持有会让类型推断陷入递归（拆分时踩过，见 ChatViewModel 里的注释）。
+     */
+    fun refreshGrants(afterProbe: () -> Unit = {}): Job = scope.launch(Dispatchers.IO) {
         // 通知监听权限：检查 enabled_notification_listeners 设置里是否包含本服务组件（免依赖、全版本可用）
         val cn = ComponentName(app, AgentNotificationListener::class.java)
         val enabledListeners = Settings.Secure.getString(app.contentResolver, "enabled_notification_listeners")
@@ -191,7 +194,7 @@ internal class PermissionFacade(
         _shizukuUiState.value = ShizukuShell.uiState(_shizukuStatus.value, _shizukuInstalled.value)
         // L4 主动感知：刷新 UI 展示的设备上下文快照
         _deviceContext.value = DeviceContextStore.snapshot()
-        // DoD⑤：权限/环境变化后重算能力就绪度（能力链一次走完），并逐级落降级轨迹日志
-        onGrantsChanged()
+        // DoD⑤：权限/环境变化后重算能力就绪度（能力链一次走完）
+        afterProbe()
     }
 }

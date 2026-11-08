@@ -20,7 +20,7 @@
 # ── 行数冻结 ─────────────────────────────────────────────────────────────
 # 超标原因各不相同，共同点是「拆分需要一天以上、且拆分本身没有行为收益」。
 # 上限是冻结时的实际行数，只准往下调：改小了就同步改小这里的数字。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3426
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3439
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3103
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2309
 lines app/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504

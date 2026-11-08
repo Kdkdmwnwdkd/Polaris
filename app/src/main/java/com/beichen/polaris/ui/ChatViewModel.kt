@@ -457,11 +457,12 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      *
      * 通知监听、使用情况访问、电池白名单、Shizuku 三态与设备上下文快照的**写点全在 facade**；
      * 这里只做转发，字段初值仍是静态值（探测在 IO 上由 [refreshGrants] 填）。
-     * 状态变化后的能力就绪度重算通过构造回调接回 [capabilityReadiness]——facade 不反向依赖本类。
+     *
+     * 能力就绪度不在这里重算：facade 不持有任何回调，也不认识 [capabilityReadiness]，
+     * 「状态变化 → 重算」由下面的转发层显式完成。构造期双向引用会让 K1 的类型推断
+     * 直接判死（`Type checking has run into a recursive problem`），所以依赖只能单向。
      */
-    private val permissionFacade = PermissionFacade(app, viewModelScope) {
-        capabilityReadiness.refresh()
-    }
+    private val permissionFacade = PermissionFacade(app, viewModelScope)
 
     /** 通知访问权限是否已授予（供感知层卡片展示）。 */
     override val notificationGranted: StateFlow<Boolean> get() = permissionFacade.notificationGranted
@@ -484,7 +485,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     override val shizukuUiState: StateFlow<ShizukuShell.UiState> get() = permissionFacade.shizukuUiState
 
     /** 重新探测调试通道状态（进入权限页 / 授权回调后调用）。 */
-    override fun refreshShizukuStatus() = permissionFacade.refreshShizukuStatus()
+    override fun refreshShizukuStatus() {
+        permissionFacade.refreshShizukuStatus()
+        // 状态变化可能让「跑 shell 命令」的实际路径改变，能力链需重算
+        capabilityReadiness.refresh()
+    }
 
     /**
      * 调试通道入口动作（权限页「去开启/去授权」）：
@@ -492,7 +497,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      *  - 未授权 → 发起授权请求（弹窗由 Shizuku 提供，结果回调后刷新）；
      *  - 就绪 → 仅刷新状态。
      */
-    override fun handleShizukuAction(context: Context) = permissionFacade.handleShizukuAction(context)
+    override fun handleShizukuAction(context: Context) {
+        permissionFacade.handleShizukuAction(context)
+        capabilityReadiness.refresh()
+    }
 
     /** 当前设备上下文快照（L4 主动感知）：供自动化页展示 Agent 实时感知到的手机状态。 */
     override val deviceContext: StateFlow<DeviceContext> get() = permissionFacade.deviceContext
@@ -719,8 +727,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 能力就绪度快照（DoD⑤）：逐条能力给出「选中的执行路径 + 降级轨迹 + 最终引导」。
      * 3.1 第四批拆出，裁决逻辑见 [CapabilityReadiness]；两份 Android 侧快照由这里注入，
      * 因为「proot/rootfs 在不在、Shizuku 通不通」属于各自的域，不归裁决器管。
+     *
+     * 类型显式标注：lambda 反向引用 [permissionFacade]，交给推断会撞上 K1 的递归问题。
      */
-    private val capabilityReadiness = CapabilityReadiness { capability ->
+    private val capabilityReadiness: CapabilityReadiness = CapabilityReadiness { capability: Capability ->
         when (capability) {
             Capability.RUN_SHELL -> terminalBackendFactory.shellCapabilitySnapshot(
                 shizukuAvailable = permissionFacade.shizukuReady
@@ -1061,7 +1071,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         permissionFacade.openBatteryOptimizationSettings(ctx)
 
     /** 刷新权限授予状态。**异步**：[PermissionFacade.refreshGrants] 在 IO 上探测 5 处状态。 */
-    override fun refreshGrants(): Job = permissionFacade.refreshGrants()
+    override fun refreshGrants(): Job = permissionFacade.refreshGrants {
+        // DoD⑤：权限/环境变化后重算能力就绪度（能力链一次走完），逐级落降级轨迹日志由裁决器做
+        capabilityReadiness.refresh()
+    }
 
     // —— 功能三：聊天记录（用户真机录屏反馈：「人家都有聊天记录对话记录，你这都没有」）——
     // 会话持久化：conversations.json 放 filesDir，原子写 + .bak（形态学 MemoryStore）
