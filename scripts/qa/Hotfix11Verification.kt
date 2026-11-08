@@ -1484,7 +1484,7 @@ private fun testJsonSafeAndGlobalBackground() {
             "core/ModelListFetcher.kt"
         )
         files.forEach { rel ->
-            val src = File(base + rel).readText()
+            val src = readSource(rel)
             assertTrue("AB2($rel) 残留 .jsonObject", !src.contains(".jsonObject"))
             assertTrue("AB2($rel) 残留 .jsonPrimitive", !src.contains(".jsonPrimitive"))
             assertTrue("AB2($rel) 残留 .jsonArray", !src.contains(".jsonArray"))
