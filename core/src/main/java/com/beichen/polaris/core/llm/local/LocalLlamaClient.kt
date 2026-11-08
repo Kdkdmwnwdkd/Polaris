@@ -298,7 +298,11 @@ class LocalLlamaClient(
         val eff = effectivePrompt(messages, tools)
         val prompt = buildPrompt(eff.messages)
         AgentLogger.llmRequest(currentModelLabel(), eff.messages.size, eff.tools.size)
-        val startedAt = System.currentTimeMillis()
+        val startedAt = System.currentTimeMillis() // 日志耗时用墙钟：跨设备对照时不因校时/时区错位
+        // 停滞看门狗必须单调：墙钟回拨会让 idleMs 变成负数，卡死的生成永远判不出来
+        // （用户对着空白等，日志里一句异常都没有）；前跳则会立刻误判停滞，把正常的
+        // 生成 stop 掉。与 lastActivity 成对同源，不能一个墙钟一个单调。
+        val watchdogStart = Monotonic.nowMs()
         AgentLogger.i(
             "LocalLlama",
             "开始生成：${if (setting.agentMode) "Agent 模式" else "轻聊模式"}，" +
@@ -354,7 +358,7 @@ class LocalLlamaClient(
         var stalled = false
         var stalledBudget = 0L
         var cancelled = false
-        var lastActivity = startedAt
+        var lastActivity = watchdogStart
         while (thread.isAlive) {
             // join(timeout) 不是挂起点：协程被取消时这里不会自己抛异常，
             // 必须显式收手，否则「离开对话页」后还会白等一个轮询周期。
@@ -365,8 +369,8 @@ class LocalLlamaClient(
                 break
             }
             thread.join(POLL_INTERVAL_MS)
-            if (tap.drain() > 0) lastActivity = System.currentTimeMillis()
-            val idleMs = System.currentTimeMillis() - lastActivity
+            if (tap.drain() > 0) lastActivity = Monotonic.nowMs()
+            val idleMs = Monotonic.nowMs() - lastActivity
             val noFirstToken = firstPieceAt.get() == 0L
             val budget = if (noFirstToken) firstTokenBudgetMs(tap.warmupMs) else GEN_STALL_TIMEOUT_MS
             if (idleMs > budget) {
