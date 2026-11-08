@@ -1128,6 +1128,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         ownerActive = { isOwnerActive() },
         onStoreChanged = { refreshConversations() },
         lock = msgLock,
+        onHistoryTruncated = ::noticeHistoryTruncated,
     )
     override val messages: StateFlow<List<UiItem>> = projection.items
 
@@ -1861,6 +1862,21 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     /** 「知道了」→ 收起截断提示（下一条消息发出前不再打扰）。 */
     override fun dismissTruncationNotice() { _truncationNotice.value = null }
+
+    /**
+     * 本地历史超过 [ConversationStore.MAX_TURNS] 被截断时给一次可见提示。
+     *
+     * 复用截断 banner（用户体验上是同一件事：有内容没留下），但文案必须与「回答达到
+     * 输出上限」区分开——一个是我们这边存不下、删了旧的，一个是模型没写完。
+     *
+     * 已有提示时不覆盖：同一会话连续追加会连着触发，覆盖只会让文案闪。
+     */
+    private fun noticeHistoryTruncated(dropped: Int) {
+        if (_truncationNotice.value == null) {
+            _truncationNotice.value =
+                "⚠️ 本会话已超过 ${ConversationStore.MAX_TURNS} 轮，最早的 $dropped 轮已从本地记录删除"
+        }
+    }
 
     /** 过程事件 → UI 实时更新（Hotfix2）。工具并行执行时多线程回调，读写列表加锁防丢更新。
      * hotfix30：_messages 是 active 会话的显示态——owner!=active（用户切到别的会话）

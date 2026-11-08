@@ -288,8 +288,15 @@ private fun parseToolArgs(raw: String?): JsonObject {
 /**
  * 聊天记录存储：多会话 + 消息持久化（功能三）。
  *
- * 容量策略：单会话消息数封顶 [MAX_MESSAGES] 条，超出丢最旧——聊天记录要「有」，
+ * 容量策略：单会话**轮数**封顶 [MAX_TURNS] 轮，超出丢最旧一轮——聊天记录要「有」，
  * 但不能让一个超长会话把文件撑到影响读写性能。
+ *
+ * 注意这里的单位是「轮」不是「条」：一轮里可能有 1 条 user、N 条助手变体、M 条工具轨迹，
+ * 所以 200 轮对应的记录数远大于 200。旧名字 `MAX_MESSAGES` 与作用对象不符，容易让人
+ * 按「消息条数」估算容量（也因此误判了截断的触发频率）。
+ *
+ * 截断是**有损**的：最早的轮次会真的从文件里消失。所以 [appendMessage] 会把丢弃的轮数
+ * 返回给调用方，由界面给一次可见提示——静默删数据比删数据本身更糟。
  */
 class ConversationStore(file: File) {
 
@@ -449,15 +456,21 @@ class ConversationStore(file: File) {
      *    call.id 的两次写入，后者必须替换前者，与内存 _messages 的 replace 语义一致；
      * ② 首条 user 消息且标题仍是「新对话」时，title = 内容前 [TITLE_CHARS] 字符
      *    （和别家聊天记录一样自动命名，省用户手打）。
+     *
+     * @return 本次因超过 [MAX_TURNS] 而丢弃的轮数；0 = 没发生截断。
+     *   调用方（界面投影）据此给一次可见提示——这条路径会真的删除本地历史，
+     *   不能只在日志里记一笔。
      */
-    fun appendMessage(convId: String, rec: MsgRecord) {
+    fun appendMessage(convId: String, rec: MsgRecord): Int {
+        var dropped = 0
         synchronized(lock) {
             val idx = items.indexOfFirst { it.id == convId }
             // 会话已被删：静默丢弃，不崩溃（VM 有运行中守卫，双保险）
-            if (idx < 0) return
+            if (idx < 0) return 0
             val conv = items[idx]
             // Phase 2 DoD②：先并入轮次变体结构，再据其展开为平坦缓存 messages
-            val turns = appendToTurns(conv.turns, rec)
+            val (turns, dropCount) = appendToTurns(conv.turns, rec)
+            dropped = dropCount
             val messages = ConversationBranch.flatten(turns)
             var title = conv.title
             if (title == DEFAULT_TITLE && rec.role == ROLE_USER && rec.content.isNotBlank()) {
@@ -471,7 +484,14 @@ class ConversationStore(file: File) {
             )
             dirtyIds.add(convId)
         }
+        if (dropped > 0) {
+            AgentLogger.w(
+                "ConversationStore",
+                "会话 $convId 超过 $MAX_TURNS 轮，已从本地记录删除最早的 $dropped 轮"
+            )
+        }
         schedulePersist()
+        return dropped
     }
 
     /**
@@ -481,9 +501,12 @@ class ConversationStore(file: File) {
      *    原变体保留可切回）；
      *  - tool → 按 id upsert 进**当前轮的 trace**（ToolStarted 空结果占位 → ToolFinished 终态覆盖，
      *    语义与旧 `messages` 的 replace 一致）。
-     * 轮数超 [MAX_MESSAGES] 丢最旧轮；无当前轮（异常数据）时安静忽略，绝不崩溃。
+     * 轮数超 [MAX_TURNS] 丢最旧轮；无当前轮（异常数据）时安静忽略，绝不崩溃。
+     *
+     * @return 新的轮次列表 + 丢弃的轮数（0 = 没超限）。丢了多少必须回传：
+     *   这是**有损**操作，调用方要据此提示用户，不能只在日志里留痕。
      */
-    private fun appendToTurns(turns: List<TurnRecord>, rec: MsgRecord): List<TurnRecord> {
+    private fun appendToTurns(turns: List<TurnRecord>, rec: MsgRecord): Pair<List<TurnRecord>, Int> {
         val out = turns.toMutableList()
         when (rec.role) {
             ROLE_USER -> out.add(TurnRecord(user = rec))
@@ -507,8 +530,12 @@ class ConversationStore(file: File) {
             }
             else -> Unit
         }
-        while (out.size > MAX_MESSAGES) out.removeAt(0)
-        return out
+        var dropped = 0
+        while (out.size > MAX_TURNS) {
+            out.removeAt(0)
+            dropped++
+        }
+        return out to dropped
     }
 
     /**
@@ -974,20 +1001,25 @@ class ConversationStore(file: File) {
         if (text.isBlank()) null
         else runCatching { json.decodeFromString<List<ConversationRecord>>(text) }.getOrNull()
 
-    private companion object {
+    companion object {
         /** 去抖窗口：足够合并一次流式输出的高频追加，又短到用户感知不到「刚发的话没存」。 */
-        const val PERSIST_DEBOUNCE_MS = 400L
+        private const val PERSIST_DEBOUNCE_MS = 400L
 
-        /** 单会话消息数封顶（超出丢最旧）。 */
-        const val MAX_MESSAGES = 200
+        /**
+         * 单会话**轮数**封顶（超出丢最旧轮）。
+         *
+         * 公开是给界面拼提示文案用的——截断是有损操作，文案里的数字必须与判据同源，
+         * 不能在两处各写一个 200。
+         */
+        const val MAX_TURNS = 200
 
         /** 自动命名时取用户首条消息的前 N 个字符。 */
-        const val TITLE_CHARS = 12
+        private const val TITLE_CHARS = 12
 
         /** R-10：分片目录后缀（`conversations.json` → `conversations.d/`）。 */
-        const val SHARD_DIR_SUFFIX = ".d"
+        private const val SHARD_DIR_SUFFIX = ".d"
 
         /** R-10：可直接当文件名的会话 id（UUID 与备份数据均落在此集合内）。 */
-        val SAFE_ID = Regex("[A-Za-z0-9_-]{1,128}")
+        private val SAFE_ID = Regex("[A-Za-z0-9_-]{1,128}")
     }
 }

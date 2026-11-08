@@ -52,6 +52,13 @@ internal class ConversationProjection(
      * `synchronized` 可重入，同线程二次进入不会死锁。
      */
     private val lock: Any,
+    /**
+     * 本地历史因超过 [ConversationStore.MAX_TURNS] 被截断时回调（参数 = 丢弃的轮数）。
+     *
+     * 默认空实现让既有构造点（含 harness）零改动。生产必须接上：这条路径会真的
+     * 从文件里删掉最早的对话，静默删数据比删数据本身更糟。
+     */
+    private val onHistoryTruncated: (dropped: Int) -> Unit = {},
 ) {
 
     private val _items = MutableStateFlow(loadOf(activeId()))
@@ -120,7 +127,8 @@ internal class ConversationProjection(
      * map+sort（synchronized 内、无磁盘 IO），可负担。
      */
     fun appendToStore(item: UiItem) {
-        store.appendMessage(ownerId() ?: activeId(), item.toMsgRecord())
+        val dropped = store.appendMessage(ownerId() ?: activeId(), item.toMsgRecord())
+        if (dropped > 0) onHistoryTruncated(dropped)
         onStoreChanged()
     }
 
