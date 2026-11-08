@@ -42,13 +42,14 @@ android {
 }
 
 dependencies {
+    // 五个共用依赖的版本号在 gradle/libs.versions.toml，与 :app 同源。
     // NotificationCompat / NotificationManagerCompat / FileProvider / getSystemService
-    api("androidx.core:core-ktx:1.13.1")
-    api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+    api(libs.androidx.core.ktx)
+    api(libs.kotlinx.coroutines.android)
+    api(libs.kotlinx.serialization.json)
     // 模型客户端（OpenAI 兼容 / GitHub 构建服务）全部走 OkHttp
-    api("com.squareup.okhttp3:okhttp:4.12.0")
+    api(libs.okhttp)
     // 技能脚本执行引擎（skill/SkillExecutor：ClassShutter + 指令计数熔断）。
     // 纯 Java，无需 NDK；换 QuickJS 时只替换 JsEngine 实现。
-    api("org.mozilla:rhino-runtime:1.7.14")
+    api(libs.rhino.runtime)
 }

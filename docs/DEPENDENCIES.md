@@ -34,14 +34,16 @@
 
 | 模块 | 依赖 |
 |---|---|
-| `:core` | `androidx.core:core-ktx` 1.13.1 / `kotlinx-coroutines-android` 1.8.1 / `kotlinx-serialization-json` 1.6.3 / `okhttp` 4.12.0 / `rhino-runtime` 1.7.14 —— **全部用 `api` 声明** |
+| `:core` | `androidx.core:core-ktx` 1.13.1 / `kotlinx-coroutines-android` 1.8.1 / `kotlinx-serialization-json` 1.6.3 / `okhttp` 4.12.0 / `rhino-runtime` 1.7.14 —— **全部用 `api` 声明**，版本取自 `gradle/libs.versions.toml` |
 | `:app` | 上表其余全部（Compose、WorkManager、Shizuku、ML Kit、Rhino…），另有 `implementation(project(":core"))` |
 
 两条约束：
 
-1. **五个共用依赖的版本号必须两边一致**。它们目前各写一份（`core/build.gradle.kts` 与
-   `app/build.gradle.kts`），没有 version catalog 兜底——升级时两处一起改。`:core` 用 `api`
-   是为了让 app 侧能解析出现在 core 公共签名里的 okhttp / serialization 类型。
+1. **五个共用依赖的版本号只在 `gradle/libs.versions.toml` 写一份**（2026-11-08 收口）。
+   `:core` 与 `:app` 都用 `libs.*` 引用，升级改一处即可。搬进目录的判据是「第二个模块
+   要用它」——只有 app 用的 Compose / WorkManager / Shizuku / ML Kit 仍留在
+   `app/build.gradle.kts` 里，不为了统一制造一层没有共享价值的间接。
+   `:core` 用 `api` 是为了让 app 侧能解析出现在 core 公共签名里的 okhttp / serialization 类型。
 2. **`:core` 不得依赖 Compose、WorkManager、Shizuku、ML Kit**。前三者属于界面/宿主调度，
    ML Kit 只被 `ui/MediaScreen` 用。要加新依赖先问：它是不是内核跑起来就必需的？
 

@@ -181,12 +181,13 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
 
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // 与 :core 共用的五个依赖走版本目录，避免两处各写一份版本号
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.okhttp)
     // Skill 脚本执行引擎（纯 Java，无需 NDK）；将来要换 QuickJS 只需替换 JsEngine 实现
-    implementation("org.mozilla:rhino-runtime:1.7.14")
-    implementation("androidx.core:core-ktx:1.13.1")
+    implementation(libs.rhino.runtime)
+    implementation(libs.androidx.core.ktx)
     // W-24：离线 OCR（中文 + 英文混排，模型打进 APK，不依赖 Google Play 服务/GMS）
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 }

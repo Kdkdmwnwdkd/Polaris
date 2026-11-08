@@ -1,0 +1,26 @@
+# 依赖版本目录（Gradle 8 默认位置，settings 无需额外配置）。
+#
+# 只收**被多个模块共用**的依赖。3.5 拆出 :core 之后，下面五个坐标在
+# app/build.gradle.kts 与 core/build.gradle.kts 里各写了一份版本号——
+# 两处不同步会得到「app 用 1.8.1、core 用 1.7.x」这类极难排查的运行时问题
+# （同一份类被两个 classloader 视图解析，或干脆编译期就报重复类）。
+#
+# 其余依赖（Compose BOM、WorkManager、ML Kit、Shizuku）只有 app 用，留在 app 脚本里，
+# 不为了「统一」而制造一层没有共享价值的间接。
+#
+# 加新条目的判据：第二个模块要用它时才搬进来。当前位置上的版本号可以改，
+# 但改之前想清楚——它同时作用于两个模块。
+
+[versions]
+coreKtx = "1.13.1"
+coroutines = "1.8.1"
+serializationJson = "1.6.3"
+okhttp = "4.12.0"
+rhino = "1.7.14"
+
+[libraries]
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serializationJson" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+rhino-runtime = { module = "org.mozilla:rhino-runtime", version.ref = "rhino" }
