@@ -714,13 +714,22 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         )
     }
 
+    // —— L8 运行日志 / L9 记忆库 —— 3.1 第二批拆出（实现见 LogsFacade / MemoryFacade）——
+
+    /** 日志卡片域：零依赖，只读写 AgentLogger 的内存缓冲。 */
+    private val logsFacade = LogsFacade()
+
     /** L8 最近日志（格式化后的文本，最新的在前），供自动化页「运行日志」卡片展示。 */
-    private val _logs = MutableStateFlow<List<String>>(emptyList())
-    override val logs: StateFlow<List<String>> = _logs.asStateFlow()
+    override val logs: StateFlow<List<String>> get() = logsFacade.logs
+
+    /**
+     * 记忆卡片域（3.1 第二批拆出）：store 本体仍由本类持有——四个 Memory*Tool、
+     * 会话恢复导入、prompt 注入共用同一实例，facade 接收引用。
+     */
+    private val memoryFacade = MemoryFacade(memoryStore)
 
     /** L9 记忆列表快照，随写入/检索/遗忘/清空刷新。 */
-    private val _memories = MutableStateFlow<List<MemoryItem>>(emptyList())
-    override val memories: StateFlow<List<MemoryItem>> = _memories.asStateFlow()
+    override val memories: StateFlow<List<MemoryItem>> get() = memoryFacade.memories
 
     /**
      * 终端后端工厂（T07）：proot 优先、不可用回落本机 user。
@@ -788,10 +797,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 任务清单存储（W-14）：按会话隔离。 */
     private val todoStore = TodoStore(File(app.filesDir, "todos.json"))
 
-    /** 定时任务存储与列表状态（W-17）。 */
+    /** 定时任务存储（W-17）。store 本体仍由本类持有：四个 Workflow*Tool 注册共用。 */
     private val workflowStore = WorkflowStore(File(app.filesDir, "workflow"))
-    private val _workflows = MutableStateFlow<List<Workflow>>(emptyList())
-    override val workflows: StateFlow<List<Workflow>> = _workflows.asStateFlow()
 
     /**
      * 会话存储（W-18：会话检索工具要用）。
@@ -1339,49 +1346,29 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     /* ------------------------------ W-17 定时任务 ------------------------------ */
 
-    override fun refreshWorkflows() {
-        _workflows.value = workflowStore.list()
-    }
-
-    override fun setWorkflowEnabled(id: String, enabled: Boolean) {
-        workflowStore.setEnabled(id, enabled)
-        refreshWorkflows()
-    }
-
-    override fun deleteWorkflow(id: String) {
-        workflowStore.delete(id)
-        refreshWorkflows()
-        AgentLogger.i("Workflow", "已删除定时任务 $id")
-    }
-
     /**
-     * 立即运行一个定时任务：把它的 prompt 作为一次对话输入发送。
-     *
-     * 为什么走前台对话而不是后台执行：Agent 需要无障碍/截图/前台应用，后台跑不可信；
-     * 前台执行用户还能看到每一步、随时停止（见 WorkflowNotifier 的说明）。
+     * 定时任务域（3.1 第二批拆出，实现见 [WorkflowFacade]）。字段声明必须晚于
+     * [input] / [isRunning]——两个回调在构造期捕获它们。
      */
-    override fun runWorkflowNow(id: String) {
-        val wf = workflowStore.get(id) ?: return
-        if (isRunning.value) {
-            AgentLogger.w("Workflow", "当前有任务在跑，忽略立即运行请求")
-            return
-        }
-        workflowStore.markRun(id, System.currentTimeMillis(), "已在前台执行")
-        refreshWorkflows()
-        input.value = wf.prompt
-        send()
-    }
+    private val workflowFacade = WorkflowFacade(
+        workflowStore,
+        isRunning = { isRunning.value },
+        runPrompt = { prompt -> input.value = prompt; send() },
+    )
 
-    /**
-     * 处理「点通知进入 App」携带的任务 id（MainActivity 调用）。
-     *
-     * 只在 App 启动/收到新 Intent 时触发一次；执行后清除，避免旋转屏幕重复跑。
-     */
-    fun consumeWorkflowIntent(id: String?) {
-        if (id.isNullOrBlank()) return
-        AgentLogger.i("Workflow", "从通知进入，准备执行 $id")
-        runWorkflowNow(id)
-    }
+    override val workflows: StateFlow<List<Workflow>> get() = workflowFacade.workflows
+
+    override fun refreshWorkflows() = workflowFacade.refreshWorkflows()
+
+    override fun setWorkflowEnabled(id: String, enabled: Boolean) = workflowFacade.setWorkflowEnabled(id, enabled)
+
+    override fun deleteWorkflow(id: String) = workflowFacade.deleteWorkflow(id)
+
+    /** 立即运行定时任务：走前台对话（理由见 facade）。 */
+    override fun runWorkflowNow(id: String) = workflowFacade.runWorkflowNow(id)
+
+    /** 处理「点通知进入 App」携带的任务 id（MainActivity 调用）。 */
+    fun consumeWorkflowIntent(id: String?) = workflowFacade.consumeWorkflowIntent(id)
 
     /** 待回答的用户提问（W-14）：非空时聊天页显示选择卡片。 */
     override val askUserPending: StateFlow<AskUserBroker.Question?> = AskUserBroker.pending
@@ -2282,64 +2269,39 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     // —— L8 运行日志（日记）：出错可定位 ——
 
+    // —— L8/L9 转发：实现见 LogsFacade / MemoryFacade（3.1 第二批拆出）——
+
     /** 拉取最近 200 条日志文本（最新的在前）刷新 UI。 */
-    override fun refreshLogs() {
-        _logs.value = AgentLogger.recent(200).map { it.format() }
-    }
+    override fun refreshLogs() = logsFacade.refreshLogs()
 
     /** 清空日志（内存缓冲 + 当日文件），随后刷新列表。 */
-    override fun clearLogs() {
-        AgentLogger.clear()
-        refreshLogs()
-    }
+    override fun clearLogs() = logsFacade.clearLogs()
 
     /** 导出日志全文，供用户复制到剪贴板排查问题。 */
-    override fun exportLogs(): String = AgentLogger.snapshotText(500)
+    override fun exportLogs(): String = logsFacade.exportLogs()
 
     /** 当前日志文件绝对路径（卡片底部展示，方便 adb pull）。 */
-    override fun logFilePath(): String = AgentLogger.currentLogFile()?.absolutePath ?: "（日志文件未就绪）"
-
-    // —— L9 记忆库：跨会话记忆 ——
+    override fun logFilePath(): String = logsFacade.logFilePath()
 
     /** 刷新记忆列表（最近 50 条，按更新时间倒序）。 */
-    override fun refreshMemories() {
-        _memories.value = memoryStore.list(50)
-    }
+    override fun refreshMemories() = memoryFacade.refreshMemories()
 
     /** 手动新增一条记忆（UI 直接录入，默认 note / 重要度 5）。 */
-    override fun addMemory(content: String, kind: String, tags: List<String>) {
-        if (content.isBlank()) return
-        memoryStore.add(content.trim(), kind, tags, 5)
-        refreshMemories()
-    }
+    override fun addMemory(content: String, kind: String, tags: List<String>) =
+        memoryFacade.addMemory(content, kind, tags)
 
     /** 关键词检索记忆；结果直接替换列表，便于查看命中情况。 */
-    override fun searchMemory(query: String) {
-        _memories.value = if (query.isBlank()) memoryStore.list(50) else memoryStore.search(query.trim(), 20)
-    }
+    override fun searchMemory(query: String) = memoryFacade.searchMemory(query)
 
     /** 遗忘指定记忆并重刷新列表。 */
-    override fun forgetMemory(id: String) {
-        memoryStore.forget(id)
-        refreshMemories()
-    }
+    override fun forgetMemory(id: String) = memoryFacade.forgetMemory(id)
 
-    /**
-     * hotfix31：编辑一条记忆（详情卡「编辑」→ 对话框）。
-     * 空白内容 / 目标不存在时 store 返回 false——UI 据此保持对话框不关，
-     * 并给一句提示；成功则刷新列表（updatedAt 刷新会把它顶到最前）。
-     */
-    override fun updateMemory(id: String, content: String, salience: Int, tags: List<String>): Boolean {
-        val ok = memoryStore.update(id, content, salience, tags)
-        if (ok) refreshMemories()
-        return ok
-    }
+    /** 编辑一条记忆；失败返回 false（对话框保持打开），见 facade。 */
+    override fun updateMemory(id: String, content: String, salience: Int, tags: List<String>): Boolean =
+        memoryFacade.updateMemory(id, content, salience, tags)
 
     /** 清空全部记忆（UI 需二次确认）并重刷新列表。 */
-    override fun clearMemory() {
-        memoryStore.clear()
-        refreshMemories()
-    }
+    override fun clearMemory() = memoryFacade.clearMemory()
 
     /** 复用 importStatus 展示一次性提示（如“已复制到剪贴板”）。 */
     fun setImportStatus(msg: String) { _importStatus.value = msg }

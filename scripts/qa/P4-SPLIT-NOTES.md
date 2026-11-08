@@ -11,6 +11,8 @@
 | 新增 | — | `ModelSettings` 260 / `ConversationProjection` 130 / `BackupUseCase` 195 / `GenerationRunController` 160 |
 | `ChatViewModel.kt`（3.1 第一批，2026-11-07） | 3868 行，仍混着模型列表拉取 / 插件市场 / Key 池 | 3578 行（守卫上限同步从 3868 降到 3578） |
 | 新增（3.1 第一批） | — | `ModelListFacade` 124 / `MarketFacade` 279 / `KeyPoolFacade` 75 |
+| `ChatViewModel.kt`（3.1 第二批，2026-11-08） | 3578 行，仍混着运行日志 / 记忆库 / 定时任务 | 3540 行（守卫上限同步从 3578 降到 3540） |
+| 新增（3.1 第二批） | — | `LogsFacade` 38 / `MemoryFacade` 66 / `WorkflowFacade` 75 |
 
 ## 谁拥有什么
 
@@ -20,6 +22,9 @@
 | 「选择模型」弹窗的列表 / 收藏 / 拉取错误 | `ModelListFacade` | 只依赖 configStore + 一个协程作用域，与生成链零交集 |
 | 市场源 / 插件列表 / 装 / 卸 | `MarketFacade` | 对 VM 的全部需求是三个注入点：已装列表、装/卸后刷技能快照（回调）、作用域 |
 | 备用 Key 存取 / 灌进 ProviderManager | `KeyPoolFacade` | 与生成链唯一接触面是 providerManager 的两个字段，构造注入看得见 |
+| 运行日志卡片展示 / 清空 / 导出 | `LogsFacade` | 零依赖：只读写 AgentLogger 的内存缓冲，188 个成员里依赖最少的一域 |
+| 记忆列表 / 增删改查 / 检索 | `MemoryFacade` | store 本体留 VM（四个 Memory*Tool + prompt 注入共用），facade 持引用 |
+| 定时任务增删改查 / 立即运行 | `WorkflowFacade` | store 本体留 VM（四个 Workflow*Tool 共用）；「送进对话」经 isRunning/runPrompt 两回调注入 |
 | 这条消息上不上屏？写进哪个会话？ | `ConversationProjection` | 显示态与持久态必须同源；落库目标 = owner ?: active |
 | 本地模型参数 / 文件 / 下载 / GPU 结论 | `ModelSettings` | 只与 `LocalLlamaSetting` + `GgufModelStore` 打交道，唯一外部动作是「切到本地供应商」 |
 | 备份包怎么组装、恢复后谁来刷新 UI | `BackupUseCase` | 六个 store 的快照 ↔ SAF 文件；UI 重载通过 `onRestored` 回调回宿主 |
