@@ -3,6 +3,7 @@ package com.beichen.polaris.ui.contract
 import android.net.Uri
 import androidx.compose.runtime.Stable
 import com.beichen.polaris.core.ModelProfile
+import com.beichen.polaris.core.llm.ModelPricing
 import com.beichen.polaris.core.llm.local.DownloadedModel
 import com.beichen.polaris.core.llm.local.GgufCatalogEntry
 import com.beichen.polaris.core.llm.local.GpuMode
@@ -110,4 +111,15 @@ interface LocalModelContract {
 
 /** 模型配置页全部能力：远程 provider + 本地 GGUF，两个子接口的合成。 */
 @Stable
-interface ModelConfigContract : ModelProfilesContract, LocalModelContract
+interface ModelConfigContract : ModelProfilesContract, LocalModelContract {
+    /**
+     * W-RT7：当前会话的费用下钻——按模型聚合 tokens 并估算费用。
+     *
+     * 放在合成接口而不是两个子接口里：它跨「远程 provider」与「本地推理」两个世界
+     * （一个会话可能先用云端、再切本地），只属于「整个配置页」这个层级。
+     *
+     * 返回的是参考价（各家牌价落表，可能滞后）；查不到价格的模型 `costUsd` 为 null，
+     * UI 据此标「未知」而不是按 0 显示——错误的价格比没有价格更误导。
+     */
+    fun costDrillDown(): List<ModelPricing.ModelCost>
+}

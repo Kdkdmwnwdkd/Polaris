@@ -50,6 +50,8 @@ sealed interface UiItem {
      *   null = 服务端没给 usage，UI 不显示而非猜一个数）。
      * @param reasoning 本条回答的推理过程（思维链全文）；
      *   null = 模型没给思考，UI 不渲染折叠块而非摆个空框。
+     * @param modelId 产生本回答的模型标识（W-RT7）；空 = 旧数据/未记录，费用下钻归「未知模型」。
+     *   本地推理统一记 `local-llama`——它价格表里是 0，且不会误撞云端模型名。
      */
     data class Assistant(
         val text: String,
@@ -58,7 +60,8 @@ sealed interface UiItem {
         val turnIndex: Int = -1,
         val usage: TokenUsage? = null,
         val reasoning: String? = null,
-        val timeMs: Long = 0
+        val timeMs: Long = 0,
+        val modelId: String = ""
     ) : UiItem
 
     /**

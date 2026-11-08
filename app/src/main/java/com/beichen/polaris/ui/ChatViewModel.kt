@@ -1,6 +1,7 @@
 package com.beichen.polaris.ui
 
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.llm.ModelPricing
 import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
@@ -1137,8 +1138,38 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         onStoreChanged = { refreshConversations() },
         lock = msgLock,
         onHistoryTruncated = { dropped -> noticeHistoryTruncated(dropped) },
+        // W-RT7：延迟求值——投影是长生命周期单例，模型却可能在会话中途切换。
+        currentModelId = { currentModelLabel() },
     )
     override val messages: StateFlow<List<UiItem>> = projection.items
+
+    /**
+     * W-RT7：这条回答该记成哪个模型。
+     *
+     * 本地推理统一记 `local-llama`：它在价格表里是 0，而且不会因为本地模型文件名
+     * 恰好含 "gpt-4" 之类被云端价格表误命中——那种误算比不显示更糟。
+     */
+    private fun currentModelLabel(): String =
+        if (_config.value.providerId == "local-llama") "local-llama" else _config.value.model
+
+    /**
+     * W-RT7：当前会话的费用下钻（按模型聚合，参考价）。
+     *
+     * 纯展示用即时计算：消息就在内存里，遍历一次的开销可以忽略，
+     * 不落盘也不缓存——缓存反而会在「切会话 / 删消息」后给出过期数字。
+     */
+    override fun costDrillDown(): List<ModelPricing.ModelCost> =
+        ModelPricing.drillDown(
+            messages.value.mapNotNull { item ->
+                (item as? UiItem.Assistant)?.usage?.let { usage ->
+                    ModelPricing.UsageEntry(
+                        modelId = item.modelId,
+                        promptTokens = usage.promptTokens,
+                        completionTokens = usage.completionTokens
+                    )
+                }
+            }
+        )
 
     /** 模型配置持久化：进程重启也能还原，避免「明明填过却退回默认值」的不一致。 */
     private val configStore = ConfigStore(app)
@@ -1442,7 +1473,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     text = if (final.isBlank()) "（模型未返回内容）" else final,
                     usage = TokenUsage.sum(
                         history.filterIsInstance<AssistantMessage>().map { it.usage }
-                    )
+                    ),
+                    // W-RT7：重生成可能换了模型，归属按完成时的当前模型记
+                    modelId = currentModelLabel()
                 )
                 // hotfix30：变体落盘按 owner（切走期间 regenerate 的后台结果仍写回原会话）
                 conversationStore.appendVariant(

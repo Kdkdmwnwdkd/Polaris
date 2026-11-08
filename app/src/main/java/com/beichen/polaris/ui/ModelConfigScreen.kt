@@ -287,6 +287,43 @@ fun ModelConfigScreen(vm: ModelConfigContract, onBack: () -> Unit) {
                         onExport = { showQrExport = true },
                         onImport = { showQrImport = true }
                     )
+
+                    // —— W-RT7：费用参考（当前会话）——
+                    //
+                    // 放在模型页签而不是提示词页签：用户是「想知道这套配置花了多少」才来的，
+                    // 提示词页签跟钱无关。取的是当前会话的用量，切会话后自然变。
+                    //
+                    // remember(config)：进页面算一次，切档案重算。发消息发生在对话页，
+                    // 那时这个页面已经被组合销毁，不存在「数字停在旧值」的观感问题。
+                    val drill = remember(config) { vm.costDrillDown() }
+                    if (drill.isNotEmpty()) {
+                        AkGroup(
+                            title = "费用参考（当前会话）",
+                            description = "按各模型官网牌价估算，单位美元；价格调整可能滞后，量级为准",
+                            paddedContent = true
+                        ) {
+                            drill.forEach { mc ->
+                                val costText = mc.costUsd?.let { " ≈ $%.4f".format(it) }
+                                    ?: "（价格未知，未计入合计）"
+                                Text(
+                                    text = mc.modelId +
+                                        "：入 ${mc.promptTokens} / 出 ${mc.completionTokens} tokens" +
+                                        costText,
+                                    style = machineSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            val total = com.beichen.polaris.core.llm.ModelPricing.totalUsd(drill)
+                            if (total != null) {
+                                Spacer(Modifier.height(AgentSpacing.space2))
+                                Text(
+                                    text = "合计 ≈ $%.4f".format(total),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
                 }
 
                 1 -> LocalModelsTab(vm = vm)

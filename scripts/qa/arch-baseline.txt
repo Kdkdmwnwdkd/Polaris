@@ -50,9 +50,14 @@
 # 只有一行工具注册 + 三行注释。真正的主体（KnowledgeIndex 158 行 + 工具 120 行）
 # 都在新文件里——和二维码那次同一个处理方式。
 #
+# 2026-11-08 第七次上调（ChatViewModel +33 / ModelConfigScreen +37）：移植 W-RT7 费用下钻。
+# VM：一个 currentModelLabel()（本地推理记 local-llama 的理由写在注释里）+ 一个
+# costDrillDown()（遍历当前消息，几十条的量级，不缓存）；ModelConfigScreen：32 行
+# 的费用参考分区。字段本体（UiItem / MsgRecord）在 core，不计入这两个文件。
+#
 # 以后再抬必须先证明「功能确实需要」——「顺手写的」不算理由。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3487
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3520
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3128
-lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2385
+lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2422
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
 lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1516

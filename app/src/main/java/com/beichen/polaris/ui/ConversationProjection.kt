@@ -59,6 +59,16 @@ internal class ConversationProjection(
      * 从文件里删掉最早的对话，静默删数据比删数据本身更糟。
      */
     private val onHistoryTruncated: (dropped: Int) -> Unit = {},
+    /**
+     * 当前生效的模型标识（W-RT7），用于给助手气泡打上「这条回答是谁生成的」。
+     *
+     * 用函数而不是值：模型可以在会话中途切换，而投影对象是长生命周期单例——
+     * 构造期抓一个字符串，等于把「切模型前一秒的回答」永远记成旧模型。
+     *
+     * 默认返回空串，让既有构造点（含 harness）零改动：空 = 未记录，
+     * 费用下钻把它归到「未知模型」，不会误算钱。
+     */
+    private val currentModelId: () -> String = { "" },
 ) {
 
     private val _items = MutableStateFlow(loadOf(activeId()))
@@ -101,7 +111,10 @@ internal class ConversationProjection(
                 msg.content,
                 usage = usage,
                 reasoning = msg.reasoning,
-                timeMs = System.currentTimeMillis()
+                timeMs = System.currentTimeMillis(),
+                // W-RT7：归属到回答完成时的当前模型（本地推理统一记 local-llama，
+                // 它在价格表里是 0，且不会误撞云端模型名）
+                modelId = currentModelId()
             )
             is ToolMessage -> UiItem.Tool(
                 ToolCall(msg.id, msg.name, msg.arguments),
