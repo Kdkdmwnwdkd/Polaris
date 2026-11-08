@@ -49,7 +49,13 @@ private fun assertContains(name: String, haystack: String, needle: String) {
 // W-42：路径相对仓库根（run-all 会把 CWD 定在仓库根）。写死 /workspace/AgentKit 只在本机成立。
 private const val APP_SRC = "app/src/main/java/com/beichen/polaris"
 
-private fun readSource(rel: String): String = File(APP_SRC, rel).readText()
+// 3.5 拆模块：core / skill / terminal 已移到 :core，同一个相对路径要两边找
+private const val CORE_SRC = "core/src/main/java/com/beichen/polaris"
+
+private fun readSource(rel: String): String {
+    val app = File(APP_SRC, rel)
+    return (if (app.exists()) app else File(CORE_SRC, rel)).readText()
+}
 
 /* =============================== G 区：模型快速切换 =============================== */
 

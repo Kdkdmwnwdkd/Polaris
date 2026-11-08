@@ -496,12 +496,18 @@ fun main() = runBlocking {
     // 扫 `override val name = "xxx"` 而不是按类名走：工具的继承链有四五种写法
     // （`class X(...) : AgentTool`、多行构造参数、object、匿名实现），按类名切会漏，
     // 而漏掉的正好是「清单里名字最长的那些」（WriteFileTool 就是这样漏的）。
-    val implNames: Set<String> = File("app/src/main/java/com/beichen/polaris")
-        .walkTopDown()
-        .filter { it.extension == "kt" }
-        .flatMap { f ->
-            Regex("""override val name(?::\s*String)?\s*=\s*"([a-z0-9_]+)"""")
-                .findAll(f.readText()).map { it.groupValues[1] }.asSequence()
+    // 3.5 拆模块：工具实现分布在 :app（tools）与 :core（skill 的 use_skill 等），两个根都要扫
+    val implNames: Set<String> = listOf(
+        "app/src/main/java/com/beichen/polaris",
+        "core/src/main/java/com/beichen/polaris"
+    ).asSequence()
+        .flatMap { root ->
+            File(root).walkTopDown()
+                .filter { it.extension == "kt" }
+                .flatMap { f ->
+                    Regex("""override val name(?::\s*String)?\s*=\s*"([a-z0-9_]+)"""")
+                        .findAll(f.readText()).map { it.groupValues[1] }.asSequence()
+                }
         }
         .toSet()
     // 自检：正则失效时集合会变空，「全部存在」就成了空话。

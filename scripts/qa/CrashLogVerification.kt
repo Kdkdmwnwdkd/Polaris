@@ -44,6 +44,8 @@ private val REPO_ROOT: File = run {
 
 /** 业务源码根包目录（`read()` 的相对路径基准）。 */
 private val SRC_ROOT: File = File(REPO_ROOT, "app/src/main/java/com/beichen/polaris")
+// 3.5 拆模块：core / skill / terminal 已移到 :core，同一个相对路径要两边找
+private val CORE_ROOT: File = File(REPO_ROOT, "core/src/main/java/com/beichen/polaris")
 
 /** AndroidManifest 绝对路径。 */
 private val MANIFEST: File = File(REPO_ROOT, "app/src/main/AndroidManifest.xml")
@@ -56,8 +58,9 @@ private val MANIFEST: File = File(REPO_ROOT, "app/src/main/AndroidManifest.xml")
  */
 private fun read(rel: String): String {
     val f = File(SRC_ROOT, rel)
-    if (!f.exists()) throw AssertionError("缺少源码文件：${f.path}")
-    return f.readText()
+    val hit = if (f.exists()) f else File(CORE_ROOT, rel)
+    if (!hit.exists()) throw AssertionError("缺少源码文件：${hit.path}")
+    return hit.readText()
 }
 
 /* ------------------------------ 迷你断言框架 ------------------------------ */

@@ -102,7 +102,8 @@ fun main(args: Array<String>) {
 
     // —— 3. KernelExposure 与清单同源（委托而不是各写一份） ——
     println("\n[3] KernelExposure 委托一致")
-    val names = realToolNames(src)
+    // 3.5 拆模块：工具类分布在 :app（tools）与 :core（skill 的 use_skill 等），合并两个根
+    val names = (realToolNames(src) + realToolNames(coreSrc)).distinct().sorted()
     check("扫到真实工具名", names.size >= 40, "共 ${names.size} 个")
     val mismatch = names.filter { KernelExposure.groupOf(it) != CapabilityManifest.groupOf(it) }
     check("groupOf 与清单逐名一致", mismatch.isEmpty(), mismatch.take(3).joinToString())
