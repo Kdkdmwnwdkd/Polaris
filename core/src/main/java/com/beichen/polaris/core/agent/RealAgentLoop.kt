@@ -29,6 +29,7 @@ import com.beichen.polaris.core.Prompt
 import com.beichen.polaris.core.PromptAssembler
 import com.beichen.polaris.core.Section
 import com.beichen.polaris.core.Stability
+import com.beichen.polaris.core.time.Monotonic
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -513,7 +514,7 @@ class RealAgentLoop(
         clock: TurnClock,
         status: TurnEndStatus
     ): List<ChatMessage> {
-        val loopStart = System.currentTimeMillis()
+        val loopStart = Monotonic.nowMs() // 单调时钟：回合预算不能受校时/改时间影响（4.2 同类）
         // 内核暴露（core/KernelExposure）：按能力档位选工具面——W-102 起云端与端侧都只默认
         // 激活 file 组（+ 常驻 misc），其余靠 `__use_tools` 开。开过的组由元工具就地写回
         // 集合，因此工具面在循环内**每轮重算**（见下方 repeat 块首）。
@@ -560,7 +561,7 @@ class RealAgentLoop(
             // R2 第三层：回合总预算软截止。只在**步边界**判，不在工具执行中途打断——
             // 中途硬杀会把「工具可能已生效」的状态留给用户，比多跑一步更糟。
             // 单步过长由第二层（工具级预算）负责，两层各管各的时间尺度。
-            val elapsed = System.currentTimeMillis() - loopStart
+            val elapsed = Monotonic.nowMs() - loopStart
             if (elapsed > turnBudgetMs) {
                 AgentLogger.w(
                     "AgentLoop",
@@ -654,7 +655,7 @@ class RealAgentLoop(
             if (resp.toolCalls.isEmpty()) {
                 AgentLogger.i(
                     "AgentLoop",
-                    "运行结束：${System.currentTimeMillis() - loopStart}ms，消息数=${messages.size}"
+                    "运行结束：${clock.elapsed()}ms，消息数=${messages.size}"
                 )
                 hooks.beforeStop()
                 status.set("completed")
@@ -729,7 +730,7 @@ class RealAgentLoop(
         )
         AgentLogger.i(
             "AgentLoop",
-            "运行结束：${System.currentTimeMillis() - loopStart}ms，消息数=${messages.size}"
+            "运行结束：${clock.elapsed()}ms，消息数=${messages.size}"
         )
         return turnResult()
     }
