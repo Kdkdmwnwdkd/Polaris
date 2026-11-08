@@ -1454,8 +1454,8 @@ private fun testChatBackground() {
  */
 private fun testJsonSafeAndGlobalBackground() {
     println("— AB 区：JSON 安全化 + 背景 100%/全局（hotfix33） —")
-    val base = "app/src/main/java/com/beichen/polaris/"
-    val safe = File(base + "core/llm/JsonSafe.kt").readText()
+    // 3.5 拆模块：JsonSafe 已随 core 移到 :core，走 readSource 的双根解析
+    val safe = readSource("core/llm/JsonSafe.kt")
     val llm = readSource("core/LLMClient.kt")
     val loader = readSource("ui/BackgroundLoader.kt")
     val config = readSource("core/ConfigStore.kt")
@@ -1527,8 +1527,7 @@ private fun testJsonSafeAndGlobalBackground() {
  */
 private fun testProviderCatalog() {
     println("— AC 区：供应商全量适配（hotfix34） —")
-    val base = "app/src/main/java/com/beichen/polaris/"
-    val catalog = File(base + "core/llm/ProviderCatalog.kt").readText()
+    val catalog = readSource("core/llm/ProviderCatalog.kt")
     val llm = readSource("core/LLMClient.kt")
     val modelScreen = readSource("ui/ModelConfigScreen.kt")
 

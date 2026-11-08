@@ -285,11 +285,14 @@ fun main() {
 
         val nameRe = Regex("override val name = \"([a-z0-9_]+)\"")
         val names = LinkedHashSet<String>()
-        File("app/src/main/java").walkTopDown()
-            .filter { it.isFile && it.name.endsWith(".kt") }
-            .forEach { f ->
-                nameRe.findAll(f.readText()).forEach { m -> names += m.groupValues[1] }
-            }
+        // 3.5 拆模块：工具实现在 :app 与 :core 两边
+        listOf(File("app/src/main/java"), File("core/src/main/java")).forEach { root ->
+            root.walkTopDown()
+                .filter { it.isFile && it.name.endsWith(".kt") }
+                .forEach { f ->
+                    nameRe.findAll(f.readText()).forEach { m -> names += m.groupValues[1] }
+                }
+        }
         assertTrue("没有扫到任何工具名（扫描逻辑坏了）", names.size >= 50)
         val missing = names.filter { "CatalogTool(\"$it\"" !in catalog }
         assertTrue("未登记能力级的工具：${missing.joinToString()}", missing.isEmpty())

@@ -81,9 +81,12 @@ fun main() {
     // 扫的是**全部** main 源码，不是只有 tools/ —— ui_* 在 automation/ 包里。
     // 上一版只扫 tools/，于是 ui_tree 漏了 needsApproval 也照过不误。
     val srcRoot = File("app/src/main/java")
-    check("能读到源码根目录（否则第 7、8 条会空转通过）", srcRoot.isDirectory)
+    // 3.5 拆模块：core / skill / terminal 已移到 :core，扫全仓要覆盖两个根
+    val coreRoot = File("core/src/main/java")
+    check("能读到源码根目录（否则第 7、8 条会空转通过）", srcRoot.isDirectory && coreRoot.isDirectory)
     val blockByName = HashMap<String, String>()
-    for (f in srcRoot.walkTopDown().filter { it.extension == "kt" }) {
+    for (f in listOf(srcRoot, coreRoot).asSequence().flatMap { it.walkTopDown() }
+        .filter { it.extension == "kt" }) {
         val text = f.readText()
         val cuts = Regex("""\bclass\s+[A-Za-z0-9_]+""").findAll(text).map { it.range.first }.toList()
         for (i in cuts.indices) {
