@@ -48,7 +48,7 @@ internal const val ROLE_TOOL = "tool"
  * 措辞刻意不写「失败」：用户点停止时工具可能已经生效（写文件、发请求），
  * 说「失败」会让人以为没发生，说「已完成」更糟。只陈述可确认的事实——没有拿到结果。
  */
-internal const val TOOL_INTERRUPTED_NOTE = "⏹ 该调用未完成：运行被中断，未取得真实结果（写操作可能已生效）。"
+const val TOOL_INTERRUPTED_NOTE = "⏹ 该调用未完成：运行被中断，未取得真实结果（写操作可能已生效）。"
 
 /** 新对话默认标题：首条 user 消息到达时按内容前 [TITLE_CHARS] 字自动命名。 */
 private const val DEFAULT_TITLE = "新对话"

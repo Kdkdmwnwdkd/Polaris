@@ -365,9 +365,10 @@ fun ContainerScreen() {
                                                     color = MaterialTheme.colorScheme.error
                                                 )
                                             } else {
-                                                val cmd = ToolchainInstaller.installCommand(
-                                                    lang, detection.pkgManager, spec
-                                                )
+                                                // 跨模块 public 属性不能 smart cast：复用上面已取的 pm
+                                                val cmd = pm?.let {
+                                                    ToolchainInstaller.installCommand(lang, it, spec)
+                                                }
                                                 if (cmd != null) {
                                                     Spacer(Modifier.height(AgentSpacing.space1))
                                                     val langLabel = lang.displayName +

@@ -613,9 +613,10 @@ private fun TaskCard(task: MediaTask, onDelete: () -> Unit) {
 
 private fun statusText(task: MediaTask): String = when (task.status) {
     TaskStatus.SUBMITTED -> "已提交"
-    TaskStatus.RUNNING ->
-        if (task.progress != null) "生成中 ${(task.progress * 100).toInt()}%"
-        else "生成中…"
+    TaskStatus.RUNNING -> {
+        val p = task.progress
+        if (p != null) "生成中 ${(p * 100).toInt()}%" else "生成中…"
+    }
 
     TaskStatus.SUCCEEDED -> "已完成 · ${task.resultPaths.size} 个文件"
     TaskStatus.FAILED -> "失败：${task.error ?: "未知原因"}"

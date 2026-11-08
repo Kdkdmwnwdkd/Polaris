@@ -202,7 +202,10 @@ fun BuildScreen() {
                             else -> MaterialTheme.colorScheme.onSurface
                         }
                     )
-                    if (cur.stage == BuildStage.DOWNLOADING && cur.downloadProgress != null) {
+                    // 3.5 拆模块：跨模块的 public 属性不能 smart cast（编译器不保证 getter 稳定），
+                    // 先取到局部 val 再判空。
+                    val dlProgress = cur.downloadProgress
+                    if (cur.stage == BuildStage.DOWNLOADING && dlProgress != null) {
                         Spacer(Modifier.height(AgentSpacing.space2))
                         Box(
                             Modifier
@@ -213,18 +216,19 @@ fun BuildScreen() {
                         ) {
                             Box(
                                 Modifier
-                                    .fillMaxWidth(cur.downloadProgress.coerceIn(0f, 1f))
+                                    .fillMaxWidth(dlProgress.coerceIn(0f, 1f))
                                     .height(4.dp)
                                     .clip(RoundedCornerShape(2.dp))
                                     .background(MaterialTheme.colorScheme.primary)
                             )
                         }
                     }
-                    if (cur.stage == BuildStage.SUCCEEDED && cur.apkPath != null) {
+                    val apkPath = cur.apkPath
+                    if (cur.stage == BuildStage.SUCCEEDED && apkPath != null) {
                         Spacer(Modifier.height(AgentSpacing.space2))
                         AkPrimaryButton(
                             text = "安装（${formatBytes(cur.sizeBytes ?: 0)}）",
-                            onClick = { installApk(context, cur.apkPath) },
+                            onClick = { installApk(context, apkPath) },
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -297,9 +301,10 @@ private fun stageText(task: BuildTask): String = when (task.stage) {
         if (task.runNumber != null) "CI 编译中…（run #${task.runNumber}，通常 3-6 分钟）"
         else "CI 编译中…"
 
-    BuildStage.DOWNLOADING ->
-        if (task.downloadProgress != null) "下载 APK… ${(task.downloadProgress * 100).toInt()}%"
-        else "下载 APK…"
+    BuildStage.DOWNLOADING -> {
+        val p = task.downloadProgress
+        if (p != null) "下载 APK… ${(p * 100).toInt()}%" else "下载 APK…"
+    }
 
     BuildStage.SUCCEEDED -> "构建成功"
     BuildStage.FAILED -> "构建失败：${task.error ?: "未知原因"}"
