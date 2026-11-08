@@ -6,6 +6,9 @@ build/
 # 不加这条的话 git 会一直静默忽略它——2026-10-28 就是这样让远端多出 7 个本地不认识的
 # 文件（上一轮走 REST API 推的，绕过了 gitignore）。
 !app/src/main/java/com/beichen/polaris/core/build/
+# 3.5 拆模块：同一个源码包随 :core 搬到了 core/src/main，上面的例外路径随之失效
+# （已经 tracked 的文件不受影响，但**新增**文件会被静默忽略，git add 整目录还会被拒）。
+!core/src/main/java/com/beichen/polaris/core/build/
 local.properties
 .idea/
 captures/

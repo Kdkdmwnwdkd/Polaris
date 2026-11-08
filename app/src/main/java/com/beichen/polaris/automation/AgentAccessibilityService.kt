@@ -18,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import com.beichen.polaris.core.time.Monotonic
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -392,7 +393,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 if (pkg.isNotBlank()) DeviceContextStore.updateForeground(this, pkg)
                 // W-7 P1-1：记录最近一次窗口切换时刻——ui_tree 据此判断「刚切换完窗口，
                 // 根节点可能还没跟上」，见 getFreshUiTreeSnapshot / shouldRetryForFreshWindow。
-                lastWindowSwitchAt = System.currentTimeMillis()
+                lastWindowSwitchAt = Monotonic.nowMs()
             }
         }
     }
@@ -447,14 +448,19 @@ class AgentAccessibilityService : AccessibilityService() {
         maxWaitMs: Long = FRESH_WINDOW_MAX_WAIT_MS,
         pollMs: Long = FRESH_WINDOW_POLL_MS
     ): UiTreeSnapshot {
-        val deadline = System.currentTimeMillis() + maxWaitMs
+        // 与 [lastWindowSwitchAt] 同源（都是单调时钟）：混用墙钟会让「多久以前」
+        // 在实际对时或改时区后变成荒谬值——正数意味着永远不等，负数意味着白等一轮。
+        val deadline = Monotonic.nowMs() + maxWaitMs
         while (true) {
             val root = rootInActiveWindow
-            val timedOut = System.currentTimeMillis() >= deadline
+            val timedOut = Monotonic.nowMs() >= deadline
             val needWait = !timedOut && shouldRetryForFreshWindow(
                 rootPackage = root?.packageName?.toString(),
                 selfPackage = packageName,
-                elapsedSinceSwitchMs = System.currentTimeMillis() - lastWindowSwitchAt,
+                // 0 = 从没发生过切换（不是「很久以前」的哨兵值），显式给最大值，
+                // 免得拿 nanoTime 的任意起点当时间戳算差值算出负数。
+                elapsedSinceSwitchMs = if (lastWindowSwitchAt == 0L) Long.MAX_VALUE
+                else Monotonic.nowMs() - lastWindowSwitchAt,
                 maxWaitMs = maxWaitMs
             )
             if (!needWait) {

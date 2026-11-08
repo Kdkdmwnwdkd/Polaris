@@ -135,6 +135,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.beichen.polaris.core.ModelProfile
 import com.beichen.polaris.core.TokenUsage
 import com.beichen.polaris.core.llm.ProviderCatalog
+import com.beichen.polaris.core.time.Monotonic
 import com.beichen.polaris.ui.contract.*
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
@@ -2724,9 +2725,11 @@ private fun ApprovalDialog(request: ApprovalRequest, visible: Boolean, vm: ChatS
     var announced by remember(request) { mutableStateOf(false) }
     LaunchedEffect(request, visible) {
         if (!visible) return@LaunchedEffect
-        val startMs = System.currentTimeMillis()
+        // 倒计时用单调时钟：墙钟回拨会让剩余秒数停在 30 不动（用户以为还有时间，
+        // 实际闸门早已该落下）；前跳则会瞬间归零，把还在读风险说明的用户直接拒了。
+        val startMs = Monotonic.nowMs()
         while (true) {
-            val left = APPROVAL_TIMEOUT_SEC - (System.currentTimeMillis() - startMs) / 1000f
+            val left = APPROVAL_TIMEOUT_SEC - (Monotonic.nowMs() - startMs) / 1000f
             remainingSec = left.coerceIn(0f, APPROVAL_TIMEOUT_SEC.toFloat())
             if (!announced && left <= 5f) {
                 announced = true

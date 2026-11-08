@@ -3,6 +3,7 @@ package com.beichen.polaris.core.build
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.ConfigStore
+import com.beichen.polaris.core.time.Monotonic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -94,10 +95,11 @@ object BuildEngine {
         task = task.copy(runNumber = run.number).also { BuildStore.upsert(context, it); onStage(it) }
 
         // ④ 轮询 run 至终态
-        val startedAt = System.currentTimeMillis()
+        // 单调时钟：墙钟前跳（对时/手动改时间）会让 40 分钟的等待立刻判超时。
+        val startedAt = Monotonic.nowMs()
         var last: RunInfo = run
         while (true) {
-            if (System.currentTimeMillis() - startedAt > RUN_TIMEOUT_MS) {
+            if (Monotonic.nowMs() - startedAt > RUN_TIMEOUT_MS) {
                 advance(BuildStage.FAILED, "CI 超时（40 分钟未完成），请在 GitHub 查看 run #${run.number}")
                 return@withContext task
             }

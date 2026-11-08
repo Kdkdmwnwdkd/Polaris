@@ -12,6 +12,7 @@ import com.beichen.polaris.core.SystemMessage
 import com.beichen.polaris.core.ToolCall
 import com.beichen.polaris.core.ToolMessage
 import com.beichen.polaris.core.UserMessage
+import com.beichen.polaris.core.time.Monotonic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
@@ -497,8 +498,10 @@ class LocalLlamaClient(
                 .onFailure { AgentLogger.w("LocalLlama", "重试生成异常：${it.message}") }
         }, "local-llama-retry")
         worker.start()
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (worker.isAlive && System.currentTimeMillis() < deadline) worker.join(POLL_INTERVAL_MS)
+        // 单调时钟：这里是 join 轮询，墙钟回拨会导致 worker 永远等不到 deadline，
+        // 而外层没有 withTimeout 兜底（注释里已说明为什么不用它）——真会卡住。
+        val deadline = Monotonic.nowMs() + timeoutMs
+        while (worker.isAlive && Monotonic.nowMs() < deadline) worker.join(POLL_INTERVAL_MS)
         if (worker.isAlive) {
             AgentLogger.w("LocalLlama", "工具调用重试超时（${timeoutMs / 1000}s），放弃")
             engine.stop()

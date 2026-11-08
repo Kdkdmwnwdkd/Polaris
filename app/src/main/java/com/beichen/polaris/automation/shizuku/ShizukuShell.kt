@@ -14,6 +14,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import com.beichen.polaris.core.time.Monotonic
 import rikka.shizuku.Shizuku
 import java.io.ByteArrayOutputStream
 
@@ -312,7 +313,9 @@ object ShizukuShell {
      * 调用方据此决定是否回退本机 user shell。
      */
     fun exec(command: String, timeoutSec: Long = 20): ShellOut {
-        val started = System.currentTimeMillis()
+        // 这一段的 started / deadline / elapsed 必须同源（都走单调时钟）：
+        // 超时判定不能被墙钟回拨影响，对外报的 elapsedMs 也不能因为对时变成负数。
+        val started = Monotonic.nowMs()
         if (!hasPermission()) {
             val why = "Shizuku 未运行或未授权（请先在 Shizuku 内启动并授权本应用）"
             return ShellOut(-1, "", why, startError = why, elapsedMs = 0)
@@ -320,7 +323,7 @@ object ShizukuShell {
         // W-56：反射集中在 ShizukuProcess（持久后端 ShizukuTerminalBackend 也用它）
         val process = ShizukuProcess.open(arrayOf("sh", "-c", command)) ?: run {
             val why = "启动 shell 失败：Shizuku newProcess 不可用（未授权或 API 变更）"
-            return ShellOut(-1, "", why, startError = why, elapsedMs = System.currentTimeMillis() - started)
+            return ShellOut(-1, "", why, startError = why, elapsedMs = Monotonic.nowMs() - started)
         }
 
         val out = ByteArrayOutputStream()
@@ -338,7 +341,7 @@ object ShizukuShell {
         var exitCode: Int? = null
         var waitError: String? = null
         val deadline = started + timeoutSec * 1000
-        while (System.currentTimeMillis() < deadline) {
+        while (Monotonic.nowMs() < deadline) {
             val code = runCatching { process.exitValue() }
             if (code.isSuccess) {
                 exitCode = code.getOrDefault(-1)
@@ -362,7 +365,7 @@ object ShizukuShell {
             runCatching { process.destroy() }
             tOut.join(300)
             tErr.join(300)
-            val elapsed = System.currentTimeMillis() - started
+            val elapsed = Monotonic.nowMs() - started
             val partial = out.text()
             // 秒退 + 无任何输出 + 有异常 → 是通道坏了，不是命令跑久了
             if (waitError != null && elapsed < 1_500) {
@@ -373,7 +376,7 @@ object ShizukuShell {
         }
         tOut.join(500)
         tErr.join(500)
-        return ShellOut(exitCode, out.text(), err.text(), elapsedMs = System.currentTimeMillis() - started)
+        return ShellOut(exitCode, out.text(), err.text(), elapsedMs = Monotonic.nowMs() - started)
     }
 
     private fun ByteArrayOutputStream.text(): String = String(toByteArray(), Charsets.UTF_8)

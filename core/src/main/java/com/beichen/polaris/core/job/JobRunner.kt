@@ -1,6 +1,7 @@
 package com.beichen.polaris.core.job
 
 import com.beichen.polaris.core.AppScope
+import com.beichen.polaris.core.time.Monotonic
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -118,10 +119,11 @@ class JobRunner(
             }
         }
 
-        // 轮询而不是阻塞 waitFor：既能有超时，也不会被管道缓冲卡住
-        val deadline = System.currentTimeMillis() + JobLogic.MAX_RUNTIME_MS
+        // 轮询而不是阻塞 waitFor：既能有超时，也不会被管道缓冲卡住。
+        // 截止时间用单调时钟：墙钟回拨会让这个循环永不退出（外层没有 withTimeout 兜底）。
+        val deadline = Monotonic.nowMs() + JobLogic.MAX_RUNTIME_MS
         var exitCode: Int? = null
-        while (System.currentTimeMillis() < deadline) {
+        while (Monotonic.nowMs() < deadline) {
             val value = runCatching { if (process.isAlive) null else process.exitValue() }.getOrNull()
             if (value != null) {
                 exitCode = value

@@ -16,6 +16,7 @@ import com.beichen.polaris.core.agent.ToolExecutor
 import com.beichen.polaris.core.agent.currentAgentScope
 import com.beichen.polaris.core.agent.journal.RunScope
 import com.beichen.polaris.core.agent.journal.ToolSettleStatus
+import com.beichen.polaris.core.time.Monotonic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -120,7 +121,9 @@ class RhinoJsEngine : JsEngine {
         init { setInstructionObserverThreshold(INSTRUCTION_CHECK_INTERVAL) }
 
         override fun observeInstructionCount(instructionCount: Int) {
-            if (System.currentTimeMillis() >= deadlineMs) throw ScriptTimeout()
+            // 看门狗只在解释器执行指令时被调到；时钟必须单调，否则系统对时（回拨）
+            // 会让这个判据永远为假，脚本从此不再被截断。
+            if (Monotonic.nowMs() >= deadlineMs) throw ScriptTimeout()
         }
     }
 
@@ -134,7 +137,7 @@ class RhinoJsEngine : JsEngine {
         withTimeoutOrNull(SCRIPT_TIMEOUT_MS + OUTER_GRACE_MS) {
             withContext(Dispatchers.Default) {
                 // 截止时间在进入 Default 之后才算：排队等 worker 的时间不该算进脚本预算
-                val deadline = System.currentTimeMillis() + SCRIPT_TIMEOUT_MS
+                val deadline = Monotonic.nowMs() + SCRIPT_TIMEOUT_MS
                 val cx = DeadlineContext(deadline)
                 org.mozilla.javascript.Context.enter(cx)
                 try {
