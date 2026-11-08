@@ -89,8 +89,17 @@ internal class GenerationRunController(
     private val _reasoning = MutableStateFlow<String?>(null)
     val reasoning: StateFlow<String?> = _reasoning.asStateFlow()
 
-    private var draftBuffer: String? = null
-    private var reasoningBuffer: String? = null
+    /**
+     * 草稿累积缓冲。用 [StringBuilder] 而不是 `String?` 做 `+=`：
+     * 流式增量每段只有几个字符，`buf = (buf ?: "") + delta` 每次都要把已有全文复制一遍，
+     * 2 万字回答按 4 字一段算是 5,000 次、累计约 5,000 万字符的搬运。追加本身是摊还 O(1)。
+     *
+     * 注意**只解决了累加**：投影到 `_draft` 仍要在每次增量后给出一个新 String（StateFlow 是
+     * `String` 契约），这一步的拷贝还在。要再省得把 UI 侧改成「版本号 + 共享缓冲」并做帧级
+     * 节流，属于界面层的独立改动，不在本次范围内。
+     */
+    private var draftBuffer: StringBuilder? = null
+    private var reasoningBuffer: StringBuilder? = null
 
     /** owner 是否就是当前显示会话——在途 UI 更新（草稿/工具卡/气泡）的投影开关。 */
     fun isOwnerActive(): Boolean = owner != null && owner == activeId()
@@ -100,24 +109,26 @@ internal class GenerationRunController(
 
     /** 切会话 / 收尾后把缓冲投影到显示态：owner==active 恢复，否则清（缓冲不丢）。 */
     fun syncDisplay() {
-        _draft.value = if (isOwnerActive()) draftBuffer else null
-        _reasoning.value = if (isOwnerActive()) reasoningBuffer else null
+        _draft.value = if (isOwnerActive()) draftBuffer?.toString() else null
+        _reasoning.value = if (isOwnerActive()) reasoningBuffer?.toString() else null
     }
 
     fun appendText(delta: String) = synchronized(draftLock) {
-        draftBuffer = (draftBuffer ?: "") + delta
-        if (isOwnerActive()) _draft.value = draftBuffer
+        val buf = draftBuffer ?: StringBuilder().also { draftBuffer = it }
+        buf.append(delta)
+        if (isOwnerActive()) _draft.value = buf.toString()
     }
 
     fun appendReasoning(delta: String) = synchronized(draftLock) {
-        reasoningBuffer = (reasoningBuffer ?: "") + delta
-        if (isOwnerActive()) _reasoning.value = reasoningBuffer
+        val buf = reasoningBuffer ?: StringBuilder().also { reasoningBuffer = it }
+        buf.append(delta)
+        if (isOwnerActive()) _reasoning.value = buf.toString()
     }
 
     /** 清草稿（重试开始 / 最终回答落库前）。返回清空前的内容，供「停止」路径抢救已生成部分。 */
     fun takeDraft(): String? {
         val partial = synchronized(draftLock) {
-            val kept = draftBuffer?.takeIf { it.isNotBlank() }
+            val kept = draftBuffer?.toString()?.takeIf { it.isNotBlank() }
             draftBuffer = null
             reasoningBuffer = null
             _draft.value = null
@@ -154,7 +165,7 @@ internal class GenerationRunController(
         this.owner = owner
         _generating.value = owner
         onStarted()
-        draftBuffer = if (placeholderDraft) "" else null
+        draftBuffer = if (placeholderDraft) StringBuilder() else null
         reasoningBuffer = null
         syncDisplay()
         _running.value = true
