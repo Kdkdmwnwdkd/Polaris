@@ -708,6 +708,17 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     override val memories: StateFlow<List<MemoryItem>> get() = memoryFacade.memories
 
     /**
+     * 配置持久化（SharedPreferences 包装）：模型配置、开关、审批档位、SSH 档案都在这里，
+     * 进程重启能还原，避免「明明填过却退回默认值」的不一致。
+     *
+     * 位置有讲究：**必须早于 [terminalBackendFactory]**。W-RT5 之后后端工厂的 SSH 探测
+     * 要读「档案填了没有」（`sshSavedProfile()`），而能力链在任何一次 `refresh()` 里都会
+     * 触发探测——包括构造期就可能被回调触发的那些。声明晚了，那次探测会读到未初始化的
+     * `configStore` 并抛 NPE，而现场只是一次能力刷新，看起来与 SSH 毫无关系。
+     */
+    private val configStore = ConfigStore(app)
+
+    /**
      * 终端后端工厂（T07）：proot 优先、不可用回落本机 user。
      * 单独持有引用，供能力链（DoD⑤）复用其带缓存的可用性判断，避免重复实现降级顺序与探测。
      */
@@ -1190,10 +1201,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             }
         )
 
-    /** 模型配置持久化：进程重启也能还原，避免「明明填过却退回默认值」的不一致。 */
-    private val configStore = ConfigStore(app)
-
     // —— 3.1 第三批：设置开关 / 聊天外观 —— 实现见 SettingsFacade / AppearanceFacade ——
+
+    // configStore 已上移到字段区前部（W-RT5：后端工厂的 SSH 探测依赖它，声明顺序有约束）。
 
     /**
      * 四个设置开关（自动化 / 通知 / 任务模式 / 任务模型）。
