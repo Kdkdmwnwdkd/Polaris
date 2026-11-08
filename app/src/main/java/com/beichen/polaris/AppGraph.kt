@@ -15,6 +15,7 @@ import com.beichen.polaris.core.llm.local.AndroidDeviceProbe
 import com.beichen.polaris.core.llm.local.LlamaJni
 import com.beichen.polaris.core.llm.local.LocalLlamaEngine
 import com.beichen.polaris.core.telemetry.TraceSink
+import com.beichen.polaris.core.time.Monotonic
 import com.beichen.polaris.core.workspace.WorkspaceStore
 import com.beichen.polaris.runtime.LocalLlmRuntime
 import com.beichen.polaris.runtime.lease.LeaseRegistry
@@ -28,7 +29,7 @@ import com.beichen.polaris.ui.container.ContainerInstallController
  *
  * ## 为什么存在
  *
- * 这个应用里有 22 个带可变状态的 `object`：它们是跨层通信的真实通道
+ * 这个应用里有 23 个带可变状态的 `object`：它们是跨层通信的真实通道
  * （ViewModel ↔ 无障碍服务 ↔ 前台服务 ↔ 推理引擎），但依赖关系不写在任何构造参数里。
  * 后果是三条：
  *
@@ -299,6 +300,15 @@ object AppGraph {
         )
 
         // ── 外观与解析 ────────────────────────────────────────────────────
+        add(
+            Global(
+                name = "Monotonic",
+                packageName = "com.beichen.polaris.core.time",
+                link = "全部超时判定共用时钟源（后台任务 / 脚本看门狗 / CI 轮询 / 审批倒计时）；" +
+                    "harness 注入假时钟后必须还原",
+                reset = { Monotonic.reset() }
+            )
+        )
         add(
             Global(
                 name = "AppearanceState",

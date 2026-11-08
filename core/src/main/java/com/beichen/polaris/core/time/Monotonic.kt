@@ -25,8 +25,18 @@ object Monotonic {
     fun nowMs(): Long = source()
 
     /**
+     * 恢复默认时钟源。
+     *
+     * 给 AppGraph 的统一清场用（harness 跑完一个用例要还原，否则假时钟会漏到下一个
+     * 用例里，表现为「莫名其妙立刻超时」）。生产代码不要调用。
+     */
+    fun reset() {
+        source = DEFAULT
+    }
+
+    /**
      * 仅供测试：替换时钟源，用来模拟「时钟回拨 / 前跳」。
-     * 传 `null` 恢复默认。生产代码不要调用。
+     * 传 `null` 等价于 [reset]。
      */
     fun installForTest(clock: (() -> Long)?) {
         source = clock ?: DEFAULT

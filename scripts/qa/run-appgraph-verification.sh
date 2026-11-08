@@ -2,7 +2,7 @@
 # AppGraph harness（静态结构对账，不依赖 Android SDK）。
 #
 # 盯的是「全局状态清单是不是真的」：`AppGraph.globals` 声称自己列出了应用里
-# 全部 22 条跨层通道。这个声称有两个方向的失效方式，且都不会报错：
+# 全部 23 条跨层通道。这个声称有两个方向的失效方式，且都不会报错：
 #
 #   ① 漏登记——新增一个带可变状态的 object，清单没跟上，于是下次有人
 #      「照着 AppGraph 清场」时那条通道带着上一轮的值进入下一轮；
@@ -79,7 +79,9 @@ for c in chunks:
 
 print(f"\n[A] 清单本体（解析到 {len(entries)} 条）")
 
-check("A1 清单条数为 22", len(entries) == 22, f"实际 {len(entries)}")
+# 23 = 22 + 1：4.2 引入 Monotonic（超时判定的统一时钟源，带可注入的测试时钟）。
+# 数字变化必须有对应新增，不能为了让它变绿而调数字。
+check("A1 清单条数为 23", len(entries) == 23, f"实际 {len(entries)}")
 
 names = [e["name"] for e in entries]
 dups = sorted({n for n in names if names.count(n) > 1})
