@@ -150,6 +150,7 @@ import com.beichen.polaris.core.agent.AgentRunState
 import com.beichen.polaris.core.agent.AgentRunStateStore
 import com.beichen.polaris.core.agent.ApprovalGrant
 import com.beichen.polaris.core.agent.ApprovalGrouping
+import com.beichen.polaris.core.agent.ApprovalTier
 import com.beichen.polaris.core.agent.ApprovalScope
 import com.beichen.polaris.core.agent.awaitApprovalDecision
 import com.beichen.polaris.core.agent.PlanBroker
@@ -1295,6 +1296,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     override fun setPlanMode(enabled: Boolean) = settingsFacade.setPlanMode(enabled)
 
+    override val approvalTier: StateFlow<String> get() = settingsFacade.approvalTier
+
+    override fun setApprovalTier(mode: String) = settingsFacade.setApprovalTier(mode)
+
     /** UI 回调：批准计划。 */
     override fun approvePlan(planId: String) {
         PlanBroker.approve(planId)
@@ -1531,10 +1536,23 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private suspend fun requestApproval(tool: AgentTool, args: JsonObject): Boolean = approvalMutex.withLock {
         // W-36/R-08：按「同类操作」放行而非工具名；shell 再看命令内容——不可逆命令永不记忆。
         val grant = ApprovalScope.of(tool.name, args)
-        if (ApprovalScope.allows(grant, sessionAllowed)) return@withLock true
+        // W-RT3：档位判定统一走 ApprovalTier——「逐步确认」连会话白名单也失效；
+        // 「全自动」对低风险组（界面操作 / 截图 / 朗读通知 / 文件写入）免弹窗，
+        // 高风险组（应用装卸 / GitHub 提交 / shell）维持原判。
+        // 注意传的是**归组键**而不是 grant.key：shell 的 key 可能带命令前缀，
+        // 拿 key 去比集合永远不等，看着「更安全」，实际是让 AUTO 档对 shell 完全失效、
+        // 而对其它组又碰巧对——那种「碰巧对」最难查。
+        val mode = settingsFacade.approvalTier.value
+        val group = ApprovalGrouping.groupOf(tool.name)
+        if (ApprovalTier.shouldSkipDialog(mode, group, ApprovalScope.allows(grant, sessionAllowed))) {
+            return@withLock true
+        }
         // W-8 P1-C：截图按回合缓存批准（真机日志里「看一眼点一下」被对话框反复打断）；
         // 回合边界在 send() 入口重置 screenshotApprovedThisTurn。
-        if (grant.key == ApprovalGrouping.GROUP_UI_SCREENSHOT && screenshotApprovedThisTurn) return@withLock true
+        // 逐步确认档下不用这个缓存：用户点名要「每次都问」，回合缓存会让第二次静默放行。
+        if (mode != ApprovalTier.STRICT &&
+            grant.key == ApprovalGrouping.GROUP_UI_SCREENSHOT && screenshotApprovedThisTurn
+        ) return@withLock true
         val deferred = CompletableDeferred<Boolean>()
         _pendingApproval.value = ApprovalRequest(
             toolName = tool.name,

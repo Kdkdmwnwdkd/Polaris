@@ -26,6 +26,15 @@ interface AppSettingsContract {
     /** 计划模式：先出方案待批，再执行。 */
     val planMode: StateFlow<Boolean>
 
+    /**
+     * 审批档位（W-RT3）：`STRICT` / `STANDARD` / `AUTO`。
+     *
+     * 暴露字符串而不是枚举：档位由 `ApprovalTier.normalize` 归一化，认不出的值
+     * 一律退回 `STANDARD`。接口层只搬运，判定在规则层——同一个字符串不该在
+     * UI、VM、核心三处各判一次合法性。
+     */
+    val approvalTier: StateFlow<String>
+
     /** 后台任务用哪套模型档案；空串 = 跟随当前。 */
     val taskProfileId: StateFlow<String>
 
@@ -35,6 +44,9 @@ interface AppSettingsContract {
     fun setAutomationEnabled(v: Boolean)
     fun setCompletionNotifyEnabled(enabled: Boolean)
     fun setPlanMode(enabled: Boolean)
+
+    /** 切换审批档位；传非法值按 `STANDARD` 处理（归一化在规则层）。 */
+    fun setApprovalTier(mode: String)
     fun setTaskProfile(id: String)
 }
 

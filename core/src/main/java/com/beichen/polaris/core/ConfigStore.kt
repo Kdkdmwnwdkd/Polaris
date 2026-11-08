@@ -313,6 +313,7 @@ class ConfigStore(context: Context) {
         /** 功能五（P1-10）：回答完成提醒开关（默认关——通知是侵入式能力，opt-in）。 */
         private const val KEY_COMPLETION_NOTIFY = "completion_notify"
         private const val KEY_PLAN_MODE = "plan_mode"
+        private const val KEY_APPROVAL_TIER = "approval_tier"
         private const val KEY_TASK_PROFILE = "task_profile_id"
         // hotfix32：聊天背景图（URI + 不透明度）
         private const val KEY_CHAT_BG_URI = "chat_bg_uri"
@@ -334,6 +335,20 @@ class ConfigStore(context: Context) {
     /** W-25：写任务模式（设置页开关即时生效，落盘供下次启动读取）。 */
     fun setPlanModeEnabled(enabled: Boolean) {
         sp.edit().putBoolean(KEY_PLAN_MODE, enabled).apply()
+    }
+
+    /**
+     * W-RT3：审批档位（逐步确认 / 常规 / 全自动）。
+     *
+     * 返回**原始字符串**，调用方必须过 [com.beichen.polaris.core.agent.ApprovalTier.normalize]：
+     * 旧版本残留或手改数据统一退回「常规」，坏配置永不放大权限。
+     * 不在这里 normalize，是因为存储层不该知道有哪些档位——那是规则层的知识。
+     */
+    fun approvalTier(): String = sp.getString(KEY_APPROVAL_TIER, null).orEmpty()
+
+    /** W-RT3：写审批档位（设置页单选即时生效，落盘供下次启动读取）。 */
+    fun setApprovalTier(mode: String) {
+        sp.edit().putString(KEY_APPROVAL_TIER, mode).apply()
     }
 
     /**

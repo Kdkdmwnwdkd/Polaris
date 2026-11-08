@@ -9,6 +9,7 @@ import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.Column
@@ -43,6 +44,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,6 +63,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.widget.Toast
+import com.beichen.polaris.core.agent.ApprovalTier
 import com.beichen.polaris.core.agent.SurvivalCheckService
 import com.beichen.polaris.runtime.lease.LeaseRegistry
 import com.beichen.polaris.runtime.lease.LeaseSnapshot
@@ -263,6 +266,56 @@ fun SettingsScreen(
                         )
                     }
                 )
+                AkDivider(Modifier.padding(start = AgentSpacing.space4))
+                // —— W-RT3：审批档位 ————————————————
+                //
+                // 三档单选，样式沿用「推理参数 › 资源档位」那一组（RadioButton + 两行文字），
+                // 不新造控件：用户已经在模型页见过这套交互，不必再学一遍。
+                //
+                // 为什么放在「先计划后执行」下面：两者都是「动手前问多严」的档位，
+                // 一个管任务级（要不要先出方案），一个管动作级（这一步要不要确认）。
+                val approvalTier by vm.approvalTier.collectAsStateWithLifecycle()
+                val tierOptions = listOf(
+                    ApprovalTier.STRICT to ApprovalTier.descriptionOf(ApprovalTier.STRICT),
+                    ApprovalTier.STANDARD to ApprovalTier.descriptionOf(ApprovalTier.STANDARD),
+                    ApprovalTier.AUTO to ApprovalTier.descriptionOf(ApprovalTier.AUTO),
+                )
+                val tierTitle = mapOf(
+                    ApprovalTier.STRICT to "逐步确认",
+                    ApprovalTier.STANDARD to "常规",
+                    ApprovalTier.AUTO to "全自动",
+                )
+                Column(Modifier.padding(vertical = AgentSpacing.space2)) {
+                    tierOptions.forEachIndexed { index, (mode, hint) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { vm.setApprovalTier(mode) }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = approvalTier == mode,
+                                onClick = { vm.setApprovalTier(mode) }
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = "危险操作审批：" + (tierTitle[mode] ?: mode),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = hint,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        if (index != tierOptions.lastIndex) {
+                            Spacer(Modifier.height(AgentSpacing.space1))
+                        }
+                    }
+                }
             }
 
             // —— W-103：工具范围 ——

@@ -31,8 +31,13 @@
 # 没为测试或日志多写一行。这条上限抬得比第一次多，是因为它对应一个新功能区，
 # 不是把逻辑堆进旧函数——真要判违规，看的是「新增的函数有没有变长」而不是文件总行数。
 #
+# 2026-11-08 第三次上调（ChatViewModel +18）：移植 W-RT3 审批档位。
+# 全部落在 requestApproval 一个函数里：取档位、取归组键、一次判定、一条退化条件。
+# 注释比代码长（为什么传 group 不传 grant.key、为什么 STRICT 要绕过截图回合缓存），
+# 这两句是后面最容易被人「优化回去」的地方，删了就会退化成「AUTO 档对 shell 完全失效」。
+#
 # 以后再抬必须先证明「功能确实需要」——「顺手写的」不算理由。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3465
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3483
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3106
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2354
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
