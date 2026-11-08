@@ -30,6 +30,13 @@ import kotlinx.coroutines.launch
  *
  * 草稿的读写与「重试时清空」共用 [draftLock]：`onTextDelta` 来自流式读取协程，
  * 与事件回调里的清空是两条线程，不加锁会出现「重试后又把旧增量拼回去」。
+ *
+ * 锁定范围是**全部**触碰 [draftBuffer] / [reasoningBuffer] 的地方，包括 [start] 里的
+ * 重置、[finish] 里的清空、[syncDisplay] 里的读取。两个理由：① `StringBuilder` 本身
+ * 不是线程安全的，两个线程并发 `append` 会把内部数组写坏；② 普通字段没有可见性保证，
+ * `start` 在主线程置了占位缓冲，IO 线程的 `appendText` 可能仍读到 `null`，于是另建一个
+ * StringBuilder 把增量写进野对象——占位气泡永远不出字。
+ * 只给 `appendText` 加锁是**假互斥**：不参与同一把锁的写点等于没被保护。
  */
 internal class GenerationRunController(
     private val scope: CoroutineScope,
@@ -109,8 +116,10 @@ internal class GenerationRunController(
 
     /** 切会话 / 收尾后把缓冲投影到显示态：owner==active 恢复，否则清（缓冲不丢）。 */
     fun syncDisplay() {
-        _draft.value = if (isOwnerActive()) draftBuffer?.toString() else null
-        _reasoning.value = if (isOwnerActive()) reasoningBuffer?.toString() else null
+        synchronized(draftLock) {
+            _draft.value = if (isOwnerActive()) draftBuffer?.toString() else null
+            _reasoning.value = if (isOwnerActive()) reasoningBuffer?.toString() else null
+        }
     }
 
     fun appendText(delta: String) = synchronized(draftLock) {
@@ -165,8 +174,11 @@ internal class GenerationRunController(
         this.owner = owner
         _generating.value = owner
         onStarted()
-        draftBuffer = if (placeholderDraft) StringBuilder() else null
-        reasoningBuffer = null
+        // 与 appendText 共用 draftLock：这里是主线程重置缓冲，那边是 IO 线程追加。
+        synchronized(draftLock) {
+            draftBuffer = if (placeholderDraft) StringBuilder() else null
+            reasoningBuffer = null
+        }
         syncDisplay()
         _running.value = true
         hooks.onBegin(owner, placeholderDraft)
@@ -188,8 +200,11 @@ internal class GenerationRunController(
         owner?.let { who -> runCatching { onSettling(who) } }
         owner = null
         _generating.value = null
-        draftBuffer = null
-        reasoningBuffer = null
+        // 同上：收尾在协程 finally（可能是 IO 线程），必须与 appendText 同一把锁。
+        synchronized(draftLock) {
+            draftBuffer = null
+            reasoningBuffer = null
+        }
         syncDisplay()
         _running.value = false
         hooks.onReset()
