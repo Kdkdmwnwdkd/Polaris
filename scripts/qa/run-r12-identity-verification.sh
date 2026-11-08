@@ -80,7 +80,7 @@ if [ ! -d "$OUT/com" ]; then
   grep -v '^warning:' "$COMPILE_LOG" | head -15 | sed 's/^/        /'
 else
   STD=$(find "$KC/lib" "$(dirname "$KOTLINC_BIN")/../lib" -name 'kotlin-stdlib.jar' 2>/dev/null | head -1)
-  BODY=$(java -cp "$OUT:$COROUTINES:$STD" -Dagentkit.src="$SRC" R12IdentityVerificationKt 2>&1)
+  BODY=$(java -cp "$OUT:$COROUTINES:$STD" -Dagentkit.src="$SRC" -Dagentkit.core.src="$SRC_CORE" R12IdentityVerificationKt 2>&1)
   rc=$?
   echo "$BODY" | grep -E '^  (PASS|FAIL)' || true
   line=$(echo "$BODY" | grep -oE '[0-9]+ 通过 / [0-9]+ 失败' | tail -1)

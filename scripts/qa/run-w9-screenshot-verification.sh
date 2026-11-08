@@ -45,7 +45,7 @@ compile_w9_screenshot() {
   local attempt=$1 out
   out=$(java -cp "$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
     -no-stdlib -no-reflect \
-    -Xfriend-paths="$CLASSES" \
+    -Xfriend-paths="${CLASSES//:/,}" \
     -classpath "$DEPS" \
     -d "$OUT" $ROOT/scripts/qa/W9ScreenshotVerification.kt 2>&1) || true
   if echo "$out" | grep -q "error:"; then

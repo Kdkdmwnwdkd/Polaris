@@ -513,11 +513,12 @@ private fun codeOf(src: String): String = src.lineSequence()
 private fun testSourceGuards() {
     println("\n== E 源码守卫：旧形态不能回来 ==")
 
-    // 3.5 拆模块：terminal 已移到 :core 模块，源码根随之变化
-    val root = System.getProperty("agentkit.src") ?: "core/src/main/java/com/beichen/polaris"
-    val factorySrc = read("$root/core/terminal/backend/TerminalBackendFactory.kt")
-    val poolSrc = read("$root/core/terminal/TerminalSessionPool.kt")
-    val identitySrc = read("$root/core/terminal/backend/TerminalIdentity.kt")
+    // 3.5 拆模块：terminal 在 :core，tools/automation 在 :app——两个根都要有
+    val root = System.getProperty("agentkit.src") ?: "app/src/main/java/com/beichen/polaris"
+    val coreRoot = System.getProperty("agentkit.core.src") ?: "core/src/main/java/com/beichen/polaris"
+    val factorySrc = read("$coreRoot/core/terminal/backend/TerminalBackendFactory.kt")
+    val poolSrc = read("$coreRoot/core/terminal/TerminalSessionPool.kt")
+    val identitySrc = read("$coreRoot/core/terminal/backend/TerminalIdentity.kt")
     val shellSrc = read("$root/tools/ShellTool.kt")
 
     check("E1 工厂按 satisfies 筛候选（代码里，不是注释里）") {

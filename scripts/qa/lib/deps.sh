@@ -78,6 +78,10 @@ qa_require_project() {
 #
 # 拆模块后（:app + :core），只用 app 的 classes 会让 harness 找不到 core 里的类，
 # 表现是整片 `unresolved reference: AgentLogger` —— 看起来像代码坏了，实际是 classpath 少一段。
+#
+# 与 `-Xfriend-paths` 的分隔符不同：**classpath 用冒号，friend-paths 用逗号**（Kotlin CLI 约定）。
+# 拆模块后 CLASSES 变成 "app:core"，直接塞给 -Xfriend-paths 会被当成一个不存在的路径，
+# 表现为「internal 符号全部不可见」（连 app 自己的 internal 也报）——本轮踩过一次。
 qa_classpath() {
     local root="$1" d out=""
     for d in "$root/app/build/tmp/kotlin-classes/debug" \

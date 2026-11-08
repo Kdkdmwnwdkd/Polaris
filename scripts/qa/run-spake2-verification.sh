@@ -34,7 +34,7 @@ echo "[1/2] compiling spake2 harness with kotlin-compiler-embeddable ..."
 # -Xfriend-paths：SPAKE2 实现与 Ed25519 群运算是 internal，仅 module 内可见
 java -cp "$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -no-reflect \
-  -Xfriend-paths="$CLASSES" \
+  -Xfriend-paths="${CLASSES//:/,}" \
   -classpath "$DEPS" \
   -d "$OUT" $ROOT/scripts/qa/Spake2Verification.kt
 

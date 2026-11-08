@@ -33,7 +33,7 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 echo "[1/2] compiling adb discovery harness ..."
 java -cp "$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -no-reflect \
-  -Xfriend-paths="$CLASSES" \
+  -Xfriend-paths="${CLASSES//:/,}" \
   -classpath "$DEPS" \
   -d "$OUT" $ROOT/scripts/qa/AdbDiscoveryVerification.kt
 
