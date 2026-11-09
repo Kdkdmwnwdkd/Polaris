@@ -1003,10 +1003,12 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             _serviceConnected.value = connected
             refreshCapabilityPlans() // 无障碍连接变化 → 能力就绪度随之刷新
         }
-        // W-17：注册周期巡检 + 载入列表，两者都读磁盘，跟着对账一起下沉（列表晚一帧到无妨）。
+        // W-17：注册周期巡检（读磁盘，跟着对账一起下沉）。
+        // 列表载入**不能**放这里：本 init 块在类体第 971 行，早于第 1331 行的 workflowFacade，
+        // 慢设备上 IO 协程先于属性初始化抢到 CPU 就会读到未初始化的 facade（2026-11-09 模拟器复现 NPE）。
+        // 它挪到类体末尾的 init 块里，那里所有字段已就绪。
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { WorkflowScheduler.ensureScheduled(app) }
-            refreshWorkflows()
         }
         // P3-1：能力清单自检（只在有偏差时 warn）。必须排在 MCP 注册之前——MCP 工具名是运行时来的，参与审计只会制造噪声。
         CapabilityAuditReporter.report(registry.list())
@@ -3582,5 +3584,14 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 out.toByteArray()
             }
         }
+    }
+
+    /**
+     * W-17 列表载入。**必须留在类体最末**：Kotlin 按书写顺序执行属性初始化器与 init 块，
+     * 而 [refreshWorkflows] 依赖第 1331 行才初始化的 [workflowFacade]。放在上面第 971 行的
+     * init 块里时，慢设备上 IO 协程会先于属性初始化执行，直接 NPE（2026-11-09 模拟器复现）。
+     */
+    init {
+        viewModelScope.launch(Dispatchers.IO) { runCatching { refreshWorkflows() } }
     }
 }

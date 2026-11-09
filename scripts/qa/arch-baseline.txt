@@ -81,7 +81,16 @@
 # 第一次提交忘了这一层，CI 直接报 Unresolved reference——静态断言抓不到的作用域问题。
 #
 # 以后再抬必须先证明「功能确实需要」——「顺手写的」不算理由。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3586
+#
+# 2026-11-09 第十次上调（ChatViewModel +11，3586 → 3597）：修一处只在慢设备复现的冷启动 NPE。
+#   init 块（第 971 行）里启动的协程会立刻调 refreshWorkflows()，而 workflowFacade 在
+#   第 1331 行才初始化——模拟器四核被占时 IO 协程抢在主线程构造之前，必现 null 引用
+#   （AndroidRuntime: Attempt to invoke virtual method 'WorkflowFacade.refreshWorkflows()'
+#   on a null object reference）。编译期合语法、静态断言为真、CI 快机器不复现，
+#   只有真跑才炸，用户看到的是「一开就闪退」。
+#   修法：载入挪到类体末尾的 init 块（Kotlin 按书写顺序执行初始化器与 init 块）。
+#   +11 行里 8 行是注释（为什么不能挪回去），3 行是新 init 块本身，没有新增逻辑分支。
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3597
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3128
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2461
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
