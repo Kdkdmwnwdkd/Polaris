@@ -67,6 +67,16 @@ class HttpRequestTool(
     override val readOnly = false
 
     /**
+     * 审计 F1：这条通道能把**任意内容**发到**任意地址**，而它此前完全免审批。
+     * 单独看它不是漏洞（发请求是正常能力），但和「只读 shell 免审批」串起来，
+     * 就是「读设备文件 → POST 到外部」的零弹窗外泄链。
+     *
+     * 审批粒度按域名记（见 `ApprovalScope.of`）：同一个域名只问一次，换域名重问——
+     * 正常查资料不会被拖成十几次弹窗，把数据发去新域名则必须过一次人。
+     */
+    override val needsApproval = true
+
+    /**
      * R6：HTTP 往返的网络等待，给 90 秒。
      *
      * 本工具因支持 POST/PUT 被标为**写操作**（见上方 W-46 说明），因而吃 600s 的写预算——

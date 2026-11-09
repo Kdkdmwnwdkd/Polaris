@@ -1613,8 +1613,21 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private val _pendingApproval = MutableStateFlow<ApprovalRequest?>(null)
     override val pendingApproval: StateFlow<ApprovalRequest?> = _pendingApproval.asStateFlow()
 
-    /** 本次会话内「始终允许」的工具名集合：仅存进程内存，App 重启即失效，避免长期授权漂移。 */
-    private val sessionAllowed = mutableSetOf<String>()
+    /**
+     * 「本次会话始终允许」的授权键，**按对话隔离**（审计 F3）。
+     *
+     * 修前是一个进程级的 `mutableSetOf<String>`：在会话 A 里为 `write_file` 勾过「不再询问」，
+     * 切到会话 B 同样免问——而弹窗文案写的是「本次会话」。用户理解的「会话」是当前对话，
+     * 实现里却是「App 进程存活期间」，这是两种语义的静默错位。
+     *
+     * 现在按 `conversationId` 分桶：切对话就换桶，桶内的授权不会溢出到别处。
+     * 仍然只存进程内存（重启即失效），不做持久化——长期授权漂移是另一个问题，不在这里解决。
+     */
+    private val allowedByConversation = mutableMapOf<String, MutableSet<String>>()
+
+    /** 当前对话的授权白名单视图；保持原有的读写写法不变（run-r08-verification 有源码断言）。 */
+    private val sessionAllowed: MutableSet<String>
+        get() = allowedByConversation.getOrPut(_activeConversationId.value) { mutableSetOf() }
 
     /**
      * W-8 P1-C：ui_screenshot 的本回合批准缓存（见 [requestApproval]）。

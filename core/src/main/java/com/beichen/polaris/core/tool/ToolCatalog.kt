@@ -115,7 +115,11 @@ object ToolCatalog {
         CatalogTool("ui_screenshot", "ui", Capability.DANGEROUS, Approval.UI_SCREENSHOT),
         CatalogTool("ask_user", "ui", Capability.SAFE),
         // ── net：HTTP 请求与网页抓取
-        CatalogTool("http_request", "net", Capability.PRIVILEGED),
+        // W-46 起它就不算只读（POST 与 GET 不能并发），但它仍是唯一一条「把任意内容
+        // 发到任意地址」的外发通道——审计 F1：它与「只读 shell 免审批」组合起来就是
+        // 一条零弹窗的取数 + 外发链。这里补审批归组，判定按**域名**粒度（见 ApprovalScope），
+        // 同一个域名只问一次，不至于把正常联网查询拖成十几次弹窗。
+        CatalogTool("http_request", "net", Capability.PRIVILEGED, Approval.NETWORK),
         // ── web：浏览器前进后退、点击、填表
         CatalogTool("web_open", "web", Capability.PRIVILEGED),
         CatalogTool("web_snapshot", "web", Capability.PRIVILEGED),
@@ -201,6 +205,22 @@ object ToolCatalog {
 
         /** shell 组里不可逆的那一档（R-08）：永不进入会话白名单。 */
         const val SHELL_DESTRUCTIVE = "shell_destructive"
+
+        /**
+         * 提权 shell（`identity=shizuku`，uid 2000）。与普通 shell 分开且**永不记忆**：
+         * 同一条 `ls` 换个身份执行，能看到的范围完全不同——权限才是风险变量，
+         * 命令文本不是。
+         */
+        const val SHELL_ELEVATED = "shell_elevated"
+
+        /**
+         * 首词安全、但从整体看不可记忆的 shell（`busybox rm`、`$(rm -rf)`、`cp`、重定向、
+         * `python -c`）。同样永不进白名单。
+         */
+        const val SHELL_UNMEMORIZABLE = "shell_unmemorizable"
+
+        /** 网络外发：按域名记忆，换一个域就要重新问。 */
+        const val NETWORK = "net_request"
     }
 
     private val byName: Map<String, CatalogTool> = tools.associateBy { it.name }

@@ -33,6 +33,15 @@ object ApprovalGrouping {
      */
     const val GROUP_SHELL_DESTRUCTIVE = ToolCatalog.Approval.SHELL_DESTRUCTIVE
 
+    /** 提权 shell（uid 2000）：权限变了，命令没变，同样**永不记忆**。 */
+    const val GROUP_SHELL_ELEVATED = ToolCatalog.Approval.SHELL_ELEVATED
+
+    /** 首词安全但整体不可记忆的 shell（包装器 / 命令替换 / 解释器 / 写文件）。 */
+    const val GROUP_SHELL_UNMEMORIZABLE = ToolCatalog.Approval.SHELL_UNMEMORIZABLE
+
+    /** 网络外发通道：按域名记忆，换域重问。 */
+    const val GROUP_NETWORK = ToolCatalog.Approval.NETWORK
+
     /**
      * 工具名 → 归组键。
      *
@@ -56,6 +65,9 @@ object ApprovalGrouping {
         GROUP_GIT_READ -> "GitHub 状态查询"
         GROUP_DEVICE_OUTPUT -> "朗读与通知"
         GROUP_SHELL -> "shell 命令"
+        GROUP_SHELL_ELEVATED -> "提权 shell（uid 2000）"
+        GROUP_SHELL_UNMEMORIZABLE -> "shell 命令"
+        GROUP_NETWORK -> "网络请求"
         else -> group
     }
 }
