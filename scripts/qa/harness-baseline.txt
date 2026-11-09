@@ -143,4 +143,16 @@
 #   变异验证 4 组全部靶向精确：新增未登记单例 → 只有 B4 红；reset 里写盘 → 只有 D2 红；
 #   reset 里删文件 → 只有 D3 红；清单写错名字 → 只有 B1 红。
 #
-114
+# 2026-11-09：114 → 122（运行层八块移植，新增 8 个 harness）。
+#   W-RT2 run-resource-plan-verification.sh——资源分档（三档表 + 只减不增的 cap）。
+#   W-RT3 run-approval-tier-verification.sh——审批档位（严格/常规/全自动的白名单语义）。
+#   W-RT4 run-prompt-variables-verification.sh——提示词变量抽槽与填槽。
+#   W-RT5 run-ssh-backend-verification.sh——SSH 档案校验 / argv 拼装 / 「不进降级链」。
+#   W-RT6 run-knowledge-base-verification.sh——本地知识库 BM25 检索与工具接线。
+#   W-RT7 run-cost-drilldown-verification.sh——按模型算钱的归属与估算。
+#   W-RT8 run-qr-verification.sh——二维码编码，用 zxing 真解码器对拍。
+#   W-RT9 run-long-conversation-archive-verification.sh——超工作集轮次转归档与导出。
+#   八个都是「静态断言 + 自编译真跑」两段式，CI 上 SKIP=0（真 kotlinc 齐备）。
+#   校验方式不变：`ls scripts/qa/run-*.sh | grep -v run-all.sh | wc -l` 应等于本数字。
+#
+122
