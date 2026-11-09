@@ -191,6 +191,182 @@ fun testInvariant() {
     }
 }
 
+/* --------------------- D. 审计回归：一层壳不能换来永久放行 --------------------- */
+
+/**
+ * 2026-11-09 外部审计 F2。
+ *
+ * 修前的判据是 `isDestructive(首词)`：首词不在黑名单里就落回可记忆的 `shell` 键。
+ * 于是 `busybox rm -rf`、`env rm`、`$(rm -rf)`、`python -c`、`sed -i`、`cp`、`>`
+ * 全部搭上「用户为 npm install 勾的那一次授权」静默通过。
+ *
+ * 这一组断言的就是那句用户能听懂的话：**记住一条日常命令，不等于放行这些**。
+ */
+fun testWrappedBypass() {
+    println("[D] 审计回归：包装/替换/写文件一律不可记忆")
+
+    val bypass = listOf(
+        "busybox rm -rf /sdcard/DCIM",
+        "toybox rm -rf /sdcard/DCIM",
+        "env FOO=1 rm -rf /sdcard/DCIM",
+        "nohup rm -rf /sdcard/DCIM",
+        "timeout 5 rm -rf /sdcard/DCIM",
+        "xargs rm -rf",
+        "eval \"rm -rf /sdcard/DCIM\"",
+        "command rm -rf /sdcard/DCIM",
+        "\$(rm -rf /sdcard/DCIM)",
+        "echo `rm -rf /sdcard/DCIM`",
+        "cp /dev/null /sdcard/important.txt",
+        "echo x > /sdcard/important.txt",
+        "python3 -c \"import os; os.remove('a')\"",
+        "node -e \"require('fs').unlinkSync('a')\"",
+        "sed -i 's/a/b/' notes.txt",
+        "awk '{print}' a.txt > b.txt",
+        "tree -o out.txt",
+        "sort -o out.txt in.txt",
+    )
+    bypass.forEach { cmd ->
+        check("D 不可记忆：$cmd") {
+            expect(!ShellCommandRules.isMemorizable(cmd)) { "包装后被记成了可记忆——审计 F2 的绕过路径又回来了" }
+            val g = shellGrant(cmd)
+            expect(!g.memorizable) { "ApprovalScope 仍判可记忆：${g.key}" }
+            expect(g.key.startsWith(ApprovalGrouping.GROUP_SHELL_UNMEMORIZABLE)) { "键前缀不对：${g.key}" }
+        }
+    }
+
+    check("D 反向：日常命令仍然可记忆（不能把 R-08 修成“每次全问”）") {
+        val daily = listOf(
+            "npm install", "pnpm add zod", "yarn build", "pip3 install requests",
+            "gradle assembleDebug", "./gradlew build", "cargo test", "go build ./...",
+            "git status", "git log --oneline", "git diff HEAD",
+            "ls -la", "cat a.txt", "grep -rn token src", "wc -l a.txt", "pwd",
+        )
+        daily.forEach { cmd ->
+            expect(ShellCommandRules.isMemorizable(cmd)) { "日常命令被误判为不可记忆：$cmd" }
+            expect(shellGrant(cmd).memorizable) { "ApprovalScope 误拦：$cmd" }
+        }
+    }
+
+    check("D 记住 npm install 之后，D 组的绕过命令一条都不许放行") {
+        val allowed = mutableSetOf<String>()
+        val benign = shellGrant("npm install")
+        if (benign.memorizable) allowed += benign.key
+        expect(ApprovalScope.allows(shellGrant("npm install"), allowed)) { "日常命令应免问" }
+        bypass.forEach { cmd ->
+            expect(!ApprovalScope.allows(shellGrant(cmd), allowed)) { "被顺带放行：$cmd" }
+        }
+    }
+
+    check("D 首词无害但参数写文件，仍算不可记忆（参数层判据没丢）") {
+        expect(!ShellCommandRules.isMemorizable("find . -name '*.tmp' -delete")) { "find -delete" }
+        expect(!ShellCommandRules.isMemorizable("git clean -fdx")) { "git clean" }
+        expect(!ShellCommandRules.isMemorizable("ls && rm -rf build")) { "命令串后半段" }
+        expect(!ShellCommandRules.isMemorizable("pm uninstall com.x")) { "pm uninstall" }
+        expect(!ShellCommandRules.isMemorizable("ls &")) { "后台执行" }
+    }
+}
+
+/* ------------------ E. 审计回归：提权与网络外发是两条独立风险 ------------------ */
+
+/** 审计 F1：权限是风险变量，命令文本不是；网络是唯一能把内容发出去的口子。 */
+fun testElevatedAndNetwork() {
+    println("[E] 审计回归：提权 shell 与网络外发")
+
+    fun shellArgs(command: String, identity: String? = null) = buildJsonObject {
+        put("command", JsonPrimitive(command))
+        identity?.let { put("identity", JsonPrimitive(it)) }
+    }
+
+    check("E1 identity=shizuku 的 ls 也不可记忆（同一条命令换个 uid 能看的范围不同）") {
+        val g = ApprovalScope.of("shell_run", shellArgs("ls -la /data/data/com.example", "shizuku"))
+        expect(!g.memorizable) { "提权 shell 被判可记忆——审计 F1" }
+        expect(g.key.startsWith(ApprovalGrouping.GROUP_SHELL_ELEVATED)) { "键前缀不对：${g.key}" }
+        expect(g.key.contains("shizuku")) { "键应带身份，便于区分 su / adb：${g.key}" }
+        expect(!g.memoLabel.startsWith("本次会话不再询问")) { "文案在骗人：${g.memoLabel}" }
+    }
+
+    check("E2 显式 identity=user 时按命令本身判（不能被提权档误伤）") {
+        val g = ApprovalScope.of("shell_run", shellArgs("ls -la", "user"))
+        expect(g.memorizable) { "应用自身 uid 的只读命令应可记忆" }
+        eq(g.key, ApprovalGrouping.GROUP_SHELL, "key")
+    }
+
+    check("E3 提权档不会被任何历史白名单命中") {
+        val g = ApprovalScope.of("shell_run", shellArgs("ls -la", "shizuku"))
+        val polluted = setOf(
+            ApprovalGrouping.GROUP_SHELL, ApprovalGrouping.GROUP_SHELL_ELEVATED,
+            g.key, "shell_elevated:ls",
+        )
+        expect(!ApprovalScope.allows(g, polluted)) { "提权命令被白名单放行了" }
+    }
+
+    check("E4 后台 shell 同样吃提权判定") {
+        val g = ApprovalScope.of("shell_background", shellArgs("cat /data/system/x", "shizuku"))
+        expect(!g.memorizable) { "shell_background 漏判提权" }
+        expect(g.key.startsWith(ApprovalGrouping.GROUP_SHELL_ELEVATED)) { "键前缀不对：${g.key}" }
+    }
+
+    fun httpArgs(url: String?) = buildJsonObject {
+        url?.let { put("url", JsonPrimitive(it)) }
+    }
+
+    check("E5 http_request 纳入审批，按域名分键") {
+        val a = ApprovalScope.of("http_request", httpArgs("https://api.github.com/repos/x/y"))
+        val b = ApprovalScope.of("http_request", httpArgs("https://api.github.com/user"))
+        val c = ApprovalScope.of("http_request", httpArgs("https://evil.example.com/collect"))
+        expect(a.memorizable) { "同域重复请求应可记忆，否则查资料会被反复打断" }
+        eq(a.key, b.key, "同域不同路径应共用一键")
+        expect(a.key != c.key) { "跨域共用了同一个键——外泄链正是靠这一步" }
+        expect(a.key.startsWith(ApprovalGrouping.GROUP_NETWORK)) { "键前缀不对：${a.key}" }
+        expect(a.key.contains("api.github.com") && c.key.contains("evil.example.com")) { "键里应带域名" }
+    }
+
+    check("E6 记住 A 域之后，发往 B 域仍要问") {
+        val allowed = mutableSetOf<String>()
+        val gh = ApprovalScope.of("http_request", httpArgs("https://api.github.com/user"))
+        if (gh.memorizable) allowed += gh.key
+        expect(ApprovalScope.allows(gh, allowed)) { "同域应免问" }
+        expect(!ApprovalScope.allows(ApprovalScope.of("http_request", httpArgs("https://evil.example.com/x")), allowed)) {
+            "换域被顺带放行"
+        }
+    }
+
+    check("E7 缺 url / 畸形 url 不崩，退化为整组记忆（仍会弹窗）") {
+        val noUrl = ApprovalScope.of("http_request", httpArgs(null))
+        expect(noUrl.memorizable) { "缺 url 时应退化为组键，不该崩也不该不可记忆" }
+        eq(noUrl.key, ApprovalGrouping.GROUP_NETWORK, "key")
+        val bad = ApprovalScope.of("http_request", httpArgs("not a url"))
+        eq(bad.key, ApprovalGrouping.GROUP_NETWORK, "畸形 url 应回退组键")
+    }
+}
+
+/* ------------------------ F. 审计回归：MCP 永不记忆 ------------------------ */
+
+fun testMcpNeverMemorized() {
+    println("[F] 审计回归：MCP 工具永不记忆")
+
+    check("F1 mcp_ 前缀工具不可记忆（目录注释写的就是「每次调用都需确认」）") {
+        listOf("mcp_weather__forecast", "mcp_fs__write_file", "mcp_").forEach { name ->
+            val g = ApprovalScope.of(name, JsonObject(emptyMap()))
+            expect(!g.memorizable) { "MCP 工具被判可记忆：$name" }
+            expect(!g.memoLabel.startsWith("本次会话不再询问")) { "文案在骗人：$name" }
+        }
+    }
+
+    check("F2 即便 MCP 键被别处写进白名单，也不放行") {
+        val g = ApprovalScope.of("mcp_fs__write_file", JsonObject(emptyMap()))
+        expect(!ApprovalScope.allows(g, setOf(g.key, "mcp", ApprovalGrouping.GROUP_FILE_WRITE))) {
+            "MCP 被白名单放行了"
+        }
+    }
+
+    check("F3 非 mcp 前缀的同名子串不受影响（防前缀判定过宽）") {
+        // `xmcp_x` 不以 mcp_ 开头，不该被当成 MCP；它没有归组，回退成自己的名字但可记忆。
+        val g = ApprovalScope.of("xmcp_x", JsonObject(emptyMap()))
+        expect(g.memorizable) { "前缀判定过宽" }
+    }
+}
+
 /* --------------------------------- 主流程 --------------------------------- */
 
 fun main() {
@@ -198,6 +374,9 @@ fun main() {
     testClassification()
     testGrant()
     testInvariant()
+    testWrappedBypass()
+    testElevatedAndNetwork()
+    testMcpNeverMemorized()
     println()
     println("$passed 通过 / ${failures.size} 失败")
     if (failures.isNotEmpty()) {
