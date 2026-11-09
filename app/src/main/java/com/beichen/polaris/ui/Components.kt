@@ -42,6 +42,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +52,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
@@ -142,7 +145,9 @@ fun AkTopBar(
     actionIcon: ImageVector? = null,
     actionDescription: String = "",
     actionEnabled: Boolean = true,
-    onAction: () -> Unit = {}
+    onAction: () -> Unit = {},
+    /** false = 标题由页面自己画（大标题），顶栏中间留空。 */
+    showTitle: Boolean = true
 ) {
     // 宽屏常驻抽屉时隐藏汉堡（无抽屉可开，避免死按钮，UX v1 §4.2）；仍补 48dp 占位保持标题居中
     val permanent = LocalPermanentDrawer.current
@@ -167,17 +172,29 @@ fun AkTopBar(
                     .guideAnchor(GuideAnchor.DRAWER)
             )
         }
-        Text(
-            text = title,
-            // v4：顶栏标题 20sp（原 titleLarge 18sp）。手机端标题 20-24px 才立得住，
-            // 18sp 与列表主文案 16sp 只差 2sp，视觉上标题不成为标题。
-            style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp, lineHeight = 28.sp),
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.weight(1f)
-        )
+        // v5：顶栏标题降为 12.5sp 位置条。
+        //
+        // v4 这里是 20sp 标题，页内再放任何大标题都会和它争——于是每页只能有一个
+        // 20sp 的横排标题，内容全部压在它下面，整屏就只剩「标题 + 一堆同样重的块」。
+        // 现在顶栏只负责回答「我在哪」，真正的标题交给页面内的衬线大字（AkDisplayTitle）：
+        // 层级从「一条 20sp 标题」变成「一条 12.5sp 位置 + 一个 28sp 页名」，页面才有第一眼。
+        if (showTitle) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontSize = 12.5.sp,
+                    lineHeight = 18.sp,
+                    letterSpacing = 0.8.sp
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f)
+            )
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
         if (actionIcon != null) {
             AkCircleIconButton(
                 icon = actionIcon,
@@ -366,8 +383,12 @@ fun AkTextButton(
 }
 
 /**
- * 按钮公共实现：高 48dp（heightIn(min) 防 fontScale 裁切，UX v1 §5.2）、radius 14dp、
+ * 按钮公共实现：高 48dp（heightIn(min) 防 fontScale 裁切，UX v1 §5.2）、
  * 文字 labelLarge 14sp w600、按压 scale 0.97。按钮行一律 flex 1 等高，不制造视觉偏袒（§6.0）。
+ *
+ * v5：圆角 14 → 4。14dp 是「Material 卡片」的圆角，它让每个按钮看起来像一块
+ * 可拖动的卡片；4dp 只把尖角磨掉一点，按钮仍然是「一条」。同一页里所有容器都被
+ * 拿掉之后，圆角按钮会成为整屏唯一带圆的东西，反而更扎眼。
  */
 @Composable
 private fun AkButtonImpl(
@@ -386,7 +407,7 @@ private fun AkButtonImpl(
         targetValue = if (pressed && enabled) 0.97f else 1f,
         animationSpec = AkMotionPress
     )
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(4.dp)
     val bg by animateColorAsState(
         targetValue = when {
             !enabled -> container.copy(alpha = 0.38f)
@@ -431,48 +452,44 @@ private fun AkButtonImpl(
     }
 }
 
-// ———————————————————— W-64：毛玻璃材质 ————————————————————
+// ———————————————————— 卡片与列表（v5：无卡片，靠细线与留白分组） ————————————————————
 
 /**
- * 磨砂玻璃卡片的填充色。
+ * 分组容器向行注入的排版参数。
  *
- * 浅色：白 88%（底是暖白，半透明白会微微透出底色，形成"雾面"而不是纯白板）。
- * 深色：白 6%（几乎只有一层薄雾，靠下面的光晕透上来）。
+ * v5 之前，行的 16dp 内缩进写死在 [AkListItem] 里——那是「卡片内边距」的镜像：
+ * 卡片自己有 20dp 圆角底，行必须再缩一层才不会贴到圆角上。
  *
- * 不用 `Modifier.blur()`：它需要 API 31+，且会连文字一起糊。这里用「半透明 + 亮边 +
- * 内侧高光」三件套——iOS 的 grouped list 也是这么做的，纯色底上一样成立。
+ * 卡片拿掉之后，这层缩进就变成纯粹的错位来源：分组标签在 20dp（页面边距），
+ * 行文字在 36dp，整组往右漂。所以缩进改由容器决定：
+ *
+ * - 在 [AkGroup] / [AkSectionCard] 里 → 0dp（与分组标签同一条竖线），行自带底部分隔线；
+ * - 独立使用 [AkListItem]（抽屉、对话页的卡片）→ 仍是 16dp，不画线（外面已有容器语义）。
  */
-@Composable
-private fun glassFill(): Color {
-    val surface = MaterialTheme.colorScheme.surface
-    return if (surface.luminance() < 0.5f) Color.White.copy(alpha = 0.06f)
-    else surface.copy(alpha = 0.88f)
+internal data class AkRowScope(val inset: Dp, val divider: Boolean)
+
+internal val LocalAkRowScope = staticCompositionLocalOf {
+    AkRowScope(inset = AgentSpacing.space4, divider = false)
 }
 
-/** 玻璃边缘：深色下是白色 12% 的反光，浅色下是一道极淡的描边。 */
-@Composable
-private fun glassBorder(): BorderStroke {
-    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    val color = if (dark) Color.White.copy(alpha = 0.12f)
-    else MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
-    return BorderStroke(1.dp, color)
-}
-
-// ———————————————————— 卡片与列表（§6.1：白卡 20dp + 1dp 分隔线缩进 16dp） ————————————————————
-
-/** 白色分组卡：radius 20dp、0 阴影 0 描边，靠底色差分层（§5.3）。 */
+/**
+ * 白色分组卡。
+ *
+ * v5：Surface 去掉，只剩一根 1dp 顶线。它的调用点都是「一整块内容」，
+ * 而一块内容与下一块内容之间，一条线比一个 20dp 圆角的容器更轻——
+ * 圆角容器会把内容向外推，线不会。
+ */
 @Composable
 fun AkGroupCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        color = glassFill(),
-        border = glassBorder()
-    ) {
-        Column(content = content)
+    Column(modifier.fillMaxWidth()) {
+        AkHairline()
+        Spacer(Modifier.height(AgentSpacing.space2))
+        CompositionLocalProvider(LocalAkRowScope provides AkRowScope(0.dp, true)) {
+            Column(content = content)
+        }
     }
 }
 
@@ -488,9 +505,20 @@ fun AkDivider(modifier: Modifier = Modifier) {
 }
 
 /**
- * 分区卡：图标底座 + titleLarge 18sp 标题 + 可选说明 + 内容槽（§6.8 分区卡规格）。
- * 控制台 / 模型配置 / 设置等所有「浏览 + 单项操作」场景的容器。
+ * 分区（v5 编辑式）：11sp 字距标签 + 可选说明 + 内容槽。
+ *
+ * 旧版是「图标底座 + 16sp 标题 + 说明 + 内容」的卡片。问题不在样式，在结构：
+ * 一张卡就是一个视觉单位，页面上一旦有 4~5 张卡，读者看到的是「5 个同等重要的块」，
+ * 而不是「1 个主状态 + 4 个次级入口」。层级不该由容器的边界来表达，那太贵。
+ *
+ * 现在只留一行小字标签。标签的字距（1.2sp）本身就把它和正文区分开了，
+ * 不需要底色、不需要图标、也不需要圆角。
+ *
+ * @param icon 保留但不再渲染：32 处调用点都传了它，逐个删参数只会制造冲突，
+ *   而图标在 v5 的结构里没有位置——分组标签右侧再挂一个淡图标，等于把刚删掉的
+ *   「每组一个图标」又请回来。
  */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun AkSectionCard(
     title: String,
@@ -499,59 +527,34 @@ fun AkSectionCard(
     description: String? = null,
     content: @Composable ColumnScope.() -> Unit = {}
 ) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        // v4：20 → 16。与 AkGroup 的 16 对齐，卡片之间不再有"圆角大小不一"的错位感。
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface
-    ) {
-        Column(Modifier.padding(AgentSpacing.space4)) {
-            // v4：标题图标从 40dp 圆角底座改为 18dp 纯图标，标题 18sp → 16sp SemiBold。
-            //
-            // 原实现给每张卡都套一个 40dp 浅色方块 + 18sp 标题——这是「AI 生成的后台界面」
-            // 最典型的组合：每一组内容都顶着一个色块。卡内标题属于二级层级，不该和
-            // 页面标题（顶栏 20sp）抢同一条视觉线，16sp/600 足够区分，同时把
-            // 「这一组是什么」的信息交还给文字本身。
-            if (icon != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(AgentSpacing.space2))
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontSize = 16.sp,
-                            lineHeight = 22.sp,
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            } else {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontSize = 16.sp,
-                        lineHeight = 22.sp,
-                        fontWeight = FontWeight.SemiBold
-                    ),
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-            if (!description.isNullOrBlank()) {
-                Spacer(Modifier.height(AgentSpacing.space2))
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(Modifier.height(AgentSpacing.space3))
-            content()
+    Column(modifier.fillMaxWidth().padding(top = 26.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                letterSpacing = 1.2.sp,
+                fontWeight = FontWeight.Medium
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
+        )
+        if (!description.isNullOrBlank()) {
+            Spacer(Modifier.height(7.dp))
+            // 说明文字用 13sp 而不是 11.5sp：控制台「可用能力」那一组整段都是说明，
+            // 太小就变成不可读的灰条，用户会直接跳过——而那段恰恰是唯一告诉他
+            // 「这东西能做什么」的地方。
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 13.sp,
+                    lineHeight = 21.sp
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f)
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        CompositionLocalProvider(LocalAkRowScope provides AkRowScope(0.dp, true)) {
+            Column(content = content)
         }
     }
 }
@@ -561,73 +564,51 @@ fun AkSectionCard(
  * 描述 13sp/20（1 行 ellipsis）+ 右侧控件。两行 ≥72dp、单行 ≥56dp，按压 surface-2 + scale 0.97。
  */
 /**
- * 设置分组（v4 骨架重排，2026-10-21 第二批）。
+ * 设置分组（v5 编辑式）。
  *
- * 与 [AkSectionCard] 的差别不是样式微调，是**结构变化**：
- * 1. **标题移到卡外**：12sp 灰色小字 + 可选 14dp 图标；原来是卡内 40dp 图标底座 + 18sp 标题；
- * 2. **卡片不再有内边距**：卡片只负责底色与圆角，行自带 16dp 水平 padding；
- * 3. **描述降级**：11.5sp 小字放在标题下，最多两行；原来和标题同处卡内、与内容抢重量。
+ * 与 [AkSectionCard] 的差别只剩内容约定：这里默认放 [AkListItem]（自带行间距与分隔线），
+ * 版本演进记录：
+ * - v4：标题移到卡外，12sp 灰字，卡片仍有 20dp 圆角底；
+ * - v5：卡片也拿掉，标题降到 11sp + 1.2sp 字距。分组之间只靠 26dp 留白，
+ *   不再有一条横贯全屏的分组标题把页面切成格子。
  *
- * 为什么值得改：原结构每组卡内固定吃掉「40dp 底座 + 28dp 标题 + 20dp 描述 + 12dp 间距」
- * ≈ 100dp，设置页 9 组就是 900dp——用户要滑三屏才能看完设置。工具型界面的分组标题是
- * **路标**，不是内容；路标不该和内容一样重。
- *
- * 内容约定：直接放 [AkListItem]（自带水平内边距）；若放按钮/滑块等自定义控件，
- * 调用方自行包一层 `padding(horizontal = AgentSpacing.space4)`。
+ * @param paddedContent `true` 表示内容是表单控件（输入框 / 滑块 / 按钮），
+ *   它们没有自己的水平边距，需要容器兜一层；`false`（默认）表示内容是
+ *   [AkListItem]，缩进由 [LocalAkRowScope] 统一下发，容器不能再加。
  */
 @Composable
 fun AkGroup(
     title: String,
     modifier: Modifier = Modifier,
     description: String? = null,
-    /**
-     * 卡片内是否兜底给 16dp 内边距。
-     *
-     * - `false`（默认）：**纯列表组**。内容直接是 [AkListItem]，它自带 16dp 水平边距，
-     *   卡片再加一层就会变成 32dp，与分组标题错开。
-     * - `true`：**表单组**。内容是输入框、按钮、滑块、自绘行，它们不带边距，
-     *   必须由卡片兜。
-     */
     paddedContent: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    // 组标题不带图标：它必须与行内文字左对齐（都在 16dp），
-    // 带图标会把标题推到 36dp，与下方文字错开，反而更乱。
-    val edge = AgentSpacing.space4
-    Column(modifier.fillMaxWidth()) {
+    Column(modifier.fillMaxWidth().padding(top = 26.dp)) {
         Text(
             text = title,
-            style = MaterialTheme.typography.labelMedium.copy(
-                fontSize = 12.sp,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 11.sp,
                 lineHeight = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.4.sp
+                letterSpacing = 1.2.sp,
+                fontWeight = FontWeight.Medium
             ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(
-                start = edge,
-                end = edge,
-                bottom = if (description.isNullOrBlank()) 10.dp else 5.dp
-            )
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
         )
         if (!description.isNullOrBlank()) {
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = description,
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, lineHeight = 17.sp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f),
-                modifier = Modifier.padding(start = edge, end = edge, bottom = 10.dp)
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 12.5.sp,
+                    lineHeight = 19.sp
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
             )
         }
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            color = glassFill(),
-            border = glassBorder()
-        ) {
-            Column(
-                if (paddedContent) Modifier.padding(AgentSpacing.space4)
-                else Modifier.padding(vertical = 4.dp)
-            ) {
+        Spacer(Modifier.height(if (description.isNullOrBlank()) 8.dp else 10.dp))
+        CompositionLocalProvider(LocalAkRowScope provides AkRowScope(0.dp, true)) {
+            Column(if (paddedContent) Modifier.padding(top = 2.dp) else Modifier) {
                 content()
             }
         }
@@ -637,10 +618,7 @@ fun AkGroup(
 @Composable
 fun AkListItem(
     /**
-     * 行首图标；传 **null 表示这一行不需要图标**（v4 起支持）。
-     *
-     * 设置页的行几乎都传了与所属分组重复的图标（「提醒」组 → 铃铛行 → 还是铃铛），
-     * 纯冗余：用户按文字找入口，不按图标。去掉后文字左移 32dp，一屏多容纳信息。
+     * 行首图标；传 **null 表示这一行不需要图标**。
      *
      * 保持「无默认值」是有意的：现有 200+ 调用点全部显式传图标，加默认值会让
      * `AkListItem(Icons.X, "标题")` 这类位置参数调用直接编译失败。
@@ -654,57 +632,59 @@ fun AkListItem(
     onClick: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null
 ) {
-    val rowModifier = modifier
-        .fillMaxWidth()
-        .heightIn(min = if (description != null) 62.dp else 56.dp)
+    // v5：缩进与分隔线由容器下发（见 LocalAkRowScope）。
+    // 这样同一个 AkListItem 放进 AkGroup 时贴页边距、放进抽屉时保留 16dp，
+    // 不再需要为两种场景写两套行。
+    val scope = LocalAkRowScope.current
     val body: @Composable () -> Unit = {
         Row(
-            modifier = Modifier.padding(horizontal = AgentSpacing.space4),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = if (description != null) 58.dp else 50.dp)
+                .padding(horizontal = scope.inset),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 排版 v4：列表行不再套 40dp tinted 图标底座（图标盒重复一整列是
-            // 「生成式后台」最典型的 tell）。第二批起支持 icon = null：设置页那些
-            // 与分组标题重复的行图标整体去掉，文字直接对齐到 16dp 边距。
+            // 排版 v5：34dp 圆角图标底座整体删除，只留 17dp 线图标。
+            //
+            // v4 的底座是「给每行一个色块锚点」的思路，取自 iOS 分组列表——
+            // 但 iOS 只在**设置**里这么干，且底座是彩色语义块（蓝电话、绿微信），
+            // 这里几十个底座全是同一个灰，就退化成一列无意义的方块。
+            // 编辑式排版里这一列方块正是「生成感」的来源：内容本身够清楚时，
+            // 图标只是噪音。
             if (icon != null) {
-                // W-64：裸图标 → 34dp 圆角底座（radii 11）。
-                // 裸图标在长列表里是一列黑色小竖线，眼睛找不到落点；底座给每行一个
-                // 稳定的色块锚，扫视时先看到形状再看字——这是 iOS 分组列表的做法。
-                // 底座用 surface1 而不是 primaryContainer：整页几十个高饱和色块会打架，
-                // 只有「选中」那一行才用强调色。
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .clip(RoundedCornerShape(11.dp))
-                        .background(
-                            if (selected) MaterialTheme.colorScheme.primaryContainer
-                            else LocalAkColors.surface1
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = if (selected) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (selected) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                    modifier = Modifier.size(17.dp)
+                )
                 Spacer(Modifier.width(AgentSpacing.space3))
             }
             Column(Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = if (selected) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = 15.sp,
+                        lineHeight = 22.sp
+                    ),
+                    color = when {
+                        selected -> MaterialTheme.colorScheme.primary
+                        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        else -> MaterialTheme.colorScheme.onSurface
+                    },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 if (description != null) {
+                    Spacer(Modifier.height(2.dp))
                     Text(
                         text = description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -716,15 +696,19 @@ fun AkListItem(
             }
         }
     }
-    if (onClick != null) {
-        AkPressSurface(
-            onClick = onClick,
-            modifier = rowModifier,
-            enabled = enabled,
-            shape = RoundedCornerShape(14.dp)
-        ) { body() }
-    } else {
-        Box(rowModifier, contentAlignment = Alignment.CenterStart) { body() }
+    Column(modifier.fillMaxWidth()) {
+        if (onClick != null) {
+            AkPressSurface(
+                onClick = onClick,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = enabled,
+                // 4dp 圆角：按压时是一道很浅的横条，不再是「浮起一张小卡」。
+                shape = RoundedCornerShape(4.dp)
+            ) { body() }
+        } else {
+            body()
+        }
+        if (scope.divider) AkHairline()
     }
 }
 
@@ -868,28 +852,36 @@ fun AkReadyTextRow(
 fun TrustBadge(trust: String, modifier: Modifier = Modifier) {
     // success / warning 族不在 Material3 ColorScheme 里，走语义色数据类（§3.6）
     val ak = LocalAkColors
+    // v5：不再用色底药丸。来源是一个词，不是一枚标签——一个 5dp 的点和一行小字就够，
+    // 底色会把「内置」渲染成一个需要被注意的控件。色点仍保留双编码（色盲可读）。
+    val label: String
+    val dot: androidx.compose.ui.graphics.Color
+    val ink: androidx.compose.ui.graphics.Color
     when (trust.lowercase()) {
-        "packaged" -> AkBadge(
-            text = "● 内置",
-            container = ak.successContainer,
-            content = ak.onSuccessContainer,
-            modifier = modifier
-        )
-
-        "imported" -> AkBadge(
-            text = "● 导入",
-            container = ak.warningContainer,
-            content = ak.onWarningContainer,
-            modifier = modifier
-        )
-
-        else -> AkBadge(
+        "packaged" -> {
+            label = "内置"; dot = ak.success; ink = ak.onSuccessContainer
+        }
+        "imported" -> {
+            label = "导入"; dot = ak.warning; ink = ak.onWarningContainer
+        }
+        else -> {
             // sandbox 与未知来源（如历史数据里的 remote）一律走中性暖灰：
             // 沙箱是「隔离观察」不是「危险告警」，红色只留给审批与 ERROR（§3.1）
-            text = "● 沙箱",
-            container = LocalAkColors.surface2,
-            content = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = modifier
+            label = "沙箱"; dot = ak.outlineStrong; ink = MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    }
+    androidx.compose.foundation.layout.Row(
+        modifier = modifier,
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+    ) {
+        AkStatusDot(dot, 5.dp)
+        androidx.compose.foundation.layout.Spacer(
+            androidx.compose.ui.Modifier.width(5.dp)
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, lineHeight = 15.sp),
+            color = ink
         )
     }
 }
@@ -988,9 +980,18 @@ fun AkSwitch(
     }
 }
 
-// ———————————————————— 筛选 chip（§6.7：全中文、选中 primary@12% + on-primary-container） ————————————————————
+// ———————————————————— 筛选 chip（v5：文字 + 选中下划线，无胶囊底） ————————————————————
 
-/** 筛选 chip：高 32dp radius full；选中 = primary@12% 底 + on-primary-container 文字（§3.5）。 */
+/**
+ * 筛选 chip（v5）：文字 + 选中时下方一条 1.5dp 线，没有底色、没有胶囊。
+ *
+ * 旧版是「surface-1 灰底胶囊」。一页里 chip 一多（供应商 12 个、模型名 6 个），
+ * 屏幕下半部就变成一片灰色药丸，和输入框的灰块、卡片的灰块叠在一起，
+ * 整页没有一处是「干净的文字」。
+ *
+ * 改成下划线之后，它与 Tab、与分组标签用的是同一套语汇：文字就是文字，
+ * 状态用一根线表示。间距由调用方 Row 的 spacedBy 控制。
+ */
 @Composable
 fun AkChip(
     text: String,
@@ -1000,46 +1001,63 @@ fun AkChip(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.97f else 1f,
-        animationSpec = AkMotionPress
-    )
-    val bg by animateColorAsState(
-        targetValue = when {
-            selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-            pressed -> LocalAkColors.surface2
-            else -> LocalAkColors.surface1
-        },
-        animationSpec = AkMotionFastColor
-    )
-    Box(
-        modifier = modifier
-            .heightIn(min = 32.dp)
-            .scale(scale)
-            .clip(CircleShape)
-            .background(bg)
+    // 下划线画在文字自己的 drawBehind 里，而不是另起一个 fillMaxWidth 的 Box。
+    // 之前那个写法在 Row 里会把芯片拉到整行宽（记忆库的「图谱」就被拉成了通栏），
+    // 因为在 Column 的测量阶段，fillMaxWidth 拿到的是父 Row 给的整行约束。
+    // 画在文字下面，宽度就永远是文字宽度，跟父容器无关。
+    val ink = MaterialTheme.colorScheme.onSurface
+    Column(
+        modifier
+            .heightIn(min = 34.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .then(
+                if (pressed) Modifier.background(LocalAkColors.surface2)
+                else Modifier
+            )
             .clickable(
                 interactionSource = interaction,
                 indication = null,
                 onClick = onClick
             )
-            .padding(horizontal = 14.dp),
-        contentAlignment = Alignment.Center
+            .padding(horizontal = 2.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-            else MaterialTheme.colorScheme.onSurfaceVariant
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal
+            ),
+            color = if (selected) ink
+            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f),
+            maxLines = 1,
+            modifier = Modifier
+                .padding(bottom = 4.dp)
+                .drawBehind {
+                    if (selected) {
+                        val stroke = 1.5.dp.toPx()
+                        val y = size.height - stroke / 2
+                        drawLine(ink, Offset(0f, y), Offset(size.width, y), stroke)
+                    }
+                }
         )
     }
 }
 
-// ———————————————————— 输入框（§6.0 填充式：默认无描边、聚焦 1.5dp primary） ————————————————————
+// ———————————————————— 输入框（v5：下划线，无填充块） ————————————————————
 
 /**
- * 填充式输入框：label 在上（13sp on-surface-var），field 在下——bg surface-var、radius 14dp、
- * 高 56dp、内边距 h16、默认无描边；聚焦 bg 升 surface + 1.5dp primary 描边。
+ * 输入框（v5）：标签在上（10.5sp 字距）、值在下、底部一条线。
+ *
+ * 旧版是「surfaceVariant 填充块 + 圆角 + 聚焦描边」——每个输入框都是一块灰底，
+ * 一页六七个字段就是六七块灰，页面被切成碎片，而且这些灰块和卡片的视觉重量几乎一样，
+ * 读者分不清「哪里是表单、哪里是内容」。
+ *
+ * 下划线把输入框还原成「填空题」：只有一条线，线越淡越像纸上的横格。聚焦时线变
+ * primary 并加粗到 1.5dp——那是全页唯一会动的元素，焦点在哪一目了然。
+ *
  * 机器内容（URL / 模型名 / Key）传 [machine] = true 走 machineText 13sp。
  */
 @Composable
@@ -1057,29 +1075,21 @@ fun AkTextField(
     trailing: @Composable (() -> Unit)? = null
 ) {
     var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(14.dp)
-    Column(modifier) {
+    Column(modifier.fillMaxWidth()) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 6.dp)
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 10.5.sp,
+                lineHeight = 14.sp,
+                letterSpacing = 1.2.sp
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
+            modifier = Modifier.padding(bottom = 4.dp)
         )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 56.dp)
-                .clip(shape)
-                .background(
-                    if (focused) MaterialTheme.colorScheme.surface
-                    else MaterialTheme.colorScheme.surfaceVariant
-                )
-                .border(
-                    width = 1.5.dp,
-                    color = if (focused) MaterialTheme.colorScheme.primary else Color.Transparent,
-                    shape = shape
-                )
-                .padding(horizontal = AgentSpacing.space4),
+                .heightIn(min = if (singleLine) 40.dp else 64.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             BasicTextField(
@@ -1101,7 +1111,7 @@ fun AkTextField(
                             Text(
                                 text = placeholder,
                                 style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
                         }
                         inner()
@@ -1110,6 +1120,15 @@ fun AkTextField(
             )
             if (trailing != null) trailing()
         }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(if (focused) 1.5.dp else 1.dp)
+                .background(
+                    if (focused) MaterialTheme.colorScheme.primary
+                    else LocalAkColors.outlineStrong.copy(alpha = 0.42f)
+                )
+        )
     }
 }
 
@@ -1363,34 +1382,35 @@ fun AkEmptyState(
             .padding(horizontal = AgentSpacing.space5, vertical = AgentSpacing.space8),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Surface(
-            shape = CircleShape,
-            color = LocalAkColors.surface1,
-            modifier = Modifier.size(56.dp)
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = iconTint,
-                    modifier = Modifier.size(28.dp)
-                )
-            }
-        }
+        // v5：去掉 56dp 的圆形浅灰底座。空态本来就是「这一屏没有内容」，
+        // 再给它一个圆形容器，等于用一块图形去填补空白——那是模板的做法。
+        // 图标降到 30dp 当一枚记号，标题用 17sp：整块读起来是一句话，不是一张卡片。
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = iconTint.copy(alpha = 0.9f),
+            modifier = Modifier.size(30.dp)
+        )
         Spacer(Modifier.height(AgentSpacing.space4))
         Text(
             text = title,
-            style = MaterialTheme.typography.titleLarge,
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontSize = 17.sp,
+                lineHeight = 24.sp
+            ),
             color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.Center
         )
-        Spacer(Modifier.height(AgentSpacing.space2))
+        Spacer(Modifier.height(7.dp))
         Text(
             text = description,
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = 13.sp,
+                lineHeight = 21.sp
+            ),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
-            modifier = Modifier.width(280.dp)
+            modifier = Modifier.width(300.dp)
         )
         if (actionLabel != null && onAction != null) {
             Spacer(Modifier.height(AgentSpacing.space6))

@@ -22,8 +22,13 @@ internal object AgentSpacing {
 
 /** 规范 §5.4 触控与栏高基准：容器一律 heightIn(min) 不用固定 height，防 fontScale 裁切。 */
 internal object AgentDimens {
-    /** 顶栏内容高（另加 statusBarsPadding）。 */
-    val topBarHeight = 56.dp
+    /**
+     * 顶栏内容高（另加 statusBarsPadding）。
+     *
+     * v5：56 → 50。标题下沉为页面内的衬线大标题后，顶栏只剩「抽屉按钮 + 位置条 +
+     * 一个动作」三样，56dp 的空高会让它看起来像一条没填满的横梁。
+     */
+    val topBarHeight = 50.dp
     /** 抽屉菜单项高（无描述行的单行列表项）。 */
     val drawerItemHeight = 52.dp
     /** 对话输入栏内容高（输入框 48 + 上下 8 + 底 4）。 */

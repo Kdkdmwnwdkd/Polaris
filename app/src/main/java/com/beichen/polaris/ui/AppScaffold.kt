@@ -95,6 +95,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -742,7 +743,17 @@ internal fun PageTopBar(
     actionIcon: ImageVector? = null,
     actionDescription: String = "",
     actionEnabled: Boolean = true,
-    onAction: () -> Unit = {}
+    onAction: () -> Unit = {},
+    /**
+     * v5：默认由顶栏自己画 30sp 大标题。
+     *
+     * 顶栏标题在 v5 降成 12.5sp 位置条之后，没有大标题的页面就「没有页名」了——
+     * 一行灰色小字撑不起一屏的起点。把大标题收进这个函数，18 个页面的调用点
+     * 一行都不用改，全部自动获得页面标题。
+     *
+     * 已经自己画了大标题的页面（控制台 / 设置 / 模型）传 false，避免两个标题。
+     */
+    largeTitle: Boolean = true
 ) {
     AkTopBar(
         title = title,
@@ -750,8 +761,26 @@ internal fun PageTopBar(
         actionIcon = actionIcon,
         actionDescription = actionDescription,
         actionEnabled = actionEnabled,
-        onAction = onAction
+        onAction = onAction,
+        // v5：顶栏不再显示任何标题。每个页面都已有 30sp 大标题（自动或自绘），
+        // 顶栏再放一行小字就是同一个名字出现两次。
+        showTitle = false
     )
+    if (largeTitle) {
+        Text(
+            text = title,
+            style = displayTitleStyle,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(
+                start = AgentSpacing.space5,
+                end = AgentSpacing.space5,
+                top = AgentSpacing.space1,
+                bottom = AgentSpacing.space5
+            )
+        )
+    }
 }
 
 /**
@@ -1015,25 +1044,12 @@ private fun DrawerConversationRow(
             .padding(horizontal = AgentSpacing.space2)
             .heightIn(min = AgentDimens.drawerItemHeight)
     ) {
-        // 选中三件套之③：左缘 3dp primary 圆角竖条（与 DrawerItem 同语言）
-        if (isActive) {
-            Box(
-                Modifier
-                    .align(Alignment.CenterStart)
-                    .width(3.dp)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(topEnd = 2.dp, bottomEnd = 2.dp))
-                    .background(MaterialTheme.colorScheme.primary)
-            )
-        }
+        // v5：与 [DrawerItem] 同一套选中语言——没有竖条、没有色块，只有颜色。
+        // 抽屉里最不该出现的就是一块浅色圆角矩形：它会把「目录」读成「卡片墙」。
         val interaction = remember { MutableInteractionSource() }
         val pressed by interaction.collectIsPressedAsState()
         val bg by animateColorAsState(
-            targetValue = when {
-                isActive -> MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                pressed -> ak.surface2
-                else -> Color.Transparent
-            },
+            targetValue = if (pressed) ak.surface2 else Color.Transparent,
             animationSpec = AkMotionFastColor
         )
         Row(
@@ -1042,7 +1058,7 @@ private fun DrawerConversationRow(
             // （W-68 抽屉底栏那个 bug 就是同一行代码引发的，这里一并改掉）。
             modifier = Modifier
                 .matchParentSize()
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(4.dp))
                 .background(bg)
                 .combinedClickable(
                     interactionSource = interaction,
@@ -1062,8 +1078,8 @@ private fun DrawerConversationRow(
                 imageVector = Icons.Outlined.Chat,
                 contentDescription = null,
                 tint = if (isActive) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp)
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                modifier = Modifier.size(20.dp)
             )
             Spacer(Modifier.width(AgentSpacing.space3))
             Column(Modifier.weight(1f)) {
@@ -1090,7 +1106,11 @@ private fun DrawerConversationRow(
                     }
                     Text(
                         text = conversation.title,
-                        style = MaterialTheme.typography.titleMedium,
+                        // v5：14sp——比导航项（15sp）低半档，会话是「内容」不是「栏目」
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp
+                        ),
                         color = if (isActive) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
@@ -1106,7 +1126,10 @@ private fun DrawerConversationRow(
                         (if (conversation.promptTokens + conversation.completionTokens > 0)
                             " · ${formatTokens(conversation.promptTokens + conversation.completionTokens)} tok"
                         else ""),
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp
+                    ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -1306,42 +1329,28 @@ private fun DrawerHeader(
     pendingGrants: Int,
     onReadyClick: () -> Unit
 ) {
-    Row(
+    // v5：去掉 40dp 的 primaryContainer 圆角方块底座。
+    // 抽屉最上面那个「App 图标 + 名字」是模板里最常见的一块，而这里需要的只是
+    // 一个刊头（masthead）：应用名独占一行，状态跟在下面。没有底座、没有图标，
+    // 反而更像一本册子的扉页。
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             // 竖直内边距 20dp → 12dp：小屏上抽屉要先把会话列表露出来
-            .padding(horizontal = AgentSpacing.space5, vertical = AgentSpacing.space3),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = AgentSpacing.space5, vertical = AgentSpacing.space3)
     ) {
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(40.dp)
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = Icons.Outlined.Shield,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        }
-        Spacer(Modifier.width(AgentSpacing.space3))
-        Column {
-            Text(
-                text = "北辰",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(Modifier.height(AgentSpacing.space1))
-            // 就绪文字三态与权限中心页共用实现（§6.5.2）：同一状态源、同一措辞
-            AkReadyTextRow(
-                serviceConnected = serviceConnected,
-                pendingGrants = pendingGrants,
-                onClick = onReadyClick
-            )
-        }
+        Text(
+            text = "北辰",
+            style = displayTitleStyle.copy(fontSize = 23.sp, lineHeight = 31.sp),
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.height(AgentSpacing.space1))
+        // 就绪文字三态与权限中心页共用实现（§6.5.2）：同一状态源、同一措辞
+        AkReadyTextRow(
+            serviceConnected = serviceConnected,
+            pendingGrants = pendingGrants,
+            onClick = onReadyClick
+        )
     }
 }
 
@@ -1362,9 +1371,15 @@ private fun DrawerGroupTitle(text: String, trailing: (@Composable () -> Unit)? =
     ) {
         Text(
             text = text,
-            // Type.kt 九 slot 无 13sp 级：复用 bodySmall(13sp) 提字重，保持 noFontPadding 一致
-            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // v5：与页面里的分组标签同一个样式（11sp + 1.2sp 字距）——
+            // 抽屉是「目录」，目录的小标题和正文页的小标题不该长得不一样。
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                letterSpacing = 1.2.sp,
+                fontWeight = FontWeight.Medium
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
             modifier = Modifier.weight(1f)
         )
         trailing?.invoke()
@@ -1372,10 +1387,14 @@ private fun DrawerGroupTitle(text: String, trailing: (@Composable () -> Unit)? =
 }
 
 /**
- * 抽屉菜单项：高 52dp · radius 14dp · 项间距 4dp · 左右边距 8dp · 无 chevron（§6.5.2）。
+ * 抽屉菜单项：高 52dp · 左右边距 8dp · 无 chevron（§6.5.2）。
  *
- * 选中态三件套：bg primary@12% + 图标与文字 primary + 左缘 3dp primary 圆角竖条（贴抽屉左缘、与项等高）。
- * 按压 = surface-2 底（§7-M3 统一按压语言）；整行为触控目标，TalkBack 合并为单节点。
+ * v5 改选中态：原来是「primary@12% 底 + 图标文字 primary + 左缘 3dp 竖条」三件套，
+ * 一块圆角色块横在抽屉里，正是模板感最重的地方。现在只留**颜色与字重**——
+ * 选中项的图标和文字转 primary、字重加一档。目录里标出当前章节，靠的是排字，不是底色。
+ *
+ * 按压仍给 surface-2，但圆角收到 4dp：按下去是「这一行被划过」，不是弹出一个按钮。
+ * 整行为触控目标，TalkBack 合并为单节点。
  */
 @Composable
 private fun DrawerItem(
@@ -1392,25 +1411,10 @@ private fun DrawerItem(
             .padding(horizontal = AgentSpacing.space2)
             .heightIn(min = AgentDimens.drawerItemHeight)
     ) {
-        // 选中三件套之③：左缘 3dp primary 圆角竖条。必须包一层 matchParentSize——
-        // 否则 fillMaxHeight 会向父要最大高度，在抽屉底栏把整项顶成全屏、盖住滚动区。
-        if (isSelected) {
-            Box(Modifier.matchParentSize()) {
-                Box(
-                    Modifier.align(Alignment.CenterStart).width(3.dp).fillMaxHeight()
-                        .clip(RoundedCornerShape(topEnd = 2.dp, bottomEnd = 2.dp))
-                        .background(MaterialTheme.colorScheme.primary)
-                )
-            }
-        }
         val interaction = remember { MutableInteractionSource() }
         val pressed by interaction.collectIsPressedAsState()
         val bg by animateColorAsState(
-            targetValue = when {
-                isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                pressed -> ak.surface2
-                else -> Color.Transparent
-            },
+            targetValue = if (pressed) ak.surface2 else Color.Transparent,
             animationSpec = AkMotionFastColor
         )
         Row(
@@ -1421,7 +1425,7 @@ private fun DrawerItem(
                 // 在 verticalScroll（无限高）里看不出来：无限约束下 fillMaxSize 退回最小高度，恰好 52dp。
                 // matchParentSize 取 Box 的最终尺寸，两种父约束下都是 52dp。
                 .matchParentSize()
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(4.dp))
                 .background(bg)
                 .clickable(
                     interactionSource = interaction,
@@ -1439,13 +1443,16 @@ private fun DrawerItem(
                 imageVector = dest.icon,
                 contentDescription = null,
                 tint = if (isSelected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp)
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                modifier = Modifier.size(21.dp)
             )
             Spacer(Modifier.width(AgentSpacing.space3))
             Text(
                 text = dest.label,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontSize = 15.sp,
+                    fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal
+                ),
                 color = if (isSelected) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
