@@ -65,6 +65,14 @@ fun main() {
         val dir = tempDir()
         val f = File(dir, "conv.json")
         val store = ConversationStore(f)
+        // 预热一次再计时。
+        //
+        // 首次 create() 要付的是**进程级一次性成本**：类加载、kotlinx 序列化器初始化、
+        // 落盘调度器的线程池启动、临时目录首次创建。CI 上并行跑 124 个 harness 时，
+        // 这笔成本实测可以超过 200ms——但它与「这条变更有没有等 400ms 去抖窗口」无关。
+        // 旧写法把两者算在一起，于是断言会在机器忙的时候随机变红：
+        // 2026-11-09 main 构建就这样红过一次（run 42643097373），重跑即绿。
+        store.create()
         val id = store.create()
         val ok = waitUntil(200) { f.exists() && f.readText().contains(id) }
         assertTrue("200ms 内已落盘", ok)
