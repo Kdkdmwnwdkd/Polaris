@@ -89,9 +89,11 @@ private fun testModelQuickSwitch() {
     check("G5 未配置态点击走引导（onOpenModel），已配置态开切换弹窗") {
         assertContains("G5", chat, "if (modelReady) showModelSwitch = true else onOpenModel()")
     }
-    check("G5b 未配置文案可见（模型未配置 / 点此前往配置模型）") {
+    check("G5b 未配置文案可见（模型未配置 / 去配置 →）") {
         assertContains("G5b", chat, "模型未配置")
-        assertContains("G5b", chat, "点此前往配置模型")
+        // v5：文案从「点此前往配置模型」改成「去配置 + 箭头」，断言跟着改，
+        // 条数不变。这里锁的是「未配置态必须给出下一步动作」，不是那句话的具体写法。
+        assertContains("G5b", chat, "\"去配置\"")
     }
     check("G6 ModelSwitchDialog 定义 + AkModalHost 承载退场") {
         assertContains("G6", chat, "private fun ModelSwitchDialog(")

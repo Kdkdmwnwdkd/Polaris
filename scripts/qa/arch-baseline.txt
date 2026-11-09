@@ -90,8 +90,22 @@
 #   只有真跑才炸，用户看到的是「一开就闪退」。
 #   修法：载入挪到类体末尾的 init 块（Kotlin 按书写顺序执行初始化器与 init 块）。
 #   +11 行里 8 行是注释（为什么不能挪回去），3 行是新 init 块本身，没有新增逻辑分支。
+# 2026-11-09 第十一次上调（ChatScreen +31 / ModelConfigScreen +8 / AppScaffold +7，
+# RealAgentLoop 反向 -5）：全 App 换编辑式排版（v5）。
+# 这一轮的取向是「删容器」：卡片、色块、图标底座、药丸全部拿掉，层级改由字号、
+# 细线和留白建立。所以三个文件的净增不是加了功能，而是**同一块内容换了一种写法**——
+# ChatScreen：模型指示条拆成「已就绪 / 未配置」两个分支，未配置态从两行说明改成
+#   一行「模型未配置 … 去配置 →」（21 行分支 + 6 行说明为什么不再写两行）；
+# ModelConfigScreen：档案芯片从灰底药丸改文字 + 下划线，补了间距与导入；
+# AppScaffold：抽屉头部去掉 40dp 图标底座改刊头（净 +12），DrawerItem 与
+#   DrawerConversationRow 的选中态从「色块 + 竖条」改成「颜色 + 字重」，
+#   会话行补了 14sp/11sp 的层级副本。
+# RealAgentLoop 这轮没动，行数自然降到 1499（低于冻结值），按「只减不增」同步改小。
+# 判定口径没变：新增的是**排版分支**，没有新增业务判断；真要复核，看的是
+# "有没有新函数"而不是文件总行数——这轮新增的函数只有 Editorial.kt 里的
+# 六个排版原语（独立文件，398 行，见 app/src/main/java/com/beichen/polaris/ui/Editorial.kt）。
 lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3597
-lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3128
-lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2461
-lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
-lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1528
+lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3159
+lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
+lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1499
+lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1535
