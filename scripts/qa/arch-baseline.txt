@@ -75,12 +75,14 @@
 # ModelConfigScreen：「常用模型 chip」（providerId 变化时重算，点一下填入不保存）+
 # 本地模型运行状态里的一行「租约句柄未归还」。都是 UI 层绕不开的接线，逻辑一行没进来
 # （popularModels 的数据在 ProviderCatalog，句柄数在 LeaseRegistry）。
-# AppScaffold：一个 hasUnreadCrash（10 行里 6 行是注释——为什么它不能复用 unreadErrors
+# AppScaffold：一个 hasUnreadCrash（12 行里 6 行是注释——为什么它不能复用 unreadErrors
 # 这件事必须写清楚，否则下一个人会"顺手合并"成一条，然后崩溃提示又消失）。
+# 其中 2 行是给 ScreenHost 加参数：那个函数才持有 ConsoleScreen 的调用点，
+# 第一次提交忘了这一层，CI 直接报 Unresolved reference——静态断言抓不到的作用域问题。
 #
 # 以后再抬必须先证明「功能确实需要」——「顺手写的」不算理由。
 lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3586
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3128
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2461
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
-lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1526
+lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1528

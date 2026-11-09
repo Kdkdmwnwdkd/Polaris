@@ -481,7 +481,7 @@ onExportConversation = { id ->
                                     ScreenHost(
                                         dest, vm, themeMode, onThemeModeChange,
                                         dynamicColor, onDynamicColorChange,
-                                        onSelect, onPageBack, unreadErrors
+                                        onSelect, onPageBack, unreadErrors, hasUnreadCrash
                                     )
                                 }
                             }
@@ -502,7 +502,7 @@ onExportConversation = { id ->
                             ScreenHost(
                                 dest, vm, themeMode, onThemeModeChange,
                                 dynamicColor, onDynamicColorChange,
-                                onSelect, onPageBack, unreadErrors
+                                onSelect, onPageBack, unreadErrors, hasUnreadCrash
                             )
                         }
                     }
@@ -626,7 +626,9 @@ private fun ScreenHost(
     onDynamicColorChange: (Boolean) -> Unit,
     onNavigate: (AppDest) -> Unit,
     onBack: () -> Unit,
-    unreadErrors: Int
+    unreadErrors: Int,
+    /** 崩溃目录里是否还有没看过的记录（与 [unreadErrors] 不同源，理由见控制台入口）。 */
+    hasUnreadCrash: Boolean
 ) {
     // P2（2026-10-21）：聚光灯引导——锚点由页面组件上报，覆盖层画在页面之上。
     // 触发条件三连：模型已就绪（能对话）→ 权限引导已走过（不是第一次打开）→ 自己没被跳过一次。

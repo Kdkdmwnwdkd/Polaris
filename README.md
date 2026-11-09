@@ -40,7 +40,7 @@ Android 本地 AI Agent —— Kotlin / Jetpack Compose，原创实现，四层�
 - **会话与记忆**：生成中可切会话（后台续跑）、记忆库（列表/图谱双模式、可编辑、节点可拖动）、跨会话事件记忆沉淀
 - **外观**：主题三选 + Material You 动态取色 + **全局照片背景**（浓度 5%–100% 自调，全 App 生效）
 - **系统能力**：屏幕捕捉（真机实证）、shell 终端、无障碍 App 控制、本地模型推理、全局备份/恢复（含提示词库）
-- **运行成本**：56 个工具**按组加载**——默认只带 `file` 组 3 个，模型用 `__use_tools` 自己开组、开过就一直开着（粘性）；设置页「工具范围」可手动关闭。全量 22327 字符 ≈ 10064 token，默认面 1243 字符 ≈ 525 token（省 94%）
+- **运行成本**：57 个工具**按组加载**——默认只带 `file` 组 3 个，模型用 `__use_tools` 自己开组、开过就一直开着（粘性）；设置页「工具范围」可手动关闭。全量 22360 字符 ≈ 10055 token，默认面 1243 字符 ≈ 525 token（省 94%）
 - **稳定性**：JSON 空值安全化、429 专用退避（尊重 `Retry-After`）、断网自动恢复、崩溃日志留存
 
 ---
@@ -57,8 +57,8 @@ bash scripts/qa/run-hotfix11-verification.sh
 # 工具面成本审计（真实工具描述，不是 harness 里的假数据）
 python3 scripts/tool-surface-audit.py --verbose
 
-# 全套回归（69 个 harness）
-for f in scripts/qa/run-*.sh; do bash "$f" || echo "FAIL $f"; done
+# 全套回归（123 个 harness；数字以 scripts/qa/harness-baseline.txt 为准）
+bash scripts/qa/run-all.sh
 ```
 
 > harness 是**纯源码扫描**（无 JUnit、无模拟器），随代码入库；产品变更时同步更新断言并在注释写明理由。
