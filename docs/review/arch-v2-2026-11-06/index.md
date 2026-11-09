@@ -24,7 +24,10 @@
 find app/src/main -name '*.kt' | wc -l                          # 301
 find app/src/main -name '*.kt' -exec cat {} + | wc -l            # 75207
 ls scripts/qa/run-*.sh | wc -l                                   # 113（含 run-all.sh）
-python3 scripts/qa/assertion-census.py --print                   # 1368 条 / 53 文件
-python3 scripts/tool-surface-audit.py --verbose                  # 56 工具 / 21,808 字符
+python3 scripts/qa/assertion-census.py --print                   # 1729 条 / 67 文件
+python3 scripts/tool-surface-audit.py --verbose                  # 57 工具 / 21,808 字符
 bash scripts/qa/run-arch-guard-verification.sh                   # 5 通过
 ```
+
+> 2026-11-09 重跑。断言数此前显示 1368 / 53 文件，是因为 `assertion-census.py` 只认
+> `expect`/`fixed`/`refute`，漏掉了用 `has`/`hasnt` 写的 361 条；工具数 56 → 57 是新增 `knowledge_search`。

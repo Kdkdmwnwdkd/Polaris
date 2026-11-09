@@ -30,7 +30,7 @@
 | 92 个 runner 真编译 Kotlin 并执行 | 脚本内出现 `KOTLINC`/`kotlinc` 的计数 92；`run-r19-verification.sh:210,218` 为 `K2JVMCompiler` + `java -cp ... R19HooksVerificationKt` | ✔ 已复核 |
 | 7 个用 Python 结构对账 | `run-apk / assertion-census / local-agent-prompt / r14-contract / tool-not-enabled / tool-surface / trace-metrics` | ✔ 已复核 |
 | 13 个纯 bash（11 源码扫描 + 2 门禁自测） | `run-runall-verification.sh`、`run-gate-verification.sh` 实跑 `run-all.sh`/`gate.sh`；其余如 `run-title-owner-verification.sh:10-17` 直接 `read` 源文件比对 | ✔ 已复核 |
-| 文本断言 1368 条 / 53 文件 | `python3 scripts/qa/assertion-census.py --print` → `# 合计 1368 条 / 53 个文件` | ✔ 已复核 |
+| 文本断言 1368 条 / 53 文件 | `python3 scripts/qa/assertion-census.py --print` → `# 合计 1368 条 / 53 个文件` | ✔ 已复核；**11-09 修正口径**：`has`/`hasnt` 漏计 361 条，实际 1729 / 67 文件 |
 | 单文件集中度 45.8% | `Hotfix11Verification.kt` 1722 行内 `assertContains` 602 处，census 计 626 | ✔ 已复核 |
 | 行为断言确实存在 | `R10ShardVerification.kt:102`「20 会话改 1 个只写 1 个分片」；`R19HooksVerification.kt:141` 100 owner 并发 | ✔ 已复核 |
 | 行为断言调用点量级 ~2.1k | `check(` 1847 处（含每文件 1 处定义，约 1.76k 调用点）、`eq(` 383 处 | ✔ 已复核 |
