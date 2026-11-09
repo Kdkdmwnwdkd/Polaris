@@ -19,7 +19,7 @@
 
 对源码字符串做匹配，而不是调用被测函数：
 
-- bash：`expect` / `fixed` / `refute`（本质都是 grep 源码）
+- bash：`expect` / `fixed` / `refute` / `has` / `hasnt`（本质都是 grep 源码）
 - Kotlin：`assertContains(...)`、`xxx.contains("字面量")`
 
 行为断言（`eq(` / `check(cond)` 里真调了函数）不计数。
@@ -48,7 +48,10 @@ QA = ROOT / "scripts/qa"
 BASELINE = QA / "assertion-baseline.txt"
 
 # bash：断言辅助函数的调用行（函数定义 `expect() {` 不匹配，因为没有引号参数）
-BASH_TEXT = re.compile(r"^\s*(expect|fixed|refute)\s+['\"]", re.M)
+# `has` / `hasnt` 是后几轮 harness 引入的同义辅助函数，早先漏在统计之外：
+# 它们同样只 grep 源码字面量，不调用被测函数。漏计不是「少写了断言」，
+# 是「尺子量不到」，会让这些文件的增量完全不受冻结约束。
+BASH_TEXT = re.compile(r"^\s*(expect|fixed|refute|has|hasnt)\s+['\"]", re.M)
 # Kotlin：assertContains(...) 与 带字面量的 .contains("...")
 KT_TEXT = re.compile(r"""assertContains\(|\.contains\(""")
 

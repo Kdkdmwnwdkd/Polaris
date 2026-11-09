@@ -75,4 +75,36 @@ text scripts/qa/W46Verification.kt 1
 # 2026-11-05 收紧 1370 → 1369（R-19）：T01 删掉「无在飞回合 stop 是 no-op」用例
 #   （stop 通道已删除，被测对象不存在），该用例里 1 条子串断言随之消失。
 #   R19HooksVerification 是行为断言（真跑 object），0 条文本断言，未占用额度。
-text __TOTAL__ 1369
+#
+# ── 2026-11-09 口径修正：把 has / hasnt 纳入同一把尺子 ──
+#
+# 下面 14 个 harness 的静态断言一直用 `has` / `hasnt`（早年从 runtime 分支沿用
+# 过来的命名），而 census 只认 `expect` / `fixed` / `refute`，于是 361 条断言
+# 从未进入统计——总数一直显示 1368 / 53 文件，实际早就是 1729 / 67 文件。
+#
+# 这**不是新增 361 条**，是「原本就在、只是没被量到」。修正后冻结强度只增不减：
+# 这些文件从此同样受「只减不增」约束，再想加文本断言会被拦住。
+#
+# 为什么这些文件可以有文本断言：它们守的是接线与结构事实——「A 调用了 B」
+# 「X 不再出现」「这个符号定义在哪个文件」——没有可调用的行为对象。
+# 行为验证在同主题的 Kotlin harness 里（真编译、真执行），文本层只做
+# 「有没有接上」的粗筛。反向断言（hasnt）尤其如此：要证明一张表**不存在**，
+# 没有任何行为可调。
+#
+# 抬高总量上限时要在提交信息里写清这一条：新增条目必须对应「结构事实」，
+# 不能拿来给「用文本断言冒充行为断言」开后门。
+text scripts/qa/run-native-crash-memory-verification.sh 88
+text scripts/qa/run-vulkan-backend-verification.sh 53
+text scripts/qa/run-wiring-verification.sh 40
+text scripts/qa/run-resource-plan-verification.sh 27
+text scripts/qa/run-ssh-backend-verification.sh 23
+text scripts/qa/run-approval-tier-verification.sh 21
+text scripts/qa/run-local-device-profile-verification.sh 20
+text scripts/qa/run-long-conversation-archive-verification.sh 19
+text scripts/qa/run-local-backend-catalog-verification.sh 19
+text scripts/qa/run-prompt-variables-verification.sh 13
+text scripts/qa/run-knowledge-base-verification.sh 10
+text scripts/qa/run-cost-drilldown-verification.sh 10
+text scripts/qa/run-qr-verification.sh 9
+text scripts/qa/run-local-param-input-verification.sh 9
+text __TOTAL__ 1729
