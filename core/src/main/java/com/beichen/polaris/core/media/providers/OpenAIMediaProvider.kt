@@ -11,6 +11,7 @@ import com.beichen.polaris.core.media.MediaRequest
 import com.beichen.polaris.core.media.MediaTaskHandle
 import com.beichen.polaris.core.media.MediaTaskState
 import com.beichen.polaris.core.media.Ratio
+import com.beichen.polaris.core.net.EndpointPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -52,6 +53,7 @@ class OpenAIMediaProvider(
 
     override suspend fun submit(request: MediaRequest): MediaTaskHandle = withContext(Dispatchers.IO) {
         requireKey()
+        requireSafeEndpoint()
         if (request.kind == MediaKind.IMAGE_TO_IMAGE) {
             editImage(request)
         } else {
@@ -147,6 +149,15 @@ class OpenAIMediaProvider(
 
     private fun requireKey() {
         if (apiKey.isBlank()) throw MediaException("未配置 OpenAI API Key")
+    }
+
+    /**
+     * 审计 F6：这里的 baseUrl 与 LLM 配置同源（见 [MediaRegistry] 的构造），
+     * 用户填了公网明文地址时，媒体 Key 也会以明文出网。判据与对话请求共用
+     * [EndpointPolicy]，避免两套规则各自漂移。
+     */
+    private fun requireSafeEndpoint() {
+        EndpointPolicy.refusalFor(baseUrl, apiKey.isNotBlank())?.let { throw MediaException(it) }
     }
 
     companion object {

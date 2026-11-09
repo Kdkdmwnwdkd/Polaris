@@ -1,5 +1,6 @@
 package com.beichen.polaris.core.llm
 
+import com.beichen.polaris.core.net.EndpointPolicy
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -39,6 +40,11 @@ object BalanceService {
         val url = when {
             spec.path.startsWith("http") -> spec.path
             else -> "$base${spec.path}"
+        }
+        // 审计 F6：余额接口同样要带 Bearer，判据与对话请求共用 EndpointPolicy。
+        // 返回 failure 而不是 throw：本方法对外就是 Result 语义，UI 直接展示原因。
+        EndpointPolicy.refusalFor(url, apiKey.isNotBlank())?.let { reason ->
+            return Result.failure(java.io.IOException(reason))
         }
         return runCatching {
             val request = Request.Builder()

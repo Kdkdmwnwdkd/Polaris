@@ -22,6 +22,7 @@ import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.llm.FinishReason
 import com.beichen.polaris.core.llm.KeyPoolPolicy
 import com.beichen.polaris.core.llm.KeyPoolRuntime
+import com.beichen.polaris.core.net.EndpointPolicy
 
 /**
  * 模型供应商配置：无状态，每次调用都携带。
@@ -633,6 +634,14 @@ class OpenAIClient(
      * W-43：端点没配就**立刻**报清楚，别让 OkHttp 抛「Expected URL scheme…」再去重试。
      * 真机日志：切过模型后 baseUrl 为空，连续两次 3s/10s 退避，用户只看到「调用失败」，
      * 完全不知道是没填地址。这类配置错误重试一百次也不会好。
+     *
+     * 2026-11-09（审计 F6）：这里顺带挡「公网明文 + 带凭据」。判据在
+     * [EndpointPolicy]（纯函数，`run-endpoint-policy-verification.sh` 有 16 条断言），
+     * 本方法只负责把它变成用户看得懂的 400——**不重试**，因为这不是网络问题，
+     * 重试三次只会把同一串 Key 明文再发三次。
+     *
+     * 为什么不在用户保存配置时就拦：Base URL 允许先填后改，且「测试连接」按钮与真正
+     * 发请求走的是同一条判定，早拦会多出一份可能与这里漂移的规则。
      */
     private fun requireUsableEndpoint() {
         val url = endpointUrl()
@@ -641,6 +650,12 @@ class OpenAIClient(
                 code = 400,
                 message = "模型端点未配置（当前值「$url」）。请到「设置 → 模型」选择供应商并填写 Base URL。"
             )
+        }
+        // 自定义头同样可能夹带凭据（X-Api-Key / HTTP-Referer 等中转站要求），一并计入
+        val carriesCredential = effectiveApiKey().isNotBlank() || config.customHeaders.isNotEmpty()
+        EndpointPolicy.refusalFor(url, carriesCredential)?.let { reason ->
+            AgentLogger.e("LLM", "拒绝向公网明文端点发送凭据：${EndpointPolicy.hostOf(url)}", null)
+            throw LlmHttpException(code = 400, message = reason)
         }
     }
 
