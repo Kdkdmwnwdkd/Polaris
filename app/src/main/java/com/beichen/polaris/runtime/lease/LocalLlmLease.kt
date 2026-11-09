@@ -22,11 +22,21 @@ import com.beichen.polaris.core.llm.local.LocalLlamaEngine
  * 且空闲确实可回收（下一次推理会自动重载）。
  */
 class LocalLlmLease(
-    override val id: String = "local-llm",
+    override val id: String = ID,
 ) : RuntimeLease {
 
-    private companion object {
-        const val TAG = "LocalLlmLease"
+    companion object {
+        /**
+         * 租约 id。
+         *
+         * 公开的理由：诊断面板要按它取「未归还句柄数」（[LeaseRegistry.outstandingCount]），
+         * 而那个查询只需要一个字符串——没必要为此构造一个租约实例。
+         * 但也**只能有一处定义**：写错一个字，面板会永远显示 0，看起来像「没有泄漏」，
+         * 比不显示更误导。
+         */
+        const val ID = "local-llm"
+
+        private const val TAG = "LocalLlmLease"
     }
 
     /**

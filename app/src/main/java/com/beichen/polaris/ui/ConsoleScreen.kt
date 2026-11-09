@@ -54,6 +54,14 @@ import com.beichen.polaris.ui.contract.ConsoleContract
 fun ConsoleScreen(
     vm: ConsoleContract,
     unreadErrors: Int,
+    /**
+     * 崩溃目录里是否还有没看过的记录。
+     *
+     * 和 [unreadErrors] 是两回事：进程被杀时内存日志来不及落盘，那条 ERROR 在
+     * `vm.logs` 里根本不存在，于是 unreadErrors 是 0、入口不亮、用户想不到要去
+     * 日志页——而这恰恰是最该看的一次崩溃。所以这里单独问一次崩溃目录。
+     */
+    hasUnreadCrash: Boolean = false,
     onNavigate: (AppDest) -> Unit
 ) {
     val enabled by vm.automationEnabled.collectAsStateWithLifecycle()
@@ -181,12 +189,20 @@ fun ConsoleScreen(
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
+                        // 数字优先：有未读 ERROR 时报条数（用户据此判断「要不要现在去看」）；
+                        // 没有 ERROR 但有未看过的崩溃时退化成红点——崩溃是低频事件，一个点
+                        // 足够提示「这里有事」，写成条数反而像在报错次数。
+                        val logsBadge: (@Composable () -> Unit)? = if (unreadErrors > 0) {
+                            { ConsoleCountBadge("$unreadErrors") }
+                        } else if (hasUnreadCrash) {
+                            { AkStatusDot(MaterialTheme.colorScheme.error, 8.dp) }
+                        } else {
+                            null
+                        }
                         ConsoleEntry(
                             icon = AppDest.LOGS.icon,
                             label = AppDest.LOGS.label,
-                            badge = if (unreadErrors > 0) {
-                                { ConsoleCountBadge("$unreadErrors") }
-                            } else null,
+                            badge = logsBadge,
                             onClick = { onNavigate(AppDest.LOGS) },
                             modifier = Modifier.weight(1f)
                         )

@@ -145,23 +145,6 @@ internal object ShellUiBackend {
         return tapMatch(tree.nodes, result)
     }
 
-    /**
-     * 系统按键：home / back / recent → `input keyevent`。
-     *
-     * @return 命令是否成功（未知 key 直接 false，不瞎发）
-     */
-    suspend fun keyEvent(key: String): Boolean = withContext(Dispatchers.IO) {
-        val code = when (key.lowercase()) {
-            "home" -> "KEYCODE_HOME"
-            "back" -> "KEYCODE_BACK"
-            "recent", "recents", "overview" -> "KEYCODE_APP_SWITCH"
-            else -> return@withContext false
-        }
-        val channel = ShellChannels.active() ?: return@withContext false
-        val out = runCatching { channel.exec("input keyevent $code", 10) }.getOrNull()
-        out?.ok == true
-    }
-
     /** 点按结果（失败时 [candidates] 供模型自纠，与无障碍路径的 hint 同源）。 */
     data class ClickOutcome(
         val clicked: Boolean,

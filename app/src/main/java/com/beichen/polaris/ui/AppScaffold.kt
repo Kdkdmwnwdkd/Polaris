@@ -99,6 +99,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.beichen.polaris.core.ConversationSummary
+import com.beichen.polaris.core.CrashLogger
 import java.util.Calendar
 
 /**
@@ -283,6 +284,15 @@ fun AppScaffold(
     var logsSeenCount by rememberSaveable { mutableStateOf(0) }
     val unreadErrors = remember(logs, logsSeenCount) {
         logs.take((logs.size - logsSeenCount).coerceAtLeast(0)).count { it.isErrorLogLine() }
+    }
+    // 未读崩溃：和上面那条不是同一个数据源——崩溃时进程直接死，内存里的日志一行都没落盘，
+    // 所以 logs 里找不到那条 ERROR。不单独查一次，控制台入口就不亮，用户也就不会去日志页。
+    //
+    // 跟着 logsSeenCount 重算：日志页在「查看/关闭」崩溃横幅时会 markAllSeen，回到控制台
+    // 时红点应当已经消失。读盘失败一律当 false（CrashLogger 内部 runCatching），
+    // 宁可不提示，也不要在没有崩溃时吓人。
+    val hasUnreadCrash = remember(logs, logsSeenCount, route) {
+        runCatching { CrashLogger.hasUnseen(ctx) }.getOrDefault(false)
     }
 
     // 进入对应页面时刷新数据：权限/日志/记忆都是「打开就要看到最新」的排查型页面
@@ -651,7 +661,7 @@ private fun ScreenHost(
                     )
                     // 功能一：模型页不再硬跳对话页——从哪来往哪回（抽屉来的回抽屉关闭态，空态直达的回对话页）
                     AppDest.MODEL -> ModelConfigScreen(vm) { onBack() }
-                    AppDest.CONSOLE -> ConsoleScreen(vm, unreadErrors, onNavigate)
+                    AppDest.CONSOLE -> ConsoleScreen(vm, unreadErrors, hasUnreadCrash, onNavigate)
                     AppDest.TERMINAL -> TerminalScreen()
                     AppDest.CONTAINER -> ContainerScreen()
                     AppDest.EDITOR -> EditorScreen()

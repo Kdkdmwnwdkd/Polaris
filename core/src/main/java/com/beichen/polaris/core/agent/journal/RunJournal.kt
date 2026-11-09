@@ -140,8 +140,13 @@ class RunJournal(private val dir: File) {
         val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".$EXT") } ?: return ""
         val builder = StringBuilder()
         files.sortedBy { it.lastModified() }.forEach { f ->
-            val turnId = f.name.removeSuffix(".$EXT")
-            load(turnId).forEach { builder.append(RunEventJson.encode(it)).append('\n') }
+            // 复用 [exportNdjson]：编码只有一处实现，两份输出不可能分叉。
+            //
+            // 修前这里另抄了一遍 `load + RunEventJson.encode`，是同一件事的两份代码。
+            // 这种重复不会立刻出错，但改格式时只要漏掉一边，就会得到「单回合导出有
+            // 某个字段、全量导出没有」——而两份文件都叫 NDJSON，肉眼比对时最容易被
+            // 当成「本来就是这样的」放过去。
+            builder.append(exportNdjson(f.name.removeSuffix(".$EXT")))
         }
         return builder.toString()
     }

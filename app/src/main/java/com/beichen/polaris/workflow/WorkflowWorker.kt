@@ -5,11 +5,9 @@ import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import androidx.work.workDataOf
 import com.beichen.polaris.core.AgentLogger
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -64,7 +62,7 @@ class WorkflowWorker(
  *
  * 使用方法：
  *  - App 启动时 [ensureScheduled]（幂等，重复调用不会产生多份周期任务）；
- *  - 用户点「立即运行」时 [runNow]。
+ *  - 用户点「立即运行」时走 `WorkflowFacade.runWorkflowNow`（前台对话，不经本调度器）。
  */
 object WorkflowScheduler {
 
@@ -88,18 +86,6 @@ object WorkflowScheduler {
             AgentLogger.i("WorkflowScheduler", "周期巡检已注册（15 分钟）")
         }.onFailure {
             AgentLogger.w("WorkflowScheduler", "注册失败：${it.message}")
-        }
-    }
-
-    /** 立即触发一次（不影响周期）。 */
-    fun runNow(context: Context, workflowId: String) {
-        runCatching {
-            val request = OneTimeWorkRequestBuilder<WorkflowWorker>()
-                .setInputData(workDataOf(WorkflowWorker.KEY_WORKFLOW_ID to workflowId))
-                .build()
-            WorkManager.getInstance(context).enqueue(request)
-        }.onFailure {
-            AgentLogger.w("WorkflowScheduler", "立即运行失败：${it.message}")
         }
     }
 }

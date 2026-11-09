@@ -105,6 +105,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.beichen.polaris.core.ConfigSanitizer
 import com.beichen.polaris.core.DEFAULT_SYSTEM_PROMPT
 import com.beichen.polaris.core.ModelProfile
+import com.beichen.polaris.runtime.lease.LeaseRegistry
+import com.beichen.polaris.runtime.lease.LocalLlmLease
 
 /**
  * 模型配置页（视觉规范 §6.8 + §6.5.3 页面内 Tab）。
@@ -859,6 +861,28 @@ private fun ModelTab(
                 }
             )
 
+            // 常用模型建议（ProviderCatalog.popularModels，此前只有数据没有入口）。
+            //
+            // 真机反馈里「模型名填什么」是仅次于「Key 去哪弄」的第二个卡点：名字由厂商
+            // 自己定，写成 gpt-4 还是 gpt-4o-mini 全靠猜。猜错的后果是 404，而 404 在
+            // 用户眼里先被读成「网络不通」或「Key 无效」——排查方向整个跑偏。
+            //
+            // 不做成自动补全：输入框是编辑态，弹出的候选会挡住用户正在敲的字。chip 是
+            // 常驻的，点一下填进去（不保存），用户还能在它基础上改后缀。
+            val popular = remember(providerId) { ProviderCatalog.popularModels(providerId) }
+            if (popular.isNotEmpty()) {
+                Spacer(Modifier.height(AgentSpacing.space2))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
+                    items(popular) { name ->
+                        AkChip(
+                            text = name,
+                            selected = model == name,
+                            onClick = { onModel(name) }
+                        )
+                    }
+                }
+            }
+
             // W-23：给「想用内置模型但选错供应商」的用户一条明路——
             // 不用再翻「全部供应商」弹窗找「本地模型（内置）」。
             Spacer(Modifier.height(AgentSpacing.space2))
@@ -1584,6 +1608,21 @@ private fun LocalModelsTab(vm: ModelConfigContract) {
             style = machineSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        // 租约句柄数（LeaseRegistry.outstandingCount）。
+        //
+        // 只在大于 0 时出现，平时不占地方——但这一行解释了最容易被误判成「内存泄漏」
+        // 的现象：模型显示「未加载」、内存却没降。真相通常是还有人生成到一半被中断，
+        // 句柄没归还，租约因此不敢释放底层资源。没有这一行，用户只能看到「卸不掉」。
+        val leaseHandles = remember(loaded, active) {
+            runCatching { LeaseRegistry.outstandingCount(LocalLlmLease.ID) }.getOrDefault(0L)
+        }
+        if (leaseHandles > 0) {
+            Text(
+                text = "租约句柄：$leaseHandles 个未归还（归还后底层资源才会真正释放）",
+                style = machineSmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
         if (loaded) {
             Spacer(Modifier.height(AgentSpacing.space3))
             AkOutlinedButton(

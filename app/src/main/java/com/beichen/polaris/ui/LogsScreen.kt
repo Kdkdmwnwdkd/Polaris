@@ -83,10 +83,14 @@ fun LogsScreen(vm: LogsContract) {
     var crashes by remember { mutableStateOf<List<CrashRecord>>(emptyList()) }
     var crashExpanded by rememberSaveable { mutableStateOf("") }
     var crashDirPath by remember { mutableStateOf("") }
+    // 未读崩溃文件名。单条粒度而不是整页一个布尔：用户可能只想看最新那次，
+    // 一进页面就全标已读，会让更早的几条悄悄失去提示（下次崩溃时他以为只有一条）。
+    var unseenCrashNames by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     /** 重新扫描崩溃目录，并把崩溃记录回放到 AgentLogger（此刻日志目录已就绪，可落盘）。 */
     fun reloadCrashes() {
         crashes = CrashLogger.listCrashFiles(ctx)
+        unseenCrashNames = CrashLogger.unseenCrashRecords(ctx).map { it.fileName }.toSet()
         crashDirPath = CrashLogger.crashDir(ctx).absolutePath
         CrashLogger.replayPendingIntoLogger(ctx)
     }
@@ -126,9 +130,19 @@ fun LogsScreen(vm: LogsContract) {
             Spacer(Modifier.height(AgentSpacing.space3))
             CrashSection(
                 records = crashes,
+                unseen = unseenCrashNames,
                 dirPath = crashDirPath,
                 expandedName = crashExpanded,
-                onToggle = { crashExpanded = if (crashExpanded == it) "" else it },
+                onToggle = { name ->
+                    crashExpanded = if (crashExpanded == name) "" else name
+                    // 展开即视为看过，且只标记这一条——这是 markSeen 与 markAllSeen 的分工：
+                    // 横幅上的「查看 / 关闭」是全标（用户已经被告知了全部），列表里点开某条
+                    // 只说明他关心这一条。
+                    if (name in unseenCrashNames) {
+                        CrashLogger.markSeen(ctx, name)
+                        unseenCrashNames = unseenCrashNames - name
+                    }
+                },
                 onClear = {
                     CrashLogger.clearCrashFiles(ctx)
                     crashExpanded = ""
@@ -296,6 +310,8 @@ fun LogsScreen(vm: LogsContract) {
 @Composable
 private fun CrashSection(
     records: List<CrashRecord>,
+    /** 其中还没看过的那几条（文件名）。空集 = 全都看过或没有记录。 */
+    unseen: Set<String> = emptySet(),
     dirPath: String,
     expandedName: String,
     onToggle: (String) -> Unit,
@@ -320,6 +336,12 @@ private fun CrashSection(
             ) {
                 Column(Modifier.fillMaxWidth().padding(AgentSpacing.space3)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        // 未读红点：崩溃是低频事件，列表可能只有两三条，光看时间分不出
+                        // 「哪条是我上次看过的」。点开即消，和阅读器的未读逻辑一致。
+                        if (record.fileName in unseen) {
+                            AkStatusDot(MaterialTheme.colorScheme.error, 6.dp)
+                            Spacer(Modifier.width(AgentSpacing.space2))
+                        }
                         Text(
                             text = formatCrashClock(record.timeMs),
                             style = machineSmall,

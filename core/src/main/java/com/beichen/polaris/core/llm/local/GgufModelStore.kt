@@ -151,9 +151,6 @@ class GgufModelStore(private val context: Context) {
             ?.sortedByDescending { it.lastModified }
             ?: emptyList()
 
-    fun isDownloaded(fileName: String): Boolean =
-        File(modelsDir, fileName).let { it.isFile && it.length() > 0 }
-
     /**
      * W-45：导入用户**已有**的 .gguf 文件（系统文件选择器给的是 content:// URI）。
      *
@@ -170,7 +167,24 @@ class GgufModelStore(private val context: Context) {
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val resolver = context.contentResolver
-            val target = uniqueTarget(sanitize(queryDisplayName(uri)))
+            // 先按文件名判格式，再决定要不要复制。
+            //
+            // 原来只有「复制完读文件头」这一道关：用户选了个 3GB 的 .mnn，得等几分钟把
+            // 整个文件拷进应用目录，才被告知「不是 GGUF」。磁盘和时间都白花了，而答案
+            // 在他点选之前就已经写在文件名里。
+            //
+            // 文件名不可信（后缀随手就能改），所以这里只做**前置提醒**，不是最终把关：
+            // 认不出的格式（null）照旧走后面的魔数校验，冒充 .gguf 的一样会被拦下。
+            val displayName = queryDisplayName(uri)
+            val named = LocalEngineCatalog.detectFormat(displayName, isDirectory = false)
+            if (named != null && named != LocalModelFormat.GGUF) {
+                throw IOException(
+                    "这个文件看起来是 ${named.label} 格式，内置引擎只认 GGUF（.gguf）。" +
+                        "MNN / LiteRT / QAIRT 需要各自对应的运行库，当前构建没有打包，" +
+                        "导入了也加载不了。"
+                )
+            }
+            val target = uniqueTarget(sanitize(displayName))
             val part = File(modelsDir, target.name + ".part")
             modelsDir.mkdirs()
             val total = querySize(uri)

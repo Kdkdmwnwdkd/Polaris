@@ -28,21 +28,17 @@
 # ── 已接线 ────────────────────────────────────────────────────────────────
 WIRED | flush | core/ConversationStore.kt | (owner as ConversationStore).flush() | R-19 接入 AppBackgroundHooks：切后台（前台 Activity 归零）立刻补一次落盘，不再赌 400ms 去抖窗口
 WIRED | fireAll | core/lifecycle/AppBackgroundHooks.kt | AppBackgroundHooks.fireAll( | R-19 新增；AgentKitApplication.onActivityStopped 在计数归零时触发
+WIRED | hasUnseen | core/CrashLogger.kt | CrashLogger.hasUnseen(ctx) | 控制台「运行日志」入口的红点。崩溃时进程直接死，内存里的日志一行都没落盘，unreadErrors 恒为 0——不单独问一次崩溃目录，用户永远想不到要去日志页看那次崩溃
+WIRED | markSeen | core/CrashLogger.kt | CrashLogger.markSeen(ctx, name) | 日志页展开单条崩溃时按文件名标记。与横幅的 markAllSeen 分工明确：那个是「已经告知过全部」，这个是「他只想看这一条」
+WIRED | popularModels | core/llm/ProviderCatalog.kt | ProviderCatalog.popularModels(providerId) | 模型名输入框下方的常用模型 chip。名字由厂商自己定，猜错报 404，而 404 在用户眼里先被读成「网络不通」或「Key 无效」，排查方向整个跑偏
+WIRED | detectFormat | core/llm/local/LocalBackendCatalog.kt | LocalEngineCatalog.detectFormat(displayName | 导入前先按文件名判格式。原来要等整个文件拷进应用目录才读文件头，选了个 3GB 的 .mnn 得白等几分钟；认不出的格式仍走魔数校验，冒充 .gguf 的一样拦下
+WIRED | exportNdjson | core/agent/journal/RunJournal.kt | exportNdjson(f.name.removeSuffix | exportAllNdjson 改为复用单回合导出。编码只留一处，两份 NDJSON 不会再出现「单回合有某字段、全量没有」这种最容易被当成本该如此的分叉
+WIRED | outstandingCount | runtime/lease/LeaseRegistry.kt | LeaseRegistry.outstandingCount(LocalLlmLease.ID) | 本地模型「运行状态」卡：句柄未归还时才显示。它解释的是最容易被误判成内存泄漏的现象——模型显示「未加载」、内存却没降
 
 # ── 已删除 ────────────────────────────────────────────────────────────────
 DELETED | stop | core/agent/AgentLoop.kt | - | 优雅收尾通道：实现完整但生产零调用，用户点停止走 Job.cancel（立即停）。留着会让读者以为有两套停止机制
 DELETED | unregister | core/ToolRegistry.kt | - | 单条注销：只有 harness 用过，MCP 回卷走 registerOwned/unregisterOwner。已删除，R07 的 A7 用例改测内置覆盖路径
-
-# ── 保留（实现完整，无生产调用点）─────────────────────────────────────────
-# 这些是真技术债，不是残留：每一行都对应一个「做了一半的功能」。写在这里是为了
-# 让下一个人一眼看到「能力已存在，缺的是一个入口」，而不是重新实现一遍。
-RESERVED | hasUnseen | core/CrashLogger.kt | - | 崩溃日志未读标记：崩溃页至今没有红点入口，判断逻辑已就绪
-RESERVED | markSeen | core/CrashLogger.kt | - | 同上，配对方法；接线时要与 hasUnseen 一起接
-RESERVED | popularModels | core/llm/ProviderCatalog.kt | - | 供应商常用模型建议：设置页仍让用户手填模型名，目录里已有数据
-RESERVED | isDownloaded | core/llm/local/GgufModelStore.kt | - | 模型列表未显示「已下载」态，下载页只能靠文件管理器确认
-RESERVED | detectFormat | core/llm/local/LocalBackendCatalog.kt | - | 本地模型格式识别：能力矩阵已实现，导入流程尚未接入
-RESERVED | keyEvent | automation/ShellUiBackend.kt | - | 按键注入（返回/Home/音量）：尚无对应工具暴露给模型
-RESERVED | getUiTreeJson | automation/AgentAccessibilityService.kt | - | 无障碍树 JSON 导出：有快照能力，没有对外入口
-RESERVED | runNow | workflow/WorkflowWorker.kt | - | 定时任务「立即执行一次」：调度器已能跑，UI 没有按钮
-RESERVED | exportNdjson | core/agent/journal/RunJournal.kt | - | 单回合事件导出：诊断包导出的是整目录，没有按回合导出的入口
-RESERVED | outstandingCount | runtime/lease/LeaseRegistry.kt | - | 租约未归还计数：只有 harness 读它，诊断页尚未展示
+DELETED | isDownloaded | core/llm/local/GgufModelStore.kt | - | 与 listDownloaded 重复：UI 本就用列表比对（models.any），再问一次磁盘只会多出第二条可能不一致的判据
+DELETED | keyEvent | automation/ShellUiBackend.kt | - | 与 ui_key 重复：那个工具走 runOnService 的无障碍路径，失败时用 shizukuFallback 发出同一条 input keyevent，三个键的映射一模一样。同一动作不留两个实现
+DELETED | getUiTreeJson | automation/AgentAccessibilityService.kt | - | getUiTreeSnapshot 的薄包装：唯一调用方 ui_tree 需要 kept/filtered 来写文案，直接取整个快照即可。同一份数据不开两个入口，改返回类型时必然漏一个
+DELETED | runNow | workflow/WorkflowWorker.kt | - | 已被 WorkflowFacade.runWorkflowNow 取代：后者走前台对话（Agent 需要无障碍与前台应用，后台跑不可信），用户还能看到每一步并随时停止。WorkManager 那条路没人走

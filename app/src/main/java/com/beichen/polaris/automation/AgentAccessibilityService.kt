@@ -409,19 +409,20 @@ class AgentAccessibilityService : AccessibilityService() {
     /* UI 树抓取                                                           */
     /* ------------------------------------------------------------------ */
 
-    /** 抓取当前窗口 UI 树，输出精简 JSON 数组（上限约 250 个节点）。 */
     /**
-     * 读取当前界面结构为精简 JSON 数组（**已过滤纯容器节点**——hotfix9）。
+     * 读取当前界面结构为精简 JSON 数组（**已过滤纯容器节点**——hotfix9），
+     * 附带 kept/filtered 统计供工具文案说明过滤了多少噪声。
      *
      * 为什么过滤：真机 19:04/19:05 实证，设置页一次 ui_tree 返回 11229~40085 字符
      * （250 个节点里绝大多数是 text/desc/id 全空且不可点的纯容器 FrameLayout/LinearLayout）。
      * ① 白白塞爆上下文、拖慢模型思考；② 关键项被淹没在噪声里，模型更容易点错。
      * 过滤规则：保留 text/desc/id 任一非空、或可点击/可滚动/可编辑/有勾选态的节点。
      * 上溯祖先与坐标定位在无障碍侧仍可查到容器，过滤不影响 ui_click 命中。
+     *
+     * 早先还有一个只返回 json 字符串的 `getUiTreeJson()`（本方法的薄包装）。删掉的理由：
+     * 唯一的调用方 `ui_tree` 需要 kept/filtered 来写文案，直接取整个快照即可；
+     * 留着它等于给同一份数据开两个入口，改返回类型时必然漏一个。
      */
-    fun getUiTreeJson(): String = getUiTreeSnapshot().json
-
-    /** [getUiTreeJson] 的结构化版：附带 kept/filtered 统计，供工具文案说明过滤了多少噪声。 */
     fun getUiTreeSnapshot(): UiTreeSnapshot {
         val root = rootInActiveWindow ?: return UiTreeSnapshot("[]", 0, 0)
         return try {

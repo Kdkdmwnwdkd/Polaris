@@ -70,9 +70,17 @@
 # refresh() 在构造期就可能被回调触发——声明晚了就是一次「与 SSH 毫无关系」的 NPE。
 # 这 10 行全是那句「为什么顺序有约束」的注释，不是代码。
 #
+# 2026-11-09 第十次上调（ModelConfigScreen +39 / AppScaffold +10）：把两个"有数据没入口"
+# 的契约接上线。
+# ModelConfigScreen：「常用模型 chip」（providerId 变化时重算，点一下填入不保存）+
+# 本地模型运行状态里的一行「租约句柄未归还」。都是 UI 层绕不开的接线，逻辑一行没进来
+# （popularModels 的数据在 ProviderCatalog，句柄数在 LeaseRegistry）。
+# AppScaffold：一个 hasUnreadCrash（10 行里 6 行是注释——为什么它不能复用 unreadErrors
+# 这件事必须写清楚，否则下一个人会"顺手合并"成一条，然后崩溃提示又消失）。
+#
 # 以后再抬必须先证明「功能确实需要」——「顺手写的」不算理由。
 lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3586
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3128
-lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2422
+lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2461
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
-lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1516
+lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1526
