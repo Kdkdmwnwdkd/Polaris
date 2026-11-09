@@ -6,30 +6,22 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Accessibility
-import androidx.compose.material.icons.outlined.Apps
-import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Security
-import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -38,11 +30,41 @@ import com.beichen.polaris.automation.DeviceContext
 import com.beichen.polaris.ui.contract.ConsoleContract
 
 /**
- * 控制台页（UX v1 §1.3 控制台结构直译，替代旧「自动化」大杂页）。
+ * 控制台页（v5 编辑式结构）。
  *
- * 结构自上而下：状态总览双栏（无障碍服务 / 自动化总开关）→ 总开关 +
- * 「前往系统设置开启无障碍服务」→ 设备感知实时上下文 → 快捷入口 2×2 →
- * 可用能力说明。旧页里的技能 / 日志 / 记忆三块已拆去各自的一级页面，这里只留跳转入口。
+ * 旧结构是 5 张卡片：状态总览（双栏色块）、自动化总开关、设备感知、快捷入口（2×2 色块）、
+ * 可用能力。五张卡在屏幕上重量完全相同，于是「服务断了」和「记忆里有 12 条」看起来一样急。
+ *
+ * 现在改成一条竖排的清单：
+ *
+ * ```
+ * 控制台              ← 28sp 衬线
+ * 已连接 · 2 项待授权  ← 12.5sp
+ *
+ * 状态
+ * 无障碍服务      已连接
+ * 自动化总开关     已开启
+ * 设备感知        运行中
+ *
+ * 自动化
+ * 自动化总开关                      [开关]
+ *
+ * 此刻
+ * 前台应用        微信
+ * 最近通知
+ * · 菜鸟驿站：您的包裹已到…
+ *
+ * 管理
+ * 权限中心        2  ›
+ * 技能           8  ›
+ * 运行日志        ·  ›
+ * 记忆          12  ›
+ *
+ * 能做的事
+ * ui_tree（读取界面）、ui_tap…
+ * ```
+ *
+ * 信息一点没少，但读者是按「从上到下的状态」读，而不是按「五张卡片」扫。
  *
  * 一级页面：顶栏走 [PageTopBar]（标题「控制台」+ 右上「刷新」），抽屉开关由宿主注入。
  * 待授权项数与抽屉红点、权限中心页共用 [pendingGrantCount]，三处永远报同一个数（§6.5.2）。
@@ -72,7 +94,6 @@ fun ConsoleScreen(
     val skillInfos by vm.skillInfos.collectAsStateWithLifecycle()
     val memories by vm.memories.collectAsStateWithLifecycle()
     val ctx = LocalContext.current
-    val ak = LocalAkColors
 
     val pendingGrants = pendingGrantCount(connected, notificationGranted, usageGranted)
 
@@ -86,12 +107,23 @@ fun ConsoleScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // 副标题只讲「现在什么状态」，不再解释这一页是干什么的：
+    // 用户点进来时已经知道自己在控制台，第一行文字应该给出他此刻最需要判断的事实。
+    val statusLine = when {
+        !connected -> "无障碍未连接 · Agent 暂时只能对话"
+        pendingGrants > 0 -> "已连接 · $pendingGrants 项待授权"
+        enabled -> "已连接 · 自动化运行中"
+        else -> "已连接 · 自动化已关闭"
+    }
+
     Column(Modifier.fillMaxWidth()) {
         PageTopBar(
             title = AppDest.CONSOLE.title,
             actionIcon = Icons.Outlined.Refresh,
             actionDescription = "刷新",
-            onAction = { vm.refreshGrants() }
+            onAction = { vm.refreshGrants() },
+            // 本页自己画大标题（要带状态副标题），顶栏不再重复
+            largeTitle = false
         )
         Column(
             Modifier
@@ -100,226 +132,131 @@ fun ConsoleScreen(
                 .padding(
                     start = AgentSpacing.space5,
                     end = AgentSpacing.space5,
-                    top = AgentSpacing.space3,
+                    top = AgentSpacing.space1,
                     bottom = AgentSpacing.space8
-                ),
-            verticalArrangement = Arrangement.spacedBy(AgentSpacing.space4)
-        ) {
-            // —— 状态总览：三宫格（§1.3）——
-            AkSectionCard(
-                title = "状态总览",
-                icon = Icons.Outlined.Dashboard,
-                description = "无障碍服务与自动化总开关就绪后，Agent 才能完整操作并感知手机。"
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
-                    ConsoleStatusTile(label = "无障碍服务", ok = connected, modifier = Modifier.weight(1f))
-                    ConsoleStatusTile(label = "自动化总开关", ok = enabled, modifier = Modifier.weight(1f))
-                }
-            }
-
-            // —— 总开关 + 系统设置入口 ——
-            AkSectionCard(
-                title = "自动化总开关",
-                icon = Icons.Outlined.Security,
-                description = "关闭后所有手机操作类工具立即失效，Agent 只能对话。"
-            ) {
-                AkListItem(
-                    icon = Icons.Outlined.Security,
-                    title = "自动化总开关",
-                    description = if (enabled) "已开启，Agent 可操作手机" else "已关闭，Agent 只能对话",
-                    trailing = {
-                        AkSwitch(
-                            checked = enabled,
-                            onCheckedChange = { vm.setAutomationEnabled(it) }
-                        )
-                    }
                 )
-                // 无障碍服务只能在系统设置里开：未连接时常驻入口，已连接后收起（§1.3）
-                if (!connected) {
-                    Spacer(Modifier.height(AgentSpacing.space3))
-                    AkPrimaryButton(
-                        text = "前往系统设置开启无障碍服务",
-                        icon = Icons.Outlined.Accessibility,
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = { vm.openAccessibilitySettings(ctx) }
-                    )
-                    Spacer(Modifier.height(AgentSpacing.space2))
-                    Text(
-                        text = "开启后返回本页，状态会自动刷新。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+        ) {
+            AkDisplayTitle(title = AppDest.CONSOLE.title, subtitle = statusLine)
+
+            // —— 状态：三行事实，不用色块 ——
+            AkSectionLabel(text = "状态", gap = 20)
+            AkLine(
+                title = "无障碍服务",
+                dense = true,
+                trailing = {
+                    StatusWord(
+                        ok = connected,
+                        okText = "已连接",
+                        noText = "未连接"
                     )
                 }
-            }
-
-            // —— 设备感知：实时上下文 ——
-            AkSectionCard(
+            )
+            AkLine(
                 title = "设备感知",
-                icon = Icons.Outlined.Visibility,
-                description = "通知访问与使用情况访问就绪后，每次发消息时当前前台应用与最近通知会自动注入给模型。"
-            ) {
-                DeviceContextBlock(deviceContext = deviceContext)
-            }
-
-            // —— 快捷入口 2×2（角标规则同抽屉：红点 = 待办 / 计数 = 存量 / 零不显示）——
-            AkSectionCard(
-                title = "快捷入口",
-                icon = Icons.Outlined.Apps,
-                description = "管理类页面从这里直接进入，角标与抽屉里看到的一致。"
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
-                        ConsoleEntry(
-                            icon = AppDest.PERMISSIONS.icon,
-                            label = AppDest.PERMISSIONS.label,
-                            badge = if (pendingGrants > 0) {
-                                { AkStatusDot(MaterialTheme.colorScheme.error, 8.dp) }
-                            } else null,
-                            onClick = { onNavigate(AppDest.PERMISSIONS) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        ConsoleEntry(
-                            icon = AppDest.SKILLS.icon,
-                            label = AppDest.SKILLS.label,
-                            badge = if (skillInfos.isNotEmpty()) {
-                                { ConsoleCountBadge("${skillInfos.size}") }
-                            } else null,
-                            onClick = { onNavigate(AppDest.SKILLS) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
-                        // 数字优先：有未读 ERROR 时报条数（用户据此判断「要不要现在去看」）；
-                        // 没有 ERROR 但有未看过的崩溃时退化成红点——崩溃是低频事件，一个点
-                        // 足够提示「这里有事」，写成条数反而像在报错次数。
-                        val logsBadge: (@Composable () -> Unit)? = if (unreadErrors > 0) {
-                            { ConsoleCountBadge("$unreadErrors") }
-                        } else if (hasUnreadCrash) {
-                            { AkStatusDot(MaterialTheme.colorScheme.error, 8.dp) }
-                        } else {
-                            null
-                        }
-                        ConsoleEntry(
-                            icon = AppDest.LOGS.icon,
-                            label = AppDest.LOGS.label,
-                            badge = logsBadge,
-                            onClick = { onNavigate(AppDest.LOGS) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        ConsoleEntry(
-                            icon = AppDest.MEMORY.icon,
-                            label = AppDest.MEMORY.label,
-                            badge = if (memories.isNotEmpty()) {
-                                { ConsoleCountBadge("${memories.size}") }
-                            } else null,
-                            onClick = { onNavigate(AppDest.MEMORY) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
+                dense = true,
+                trailing = {
+                    StatusWord(
+                        ok = !deviceContext.isEmpty,
+                        okText = "运行中",
+                        noText = "暂无数据"
+                    )
                 }
+            )
+
+            // —— 自动化：一个开关 + 未连接时的唯一出路 ——
+            AkSectionLabel(text = "自动化")
+            AkLine(
+                title = "自动化总开关",
+                meta = if (enabled) "Agent 可操作并感知手机" else "Agent 只能对话",
+                trailing = {
+                    AkSwitch(
+                        checked = enabled,
+                        onCheckedChange = { vm.setAutomationEnabled(it) }
+                    )
+                }
+            )
+            // 无障碍服务只能在系统设置里开：未连接时常驻入口，已连接后收起（§1.3）
+            if (!connected) {
+                Spacer(Modifier.height(AgentSpacing.space4))
+                AkActionLine(
+                    text = "前往系统设置开启无障碍服务",
+                    note = "开启后返回本页，状态会自动刷新。",
+                    onClick = { vm.openAccessibilitySettings(ctx) }
+                )
             }
 
-            // —— 可用能力说明：内容即 description，无需额外控件 ——
-            AkSectionCard(
-                title = "可用能力",
-                icon = Icons.Outlined.Apps,
-                description = "可用工具：ui_tree（读取界面）、ui_tap / ui_long_press / ui_swipe（手势）、" +
+            // —— 此刻：设备感知的实时上下文 ——
+            AkSectionLabel(text = "此刻")
+            DeviceContextBlock(deviceContext = deviceContext)
+
+            // —— 管理：四个入口压成四行（原来是 2×2 的四个色块）——
+            AkSectionLabel(text = "管理")
+            AkLine(
+                title = AppDest.PERMISSIONS.label,
+                value = if (pendingGrants > 0) "$pendingGrants 项待办" else null,
+                onClick = { onNavigate(AppDest.PERMISSIONS) }
+            )
+            AkLine(
+                title = AppDest.SKILLS.label,
+                value = if (skillInfos.isNotEmpty()) "${skillInfos.size} 个" else null,
+                onClick = { onNavigate(AppDest.SKILLS) }
+            )
+            AkLine(
+                title = AppDest.LOGS.label,
+                // 数字优先：有未读 ERROR 时报条数（用户据此判断「要不要现在去看」）；
+                // 没有 ERROR 但有未看过的崩溃时退化成红点——崩溃是低频事件，一个点
+                // 足够提示「这里有事」，写成条数反而像在报错次数。
+                value = if (unreadErrors > 0) "$unreadErrors 条" else null,
+                onClick = { onNavigate(AppDest.LOGS) },
+                trailing = if (unreadErrors == 0 && hasUnreadCrash) {
+                    { AkStatusDot(MaterialTheme.colorScheme.error, 7.dp) }
+                } else {
+                    null
+                }
+            )
+            AkLine(
+                title = AppDest.MEMORY.label,
+                value = if (memories.isNotEmpty()) "${memories.size} 条" else null,
+                onClick = { onNavigate(AppDest.MEMORY) }
+            )
+
+            // —— 能做的事：整段说明就是内容，不需要容器 ——
+            AkSectionLabel(text = "能做的事", gap = 30)
+            Text(
+                text = "可用工具：ui_tree（读取界面）、ui_tap / ui_long_press / ui_swipe（手势）、" +
                     "ui_input（输入文本）、ui_key（home / back / recent）、ui_click（按文本或 ID 点击）、" +
                     "ui_screenshot（截取屏幕给视觉模型看）、device_notifications（读取最近通知）、" +
-                    "device_foreground_app（读取当前前台应用）。\n" +
+                    "device_foreground_app（读取当前前台应用）。\n\n" +
                     "在对话里直接说“打开设置并点击某某”“截个屏看看现在是什么界面”" +
-                    "“刚才有没有新消息”，即可让 Agent 操作并感知手机。"
+                    "“刚才有没有新消息”，即可让 Agent 操作并感知手机。",
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 13.sp,
+                    lineHeight = 22.sp
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f),
+                modifier = Modifier.padding(top = AgentSpacing.space2)
             )
         }
     }
 }
 
 /**
- * 三宫格状态块：8dp 语义点 + 标签 + 状态词（点色与文字同色双编码，色盲可读，UX v1 §5.3）。
+ * 状态词：小色点 + 文字（点色与文字同色双编码，色盲可读，UX v1 §5.3）。
  *
- * 就绪 = successContainer 淡 tint 底 + on-success-container 墨迹；
- * 未就绪 = surface-1 中性底 + on-surface-var——「未授权 / 未开启」不是错误，不用红色（§3.1）。
+ * 就绪用 success 墨迹；未就绪用中性墨——「未授权 / 未开启」不是错误，不上红。
  */
 @Composable
-private fun ConsoleStatusTile(label: String, ok: Boolean, modifier: Modifier = Modifier) {
+private fun StatusWord(ok: Boolean, okText: String, noText: String) {
     val ak = LocalAkColors
-    val ink = if (ok) ak.onSuccessContainer else MaterialTheme.colorScheme.onSurfaceVariant
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = if (ok) ak.successContainer else ak.surface1,
-        modifier = modifier.heightIn(min = 76.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(
-                horizontal = AgentSpacing.space2,
-                vertical = AgentSpacing.space3
-            ),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            AkStatusDot(if (ok) ak.success else ak.outlineStrong, 8.dp)
-            Spacer(Modifier.height(AgentSpacing.space2))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(Modifier.height(AgentSpacing.space1))
-            Text(
-                text = if (ok) "已就绪" else "未开启",
-                style = MaterialTheme.typography.labelMedium,
-                color = ink
-            )
-        }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        AkStatusDot(if (ok) ak.success else ak.outlineStrong, 6.dp)
+        Spacer(Modifier.width(AgentSpacing.space2))
+        Text(
+            text = if (ok) okText else noText,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, lineHeight = 18.sp),
+            color = if (ok) ak.onSuccessContainer else MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
-}
-
-/**
- * 快捷入口（2×2 单项）：40dp 图标底座 + 标签 + 角标，整块 64dp 起可点。
- * 角标由调用方传入（红点 = 待办 / 计数 = 存量 / 零不显示，§6.5.2）。
- */
-@Composable
-private fun ConsoleEntry(
-    icon: ImageVector,
-    label: String,
-    badge: (@Composable () -> Unit)?,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    AkPressSurface(
-        onClick = onClick,
-        modifier = modifier.heightIn(min = 64.dp),
-        shape = RoundedCornerShape(14.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = AgentSpacing.space3),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            AkIconBase(icon = icon)
-            Spacer(Modifier.width(AgentSpacing.space3))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                modifier = Modifier.weight(1f)
-            )
-            if (badge != null) badge()
-        }
-    }
-}
-
-/** 存量计数角标：中性墨迹数字，无底无点（计数不是告警，§6.5.2）。 */
-@Composable
-private fun ConsoleCountBadge(count: String) {
-    Text(
-        text = count,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
 }
 
 /**
@@ -331,7 +268,7 @@ private fun DeviceContextBlock(deviceContext: DeviceContext) {
     if (deviceContext.isEmpty) {
         Text(
             text = "暂无感知数据。开启无障碍服务后切换 App、或收到新通知，这里会实时显示。",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, lineHeight = 21.sp),
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         return
@@ -344,43 +281,32 @@ private fun DeviceContextBlock(deviceContext: DeviceContext) {
         } else {
             deviceContext.foregroundPackage
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AkIconBase(icon = Icons.Outlined.Apps)
-            Spacer(Modifier.width(AgentSpacing.space3))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = "前台应用",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = fg,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
+        AkLine(title = "前台应用", meta = fg, dense = true)
     }
     val notifications = deviceContext.recentNotifications
     if (notifications.isNotEmpty()) {
         Spacer(Modifier.height(AgentSpacing.space3))
         Text(
             text = "最近通知",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 10.5.sp,
+                letterSpacing = 1.1.sp
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
         )
-        Spacer(Modifier.height(AgentSpacing.space1))
-        Column(verticalArrangement = Arrangement.spacedBy(AgentSpacing.space1)) {
+        Spacer(Modifier.height(AgentSpacing.space2))
+        Column(verticalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
             notifications.take(3).forEach { line ->
                 Row(verticalAlignment = Alignment.Top) {
                     // 装饰性中性小点：条目已由文字承载语义，不做状态双编码
-                    AkStatusDot(MaterialTheme.colorScheme.onSurfaceVariant, 6.dp)
+                    AkStatusDot(MaterialTheme.colorScheme.onSurfaceVariant, 5.dp)
                     Spacer(Modifier.width(AgentSpacing.space2))
                     Text(
                         text = line,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 13.sp,
+                            lineHeight = 20.sp
+                        ),
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
@@ -391,7 +317,7 @@ private fun DeviceContextBlock(deviceContext: DeviceContext) {
             if (rest > 0) {
                 Text(
                     text = "等 $rest 条",
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

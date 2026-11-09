@@ -142,7 +142,7 @@ fun SettingsScreen(
 
     Column(Modifier.fillMaxWidth()) {
         // 设置页无右上动作：本页所有操作都在内容区，顶栏不放可能误触的全局按钮（§6.5.4）
-        PageTopBar(title = AppDest.SETTINGS.title)
+        PageTopBar(title = AppDest.SETTINGS.title, largeTitle = false)
         Column(
             Modifier
                 .fillMaxWidth()
@@ -151,11 +151,13 @@ fun SettingsScreen(
                 .padding(
                     start = AgentSpacing.space5,
                     end = AgentSpacing.space5,
-                    top = AgentSpacing.space3,
+                    top = AgentSpacing.space1,
                     bottom = AgentSpacing.space8
-                ),
-            verticalArrangement = Arrangement.spacedBy(AgentSpacing.space4)
+                )
         ) {
+            // v5：页面大标题。设置页的内容全是「一组一组的选择」，没有状态可报，
+            // 副标题只说明一件事：改动即时生效。
+            AkDisplayTitle(title = AppDest.SETTINGS.title, subtitle = "改动即时生效，无需保存")
             // W-64：整页唯一的视觉重心——「你现在用的是什么模型」。
             // 之前这页从第一行开始就是一串等重的白卡，眼睛没有落点；
             // 模型又是这页几乎所有设置的前提（没配模型，下面全都没意义）。
@@ -169,15 +171,16 @@ fun SettingsScreen(
                 title = "轻量任务",
                 description = "标题生成等轻量任务用哪个模型，默认跟随主配置"
             ) {
+                // v5：不加图标。这一组是「单选：轻量任务用哪个模型」，档案行本来就没有图标，
+                // 只给「跟随主配置」配一个等于暗示它是另一种东西。单选靠 selected 表达。
                 AkListItem(
-                    icon = Icons.Outlined.Cloud,
+                    icon = null,
                     title = "跟随主配置",
                     description = "与当前聊天模型相同（默认）",
                     selected = taskProfileId.isBlank(),
                     onClick = { vm.setTaskProfile("") }
                 )
                 profiles.forEach { profile ->
-                    AkDivider(Modifier.padding(start = AgentSpacing.space4))
                     AkListItem(
                         icon = null,
                         title = profile.name,
@@ -219,7 +222,6 @@ fun SettingsScreen(
                     },
                     onClick = { onNavigate(AppDest.APPEARANCE) }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.Notifications,
                     title = "回答完成提醒",
@@ -250,7 +252,6 @@ fun SettingsScreen(
                         )
                     }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.AccountTree,
                     title = "先计划后执行",
@@ -266,7 +267,6 @@ fun SettingsScreen(
                         )
                     }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 // —— W-RT3：审批档位 ————————————————
                 //
                 // 三档单选，样式沿用「推理参数 › 资源档位」那一组（RadioButton + 两行文字），
@@ -340,7 +340,6 @@ fun SettingsScreen(
                 description = "每轮请求都会带上这些工具的定义。用不到的取消勾选，就别再为它付 token"
             ) {
                 shownRows.forEachIndexed { i, row ->
-                    if (i > 0) AkDivider(Modifier.padding(start = AgentSpacing.space4))
                     AkListItem(
                         icon = null,
                         title = row.name,
@@ -368,7 +367,6 @@ fun SettingsScreen(
                     )
                 }
                 if (inactiveRows.isNotEmpty()) {
-                    if (shownRows.isNotEmpty()) AkDivider(Modifier.padding(start = AgentSpacing.space4))
                     AkListItem(
                         icon = null,
                         title = if (showAllGroups) "收起未启用的 ${inactiveRows.size} 个组"
@@ -415,7 +413,6 @@ fun SettingsScreen(
                         )
                     }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 // 权限中心：无障碍、通知、使用情况，以及 Shizuku / 无线调试两条调试通道
                 AkListItem(
                     icon = Icons.Outlined.Shield,
@@ -423,7 +420,6 @@ fun SettingsScreen(
                     description = "无障碍、通知、使用情况与调试通道（Shizuku / 无线调试）",
                     onClick = { onNavigate(AppDest.PERMISSIONS) }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 // 存活自检：给没有电脑、拉不了 adb 的用户一个自测入口。
                 // 判据写在通知里——锁屏回来数字还在涨就是没被冻结。
                 AkListItem(
@@ -452,49 +448,42 @@ fun SettingsScreen(
                     description = "接口地址、API Key、模型名与系统提示词",
                     onClick = { onNavigate(AppDest.MODEL) }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.Apps,
                     title = "容器",
                     description = "Termux 容器会话与命令执行状态",
                     onClick = { onNavigate(AppDest.CONTAINER) }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.Edit,
                     title = "编辑器",
                     description = "查看与修改工作区内的代码文件",
                     onClick = { onNavigate(AppDest.EDITOR) }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.AutoAwesome,
                     title = "提示词库",
                     description = "输入栏闪电按钮唤起的快捷指令，可新建与编辑",
                     onClick = { onNavigate(AppDest.PROMPTS) }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.Bookmark,
                     title = "收藏",
                     description = "对话里收藏的消息；删会话也不丢",
                     onClick = { onNavigate(AppDest.BOOKMARKS) }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.Extension,
                     title = "MCP",
                     description = "管理外部 MCP 服务器与工具接入",
                     onClick = { onNavigate(AppDest.MCP) }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.Image,
                     title = "创作工坊",
                     description = "生图、视频等多模态创作与结果管理",
                     onClick = { onNavigate(AppDest.MEDIA) }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.Build,
                     title = "构建",
@@ -517,28 +506,24 @@ fun SettingsScreen(
                     description = "启停、导入与信任等级",
                     onClick = { onNavigate(AppDest.SKILLS) }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.Description,
                     title = "运行日志",
                     description = "LLM 请求、工具调用与错误记录",
                     onClick = { onNavigate(AppDest.LOGS) }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.Folder,
                     title = "记忆库",
                     description = "跨会话长期记忆",
                     onClick = { onNavigate(AppDest.MEMORY) }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.Save,
                     title = "导出备份",
                     description = "选择保存位置，生成 ZIP（含会话、记忆与模型配置）",
                     onClick = { exportLauncher.launch("beichen-backup.zip") }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.Folder,
                     title = "恢复备份",
@@ -567,7 +552,6 @@ fun SettingsScreen(
                         onNavigate(AppDest.CHAT)
                     }
                 )
-                AkDivider(Modifier.padding(start = AgentSpacing.space4))
                 AkListItem(
                     icon = Icons.Outlined.Info,
                     title = "关于与帮助",
@@ -608,51 +592,52 @@ private fun ModelHeroCard(vm: SettingsScreenContract, onNavigate: (AppDest) -> U
     val profileName = active?.name?.takeIf { it.isNotBlank() }
     val modelName = active?.config?.model?.takeIf { it.isNotBlank() } ?: profileName
 
-    Surface(
-        shape = RoundedCornerShape(22.dp),
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
-        border = BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-        ),
-        modifier = Modifier.fillMaxWidth()
+    // v5：这里原本是整页唯一的「英雄卡」——22dp 圆角 + primaryContainer 底色 + 全宽实心按钮。
+    // 结果是整页最重的一块留给了「你现在用的是什么」，可它其实只是一条信息。
+    // 编辑式的做法相反：一个 11sp 标签、一个 19sp 的值、一条行动行，靠字号差距立住重心，
+    // 页面因此只有一处「大」（30sp 的页标题），不会两块互相抢。
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = AgentSpacing.space5)
     ) {
-        Column(Modifier.padding(20.dp)) {
+        Text(
+            text = "当前模型",
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                letterSpacing = 1.2.sp
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = modelName ?: "还没配置模型",
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontSize = 19.sp,
+                lineHeight = 26.sp,
+                fontWeight = FontWeight.Medium
+            ),
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (modelName != null && profileName != null && profileName != modelName) {
+            Spacer(Modifier.height(2.dp))
             Text(
-                text = "当前模型",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontSize = 11.sp,
-                    letterSpacing = 1.sp,
-                    fontWeight = FontWeight.SemiBold
+                text = profileName,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 12.5.sp,
+                    lineHeight = 18.sp
                 ),
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-            )
-            Spacer(Modifier.height(AgentSpacing.space2))
-            Text(
-                text = modelName ?: "还没配置模型",
-                style = MaterialTheme.typography.titleLarge.copy(
-                    fontSize = 19.sp,
-                    fontWeight = FontWeight.Bold
-                ),
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (modelName != null && profileName != null && profileName != modelName) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = profileName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f)
-                )
-            }
-            Spacer(Modifier.height(AgentSpacing.space4))
-            AkPrimaryButton(
-                text = if (modelName == null) "去配置模型" else "更换模型",
-                modifier = Modifier.fillMaxWidth(),
-                onClick = { onNavigate(AppDest.MODEL) }
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+        Spacer(Modifier.height(AgentSpacing.space3))
+        AkActionLine(
+            text = if (modelName == null) "去配置模型" else "更换模型",
+            onClick = { onNavigate(AppDest.MODEL) }
+        )
     }
 }
 
@@ -796,7 +781,6 @@ private fun ResourceLeaseSection() {
         description = "本地模型、终端与容器会话的占用；空闲超时的会被自动回收"
     ) {
         snapshots.forEachIndexed { index, lease ->
-            if (index > 0) AkDivider(Modifier.padding(start = AgentSpacing.space4))
             AkListItem(
                 icon = null,
                 title = lease.title,

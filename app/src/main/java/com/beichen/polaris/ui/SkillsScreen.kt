@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,11 +20,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Security
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -40,6 +43,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -97,19 +101,21 @@ fun SkillsScreen(
                 ),
             verticalArrangement = Arrangement.spacedBy(AgentSpacing.space4)
         ) {
-            // —— W-48：插件市场入口。v4 收成一行：入口是「去别处」，不该占首屏一张卡 ——
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface
-            ) {
-                AkListItem(
-                    icon = Icons.Outlined.Public,
-                    title = "插件市场",
-                    description = "浏览可安装的插件，支持版本更新；安装链路与本页一致",
-                    onClick = onOpenMarket
-                )
-            }
+            // —— W-48：插件市场入口。v5 彻底去掉那张白卡：入口是「去别处」，
+            // 一张带阴影的白卡会把它读成「本页的第一块内容」。一行 + 箭头才是入口。
+            AkLine(
+                title = "插件市场",
+                meta = "浏览可安装的插件，支持版本更新；安装链路与本页一致",
+                onClick = onOpenMarket,
+                trailing = {
+                    Icon(
+                        imageVector = Icons.Outlined.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            )
 
             // —— 安全策略：先讲规则再列技能，用户才知道徽章与按钮在说什么 ——
             AkSectionCard(
@@ -247,22 +253,21 @@ private fun SkillCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            // 摘要徽章：形态 + 脚本执行（中性底，权限状态由文字承载，不提前渲染成风险色）
-            Row(horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
-                AkBadge(
-                    text = if (skill.isScript) "形态：脚本" else "形态：提示词",
-                    container = ak.surface2,
-                    content = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                AkBadge(
-                    text = if (skill.allowScript) "脚本执行：允许" else "脚本执行：禁止",
-                    container = ak.surface2,
-                    content = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            // v5：三行摘要（两个灰药丸 + 一行「能力上限」）压成一行。
+            // 它们本来就是同一件事的三个属性，拆成三个控件只是让页面显得"有很多信息"。
             Text(
-                text = "能力上限：${capabilityLabel(skill.maxCapability)}",
-                style = MaterialTheme.typography.bodySmall,
+                text = buildString {
+                    append(if (skill.isScript) "脚本" else "提示词")
+                    append("  ·  ")
+                    append(if (skill.allowScript) "允许执行脚本" else "禁止执行脚本")
+                    append("  ·  上限 ")
+                    append(capabilityLabel(skill.maxCapability))
+                },
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                    letterSpacing = 0.1.sp
+                ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 

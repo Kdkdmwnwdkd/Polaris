@@ -172,16 +172,20 @@ fun LogsScreen(vm: LogsContract) {
         Spacer(Modifier.height(AgentSpacing.space3))
 
         // —— 操作行：导出（复制到剪贴板）/ 清空（二次确认）——
+        //
+        // v5：三个描边按钮（导出 / 诊断包 / 清空）原来占满一整行 100dp，
+        // 是这一页最重的元素，可它们全是低频维护动作。改成一行纯文字动作：
+        // 低频操作不该有按钮的体量，需要它的人仍然一眼看得见。
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = AgentSpacing.space5),
-            horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)
+                .padding(horizontal = AgentSpacing.space4),
+            horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space4),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            AkOutlinedButton(
-                text = "导出",
-                icon = Icons.Outlined.ContentCopy,
-                modifier = Modifier.weight(1f),
+            AkTextButton(
+                text = "导出日志",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 onClick = {
                     val text = vm.exportLogs()
                     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -189,10 +193,9 @@ fun LogsScreen(vm: LogsContract) {
                     exportHint = "已复制 ${logs.size} 条日志到剪贴板"
                 }
             )
-            AkOutlinedButton(
+            AkTextButton(
                 text = "诊断包",
-                icon = Icons.Outlined.Share,
-                modifier = Modifier.weight(1f),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 onClick = {
                     // R10：诊断文本 + 回合事件流一起发。没有回合日志时只有文本，
                     // 回执里不再谎称「含事件」——用户能据此判断这次有没有可用证据。
@@ -209,11 +212,11 @@ fun LogsScreen(vm: LogsContract) {
                     }
                 }
             )
-            AkOutlinedButton(
+            Spacer(Modifier.weight(1f))
+            AkTextButton(
                 text = "清空",
-                icon = Icons.Outlined.Delete,
-                modifier = Modifier.weight(1f),
-                onClick = { showClear = true }
+                onClick = { showClear = true },
+                tint = MaterialTheme.colorScheme.error
             )
         }
 
@@ -455,6 +458,9 @@ private fun LogRow(
     onClick: () -> Unit
 ) {
     val color = levelColor(entry.level)
+    // v5：只有 WARN / ERROR 上色。INFO 占日志的九成，若全部染成信息蓝，
+    // 整页就一直在「高亮」，告警反而跳不出来。安静是这一步的目的。
+    val alert = entry.level == "ERROR" || entry.level == "WARN"
     AkPressSurface(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp)
@@ -474,10 +480,11 @@ private fun LogRow(
             // 左缘级别色条：与级别文字同色双编码，色盲可读（UX v1 §5.3）
             Box(
                 Modifier
-                    .width(3.dp)
+                    .width(2.dp)
                     .fillMaxHeight()
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(color)
+                    .background(
+                        if (alert) color else MaterialTheme.colorScheme.outline
+                    )
             )
             Spacer(Modifier.width(AgentSpacing.space3))
             Column(Modifier.weight(1f)) {
@@ -494,7 +501,7 @@ private fun LogRow(
                         Text(
                             text = entry.level,
                             style = machineSmall.copy(fontWeight = FontWeight.SemiBold),
-                            color = color
+                            color = if (alert) color else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.width(AgentSpacing.space2))
                     }

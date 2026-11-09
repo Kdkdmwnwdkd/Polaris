@@ -11,11 +11,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Accessibility
 import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Refresh
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.outlined.Terminal
 import com.beichen.polaris.automation.shizuku.ShizukuShell
 import com.beichen.polaris.ui.contract.PermissionStatusContract
 import rikka.shizuku.Shizuku
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,6 +38,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.beichen.polaris.core.capability.CapabilityResolution
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -189,18 +193,30 @@ fun PermissionsScreen(vm: PermissionStatusContract, onStartGuide: () -> Unit = {
                     top = AgentSpacing.space3,
                     bottom = AgentSpacing.space8
                 ),
-            verticalArrangement = Arrangement.spacedBy(AgentSpacing.space4)
+            // v5：间距交给各块自己的顶部留白（26dp），不再额外叠一层 spacedBy
+            verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
             // —— 引导入口（P0，2026-10-21）：本页是排查页，第一次上手走引导页 ——
             // 不因为「全部已授权」就隐藏：换机、重装、系统升级掉权限后还要能从这里再走一遍。
-            AkSectionCard(
-                title = "权限引导",
-                icon = Icons.Outlined.Shield,
-                description = "逐项走一遍五项能力：每项都说明「开启后能多做什么 / 不开会缺什么」，" +
-                    "点按钮跳到系统设置，回来自动复检。"
-            ) {
-                AkOutlinedButton(text = "开始引导", onClick = onStartGuide)
-            }
+            //
+            // v5：原来这块是「小标题 + 三行说明 + 描边按钮」，占掉首屏 110dp，把真正要看的
+            // 权限清单挤到折叠线以下。它的全部内容是「去另一页」这一件事——一行就够。
+            AkSectionLabel(text = "权限引导", gap = 26)
+            AkLine(
+                title = "逐项走一遍五项能力",
+                meta = "每项都说清「开启后能多做什么」，点开跳系统设置，回来自动复检",
+                dense = true,
+                showDivider = false,
+                onClick = onStartGuide,
+                trailing = {
+                    Icon(
+                        imageVector = Icons.Outlined.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            )
 
             // —— 就绪度总览：与抽屉头部同一实现、同一措辞（§6.5.2）——
             AkSectionCard(title = "权限就绪度", icon = Icons.Outlined.Shield) {
@@ -322,30 +338,36 @@ private class GrantItem(
 @Composable
 private fun GrantRow(item: GrantItem) {
     val ak = LocalAkColors
+    // v5：去掉 40dp 图标底座和「已授权」绿色药丸。
+    // 一列五个圆角方块会把页面读成「图标列表」，而这五行的差别只在授权状态；
+    // 状态交给一个字＋一个点，图标降到 18dp 当行首记号。
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 72.dp)
+            .heightIn(min = 64.dp)
             .padding(
                 horizontal = AgentSpacing.space4,
                 vertical = AgentSpacing.space3
             ),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        AkIconBase(
-            icon = item.icon,
-            tint = if (item.granted) ak.success else MaterialTheme.colorScheme.onSurfaceVariant
+        Icon(
+            imageVector = item.icon,
+            contentDescription = null,
+            tint = if (item.granted) ak.success
+            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            modifier = Modifier.size(18.dp)
         )
         Spacer(Modifier.width(AgentSpacing.space3))
         Column(Modifier.weight(1f)) {
             Text(
                 text = item.title,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 22.sp),
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
                 text = if (item.granted) item.grantedHint else item.missingHint,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 18.sp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
@@ -353,12 +375,15 @@ private fun GrantRow(item: GrantItem) {
         }
         Spacer(Modifier.width(AgentSpacing.space2))
         if (item.granted) {
-            AkBadge(
-                text = "已授权",
-                container = ak.successContainer,
-                content = ak.onSuccessContainer,
-                dotColor = ak.success
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AkStatusDot(ak.success, 5.dp)
+                Spacer(Modifier.width(AgentSpacing.space1))
+                Text(
+                    text = "已授权",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                    color = ak.onSuccessContainer
+                )
+            }
         } else {
             AkTextButton(text = item.actionText, onClick = item.onOpen)
         }

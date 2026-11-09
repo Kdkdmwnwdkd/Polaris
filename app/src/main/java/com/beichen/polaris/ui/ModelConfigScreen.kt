@@ -93,6 +93,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.PaddingValues
@@ -171,7 +172,18 @@ fun ModelConfigScreen(vm: ModelConfigContract, onBack: () -> Unit) {
     }
 
     Column(Modifier.fillMaxWidth()) {
-        PageTopBar(title = AppDest.MODEL.title)
+        PageTopBar(title = AppDest.MODEL.title, largeTitle = false)
+        // v5：页面大标题。副标题直接报「当前在用的是什么」——这一页最容易犯的错是
+        // 改完没保存，所以标题下面永远显示已生效的组合，而不是编辑器里的草稿值。
+        AkDisplayTitle(
+            title = "模型",
+            subtitle = buildString {
+                append(providerId.ifBlank { "未选择供应商" })
+                append(" · ")
+                append(model.ifBlank { "未选择模型" })
+            },
+            modifier = Modifier.padding(horizontal = AgentSpacing.space5)
+        )
         // 切换档案会静默丢弃未保存编辑（编辑器随 config 重置）——档案是顶层上下文，
         // 切走即换编辑对象，与「保存后才生效」的语义一致，不另做挽留弹窗
         ProfileSwitcher(
@@ -486,50 +498,46 @@ private fun ProfileSwitcher(
                 selected = profile.id == activeId,
                 onClick = { onSelect(profile.id) }
             )
-            Spacer(Modifier.width(AgentSpacing.space2))
+            Spacer(Modifier.width(AgentSpacing.space5))
         }
         AddProfileChip(onClick = onAdd)
     }
 }
 
-/** 「＋」chip：按 [AkChip] 视觉自绘（32dp 高 / radius full / surface-1 底 / 按压 surface-2 + scale 0.97）。 */
+/**
+ * 「＋ 新增」：v5 起与 [AkChip] 同语汇——纯文字 + 一个加号，没有胶囊底。
+ *
+ * 旧版是一个灰底药丸，和旁边的档案 chip 并排时，视觉上像是「另一种控件」；
+ * 其实它们做的是同一件事：切换/新建档案。同一类动作应该长成同一个样子。
+ */
 @Composable
 private fun AddProfileChip(onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.97f else 1f,
-        animationSpec = AkMotionPress
-    )
-    val bg by animateColorAsState(
-        targetValue = if (pressed) LocalAkColors.surface2 else LocalAkColors.surface1,
-        animationSpec = AkMotionFastColor
-    )
     Row(
         Modifier
-            .heightIn(min = 32.dp)
-            .scale(scale)
-            .clip(CircleShape)
-            .background(bg)
+            .heightIn(min = 34.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .then(if (pressed) Modifier.background(LocalAkColors.surface2) else Modifier)
             .clickable(
                 interactionSource = interaction,
                 indication = null,
                 onClick = onClick
             )
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 4.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = Icons.Outlined.Add,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(16.dp)
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(15.dp)
         )
         Spacer(Modifier.width(4.dp))
         Text(
             text = "新增",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
@@ -554,7 +562,7 @@ private fun ProviderSelector(selected: String, onSelect: (String) -> Unit) {
     val extra = if (current != null && current.group != ProviderGroup.COMMON) listOf(current) else emptyList()
 
     Column(verticalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space4)) {
             items(extra + common) { p ->
                 AkChip(
                     text = p.label,
@@ -872,7 +880,7 @@ private fun ModelTab(
             val popular = remember(providerId) { ProviderCatalog.popularModels(providerId) }
             if (popular.isNotEmpty()) {
                 Spacer(Modifier.height(AgentSpacing.space2))
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space4)) {
                     items(popular) { name ->
                         AkChip(
                             text = name,

@@ -68,6 +68,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -344,6 +345,9 @@ fun ChatScreen(
                 ?: AppDest.CHAT.title,
             actionIcon = Icons.Outlined.Add,
             actionDescription = "新对话",
+            // 会话名留在顶栏：30sp 的会话名会和下方的模型条、消息流抢版面，
+            // 而这一页的内容本身就是标题——不需要再给它一个标题。
+            largeTitle = false,
             // 当前会话已为空时禁用（§6.5.4）：再建也是空会话，无信息增量
             actionEnabled = messages.isNotEmpty(),
             onAction = { vm.newConversation() }
@@ -374,10 +378,9 @@ fun ChatScreen(
         ReadinessCard(
             vm = permission,
             onOpenContainer = onOpenContainer,
-            modifier = Modifier.padding(
-                horizontal = AgentSpacing.space4,
-                vertical = AgentSpacing.space2
-            )
+            // v5：横向边距交给 ReadinessCard 自己（20dp，与模型条同一条竖线）；
+            // 这里再给 16dp 会让两行的左边缘差 16dp，整块看起来是歪的。
+            modifier = Modifier.padding(vertical = AgentSpacing.space1)
         )
         if (messages.isEmpty() && streamDraft == null) {
             EmptyGuide(
@@ -838,36 +841,60 @@ private fun ModelIndicatorBar(
             .padding(horizontal = AgentSpacing.space5, vertical = AgentSpacing.space2),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        AkIconBase(icon = Icons.Outlined.AutoAwesome, selected = ready)
-        Spacer(Modifier.width(AgentSpacing.space3))
-        Column(Modifier.weight(1f)) {
-            Text(
-                text = if (ready) profileName ?: "默认配置" else "模型未配置",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = if (ready) MaterialTheme.colorScheme.onSurface
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = when {
-                    !ready -> "点此前往配置模型"
-                    modelName.isBlank() -> "未设置模型名"
-                    else -> "$modelName · $host"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
+        // v5：40dp 图标底座拿掉。这一条是页眉，不是入口卡片——
+        // 一个色块会把「你现在用哪个模型」变成「一个可点的小组件」，
+        // 而它真正的作用是让用户随时能确认这句话发给了谁。
         if (ready) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = profileName ?: "默认配置",
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = 15.sp,
+                        lineHeight = 21.sp
+                    ),
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = if (modelName.isBlank()) "未设置模型名" else "$modelName · $host",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             Icon(
                 imageVector = Icons.Outlined.ExpandMore,
                 contentDescription = "切换模型",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp)
+            )
+        } else {
+            // v5：未配置时不再写成上下两行（「模型未配置」+「点此前往配置模型」），
+            // 那读起来像一个说明段落。一句话说清状态和动作，后面跟一个箭头。
+            Text(
+                text = "模型未配置",
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp
+                ),
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = "去配置",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.width(2.dp))
+            Icon(
+                imageVector = Icons.Outlined.ArrowForward,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(15.dp)
             )
         }
     }
@@ -1776,7 +1803,9 @@ private fun ChatInputBar(
     runningNotice: String? = null
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        // v5：输入栏与页面同底色，只靠顶部 1dp 线与内容分开。
+        // 半透明 surface 会让它像一块「贴在页面上的板子」，而它应该只是页面的底部。
+        color = MaterialTheme.colorScheme.background,
         // P2：聚光灯引导的「输入栏」锚点（无 Provider 时是空操作）
         modifier = Modifier.guideAnchor(GuideAnchor.INPUT_BAR)
     ) {
@@ -1827,15 +1856,17 @@ private fun ChatInputBar(
                 // （与 ＋ 同形制：输入栏不放两个异形按钮，视觉噪声翻倍）
                 PromptButton(enabled = !running, onClick = onOpenPrompts)
                 Spacer(Modifier.width(AgentSpacing.space2))
-                // 输入框：surface-var 底 radius 20dp，最小高 48dp，多行自增（max 120dp 内滚动）
+                // v5：输入框不再是一个灰底胶囊，而是「一条可以在上面写字的空白」。
+                //
+                // 旧版给输入区铺了 surfaceVariant 底 + 20dp 圆角，整屏最显眼的元素是输入框——
+                // 可它其实是「你还没说出口的话」，不该比已经说出口的内容更重。
+                // 现在只剩 placeholder 与光标，编辑式排版里这是最自然的一行。
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = AgentDimens.touchTarget, max = 120.dp)
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
                         .padding(
-                            horizontal = AgentSpacing.space4,
+                            horizontal = 2.dp,
                             vertical = AgentSpacing.space2
                         ),
                     contentAlignment = Alignment.CenterStart
@@ -1858,7 +1889,7 @@ private fun ChatInputBar(
                                     Text(
                                         text = "说点什么…",
                                         style = MaterialTheme.typography.bodyLarge,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
                                     )
                                 }
                                 inner()
@@ -2077,7 +2108,7 @@ private fun PromptButton(enabled: Boolean, onClick: () -> Unit) {
             .size(AgentDimens.touchTarget)
             .scale(scale)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(if (pressed) LocalAkColors.surface2 else Color.Transparent)
             .clickable(
                 interactionSource = interaction,
                 indication = null,
@@ -2110,7 +2141,7 @@ private fun AttachImageButton(enabled: Boolean, onClick: () -> Unit) {
             .size(AgentDimens.touchTarget)
             .scale(scale)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(if (pressed) LocalAkColors.surface2 else Color.Transparent)
             .clickable(
                 interactionSource = interaction,
                 indication = null,

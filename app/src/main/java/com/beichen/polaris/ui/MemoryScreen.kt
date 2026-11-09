@@ -90,6 +90,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -190,6 +191,19 @@ fun MemoryScreen(vm: MemoryBankContract) {
                             }
                         )
                     }
+                    // v5：原来右侧挂着两个实心圆 FAB（红 + 蓝），是整页最重的两块颜色。
+                    // 「记一条」「清空」都是低频动作，收成同一行的文字按钮：需要时看得见，
+                    // 不需要时不占版面。红色的圆留给真正危险且高频的动作，这里不是。
+                    Spacer(Modifier.weight(1f))
+                    AkTextButton(
+                        text = "记一条",
+                        onClick = { showAdd = true }
+                    )
+                    AkTextButton(
+                        text = "清空",
+                        tint = MaterialTheme.colorScheme.error,
+                        onClick = { showClear = true }
+                    )
                 }
 
                 if (memories.isEmpty()) {
@@ -198,7 +212,7 @@ fun MemoryScreen(vm: MemoryBankContract) {
                             icon = Icons.Outlined.Storage,
                             title = if (query.isBlank()) "暂无记忆" else "没有匹配的记忆",
                             description = if (query.isBlank()) {
-                                "Agent 每次成功回答会自动沉淀一条事件记忆；偏好和关键信息也可以点右侧「+」手动记录。"
+                                "Agent 每次成功回答会自动沉淀一条事件记忆；偏好和关键信息也可以点上方「记一条」手动记录。"
                             } else {
                                 "换个关键词试试，或点「全部」查看全部。"
                             }
@@ -246,28 +260,6 @@ fun MemoryScreen(vm: MemoryBankContract) {
                 }
             }
 
-            // —— 右侧竖排 FAB（参照 OPeritAI）：primary 新增 / error 清空 ——
-            Column(
-                Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = AgentSpacing.space4),
-                verticalArrangement = Arrangement.spacedBy(AgentSpacing.space3)
-            ) {
-                MemoryFab(
-                    icon = Icons.Outlined.Add,
-                    description = "手动记一条",
-                    container = MaterialTheme.colorScheme.primary,
-                    content = MaterialTheme.colorScheme.onPrimary,
-                    onClick = { showAdd = true }
-                )
-                MemoryFab(
-                    icon = Icons.Outlined.Delete,
-                    description = "清空记忆",
-                    container = MaterialTheme.colorScheme.error,
-                    content = MaterialTheme.colorScheme.onError,
-                    onClick = { showClear = true }
-                )
-            }
         }
     }
 
@@ -348,24 +340,25 @@ private fun MemorySearchRow(
     onReset: () -> Unit
 ) {
     val ak = LocalAkColors
-    Row(
+    // v5：搜索框不再是灰底胶囊，而是页面上一条可以写字的横线。
+    // 原来那块 surfaceVariant 圆角是整页最显眼的形状，可搜索只是这一页的辅助动作。
+    Column(
         Modifier
             .fillMaxWidth()
             .padding(
                 start = AgentSpacing.space5,
                 end = AgentSpacing.space5,
-                top = AgentSpacing.space2,
-                bottom = AgentSpacing.space2
-            ),
+                top = AgentSpacing.space2
+            )
+    ) {
+    Row(
+        Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(
             Modifier
                 .weight(1f)
-                .heightIn(min = AgentDimens.touchTarget)
-                .clip(RoundedCornerShape(14.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(horizontal = AgentSpacing.space2),
+                .heightIn(min = 44.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             AkCircleIconButton(
@@ -408,12 +401,19 @@ private fun MemorySearchRow(
             }
         }
         Spacer(Modifier.width(AgentSpacing.space2))
-        // 计数徽章（OPeritAI 右上「0/1」同款语义）：这里是「当前结果集共 N 条」
-        AkBadge(
-            text = "$resultCount 条记忆",
-            container = ak.surface2,
-            content = MaterialTheme.colorScheme.onSurfaceVariant
+        // 计数（OPeritAI 右上「0/1」同款语义）：这里是「当前结果集共 N 条」。
+        // v5：去掉了灰底药丸——一个数字不需要一个容器。
+        Text(
+            text = "$resultCount 条",
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = 11.5.sp,
+                lineHeight = 16.sp
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+        Spacer(Modifier.height(4.dp))
+        AkHairline()
     }
 }
 

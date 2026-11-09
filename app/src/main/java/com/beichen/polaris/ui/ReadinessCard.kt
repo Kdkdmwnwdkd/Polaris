@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.beichen.polaris.core.container.RootfsManager
 import com.beichen.polaris.ui.contract.PermissionReadout
@@ -92,34 +93,33 @@ fun ReadinessCard(
     val missing = items.count { !it.done }
     if (missing == 0) return
 
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-    ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+    // v5：浅色圆角块 → 一行 + 一条细线。它是一条「提示」，不是一张卡片；
+    // 给它容器边界，就等于告诉用户「这里有一块新东西要处理」，而它其实只是
+    // 一句「还差几项」。收起来时占一行，展开时是几行清单，两种状态都不需要边框。
+    Column(modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = AgentSpacing.space5)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { expanded = !expanded },
+                    .clickable { expanded = !expanded }
+                    .padding(vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "还差 $missing 项，就能全自动",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = if (expanded) "点一下去开启；也可以先不管，聊天不受影响" else "点开看是哪几项",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                // v5：删掉了底下那行「点开看是哪几项」。标题已经把事说完了，
+                // 再解释一遍「点开能看到什么」是替用户念了一遍自己的动作。
+                Text(
+                    text = "还差 $missing 项，就能全自动",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontSize = 14.5.sp,
+                        lineHeight = 21.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
                 Text(
                     text = if (expanded) "收起" else "展开",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
@@ -163,6 +163,7 @@ fun ReadinessCard(
                     Spacer(Modifier.height(2.dp))
                 }
             }
+            AkHairline()
         }
     }
 }
