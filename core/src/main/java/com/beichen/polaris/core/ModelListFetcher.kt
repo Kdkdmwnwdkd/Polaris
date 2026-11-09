@@ -1,6 +1,7 @@
 package com.beichen.polaris.core
 
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.net.EndpointPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -52,6 +53,11 @@ class ModelListFetcher(
             // 防御性清洗：与三家 Client 同一套 ConfigSanitizer，避免带着 \u00A0 等不可见字符发请求
             val base = ConfigSanitizer.normalizeBaseUrl(baseUrl).trimEnd('/')
             val key = ConfigSanitizer.cleanApiKey(apiKey)
+            // 与真正发对话请求同一把尺子：公网明文 + 带 Key 一律不发（审计 F6）。
+            // 这一步在「选择模型」弹窗里就会红，比等到用户发第一条消息更早暴露。
+            EndpointPolicy.refusalFor(base, key.isNotBlank())?.let { reason ->
+                throw IOException(reason)
+            }
             val request = buildRequest(base, key, providerId)
             val resp = try {
                 http.newCall(request).execute()
