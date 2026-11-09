@@ -67,8 +67,12 @@ echo "== 三、崩溃未读：控制台红点（hasUnseen） =="
 has "控制台入口前问了崩溃目录" "$SCAFFOLD" "CrashLogger.hasUnseen(ctx)"
 has "结果传给了 ConsoleScreen" "$SCAFFOLD" "ConsoleScreen(vm, unreadErrors, hasUnreadCrash, onNavigate)"
 has "ConsoleScreen 接收该参数" "$CONSOLE" "hasUnreadCrash: Boolean = false"
-has "没有 ERROR 但有崩溃时退化成红点" "$CONSOLE" "} else if (hasUnreadCrash) {"
-has "数字仍然优先（有 ERROR 时报条数）" "$CONSOLE" "if (unreadErrors > 0) {"
+# v5 排版重写后这两条改的是**匹配串**，不是判定口径：控制台的日志入口从「一张卡片
+# 里挂角标」变成了「行 + 行尾记号」，原来那套 `when { unreadErrors > 0 -> ... } else if
+# (hasUnreadCrash)` 的写法没了，变成两个独立表达式。锁的东西没变，而且更严——
+# 红点条件里显式写了 `unreadErrors == 0`，「有 ERROR 时不许退化成点」现在是它的一部分。
+has "没有 ERROR 但有崩溃时退化成红点" "$CONSOLE" "unreadErrors == 0 && hasUnreadCrash"
+has "数字仍然优先（有 ERROR 时报条数）" "$CONSOLE" 'value = if (unreadErrors > 0) "$unreadErrors 条"'
 has "读盘失败当没有（不吓人）" "$SCAFFOLD" "runCatching { CrashLogger.hasUnseen(ctx) }.getOrDefault(false)"
 
 echo "== 四、崩溃未读：单条已读（markSeen） =="
