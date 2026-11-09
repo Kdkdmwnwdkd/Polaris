@@ -162,6 +162,10 @@ class ShellRunTool(
      */
     override fun needsApprovalFor(args: JsonObject): Boolean {
         val command = args["command"]?.primOrNull()?.contentOrNull.orEmpty()
+        // 审计 F1：只读白名单是给「应用自身 uid」定的。`identity=shizuku` 走 uid 2000，
+        // 同一条 `ls`/`cat` 能看到的范围完全不同——提权这件事本身就必须过一次人。
+        val identity = args["identity"]?.primOrNull()?.contentOrNull?.trim()
+        if (!identity.isNullOrEmpty() && identity != "user") return true
         return ShellCommandRules.needsApproval(command)
     }
 

@@ -160,4 +160,89 @@ object ShellCommandRules {
             else -> false
         }
     }
+
+    /* ------------------------------------------------------------------ */
+    /* 记忆粒度：这条命令允许被「本次会话不再询问」记住吗？                    */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * 审计 F2：`isDestructive` 只认首词，因此「不可记忆」档能被一层壳绕过——
+     * `busybox rm -rf`、`env rm`、`nohup rm`、`$(rm -rf …)` 的首词全都无害，
+     * 于是它们落回可记忆的 `shell` 键：用户为 `npm install` 勾一次「不再询问」，
+     * 之后这些命令全部静默执行。
+     *
+     * 本函数回答的是**另一个问题**：「这条命令本身能不能被记住」，与「它是不是不可逆」
+     * 分开判。分开的理由：`echo x > out.txt` 是写文件、但不是不可逆（不该标红吓人），
+     * 然而它同样不该被一次 `npm install` 的授权顺带放行。
+     *
+     * 判据（任一命中即不可记忆）：
+     *  - 不可逆（[isDestructive]）；
+     *  - 含命令替换 / 反引号 / here-string：外壳里能塞任意命令；
+     *  - 含重定向（`>`、`<`）：写文件或读任意文件；
+     *  - 任一段的首词是包装器（[WRAPPERS]）或解释器（[INTERPRETERS]）；
+     *  - 任一段既不在只读白名单、也不在可记忆白名单（[MEMORIZABLE_HEADS]）。
+     *
+     * 也就是说：**可记忆的是闭集**。需要放行的日常命令请往白名单里加，
+     * 而不是把判定放宽成「首词不认识就当安全」。
+     */
+    fun isMemorizable(command: String): Boolean {
+        val trimmed = command.trim()
+        if (trimmed.isEmpty()) return true          // 空命令由工具自己报错，不在这里拦
+        if (isDestructive(trimmed)) return false
+        if (SUBSTITUTION.any { trimmed.contains(it) }) return false
+        if (trimmed.contains('>') || trimmed.contains('<')) return false
+        val parts = segments(trimmed)
+        return parts.isNotEmpty() && parts.all { isMemorizableSegment(it) }
+    }
+
+    /**
+     * 包装器：首词无害，真正的命令在后面。
+     *
+     * 不再逐个解包（`busybox sh -c "busybox rm -rf"` 这类嵌套解不干净），
+     * 直接判「不可记忆」——用户多确认一次的成本，低于误删一次相册。
+     */
+    private val WRAPPERS: Set<String> = setOf(
+        "busybox", "toybox", "env", "nohup", "setsid", "timeout", "stdbuf", "nice", "ionice",
+        "xargs", "parallel", "watch", "strace", "ltrace", "proot", "chroot", "doas", "pkexec",
+        "command", "exec", "eval", "source", ".",
+    )
+
+    /** 解释器：`python -c` / `node -e` / `sed -i` 都能在「首词安全」的外壳里做任何事。 */
+    private val INTERPRETERS: Set<String> = setOf(
+        "python", "python3", "node", "deno", "bun", "ruby", "perl", "php", "lua", "java",
+        "jshell", "rscript", "osascript", "awk", "gawk", "mawk", "sed",
+    )
+
+    /**
+     * 可以直接被记住的**构建/查询类**命令首词（闭集）。
+     *
+     * 选它们的标准：日常任务里重复出现、且单条命令的破坏半径有限（构建产物、依赖目录）。
+     * `cp` / `mv` / `tee` / `dd` 一律不在内——它们的破坏半径由参数决定，不由命令名决定。
+     */
+    private val MEMORIZABLE_HEADS: Set<String> = setOf(
+        "npm", "pnpm", "yarn", "pip", "pip3", "cargo", "go", "gradle", "gradlew", "mvn",
+        "make", "cmake", "ninja", "bazel", "uv", "poetry", "composer", "dotnet", "flutter",
+    )
+
+    /** `git` 只放行只读子命令；`git clean` / `reset --hard` 已由 [isDestructive] 先拦掉。 */
+    private val MEMORIZABLE_GIT_SUBCOMMANDS: Set<String> = setOf(
+        "status", "diff", "log", "show", "fetch", "branch", "remote", "rev-parse", "describe",
+    )
+
+    private fun isMemorizableSegment(segment: String): Boolean {
+        if ('&' in segment) return false
+        val words = segment.split(Regex("\\s+")).filter { it.isNotEmpty() }
+            .dropWhile { it.contains('=') && !it.startsWith("-") }   // 跳过 `FOO=1 cmd` 的前缀赋值
+        val head = words.firstOrNull()?.substringAfterLast('/') ?: return false
+        if (head in WRAPPERS || head in INTERPRETERS) return false
+        // 复用只读判定的细节：`tree -o` / `sort -o` / `uniq a b` 首词在只读白名单里，
+        // 但参数把结果写进了文件。直接 `return true` 会漏掉这一层。
+        if (head in READ_ONLY) return isReadOnly(segment)
+        if (head in MEMORIZABLE_HEADS) return true
+        if (head == "git") {
+            val sub = words.getOrNull(1)
+            return sub != null && sub in MEMORIZABLE_GIT_SUBCOMMANDS
+        }
+        return false
+    }
 }

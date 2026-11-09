@@ -339,8 +339,25 @@ class RegistryToolExecutor(
 
         // W-79：审批判定从「工具级布尔」细化到「参数级」——shell_run 的 `ls` 不该弹窗，
         // `rm -rf` 必须弹。默认实现仍返回 needsApproval，其余工具行为不变。
-        if (tool.needsApprovalFor(call.arguments) && approval != null) {
-            val approver = approval
+        if (tool.needsApprovalFor(call.arguments)) {
+            // 审计 F4：审批通道缺失时**拒绝**，不是放行。
+            //
+            // 修前是 `tool.needsApprovalFor(...) && approval != null`——「忘记注入 approval」
+            // 与「该工具免审」在行为上完全等价。今天三个构造点都传了值，所以没有可触发的
+            // 漏洞；但这是安全闸门，缺省方向必须是关：宁可让一次调用失败并说明原因，
+            // 也不要让它在没有用户确认的情况下真的执行了。
+            val approver = approval ?: return ToolCallOutcome.Completed(
+                toolMessageOf(
+                    call,
+                    ToolResult.fail(
+                        code = "no_approver",
+                        message = "该操作需要用户确认，但当前执行通道没有审批能力，已拒绝执行（${call.name}）。",
+                        hint = "不要重复发起相同调用；请回到主对话中直接调用该工具，由用户确认后再执行。"
+                    )
+                ),
+                emptyList(),
+                code = "no_approver"
+            )
             val allowed = try {
                 approver(tool, call.arguments)
             } catch (cancel: CancellationException) {

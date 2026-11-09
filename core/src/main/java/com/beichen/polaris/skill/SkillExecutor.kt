@@ -486,8 +486,11 @@ class SkillExecutor(
     /**
      * R7：脚本专用的工具执行器。
      *
-     * - `approval = null`：脚本不得代弹审批。需确认的工具在 [SkillRuntimeBridge]
-     *   第三道门就已被拒绝（按参数级判据），执行器这一层不需要再问。
+     * - `approval = { _, _ -> false }`：脚本不得代弹审批，也**不允许静默放行**。
+     *   需确认的工具在 [SkillRuntimeBridge] 第三道门就已被拒绝（按参数级判据）；
+     *   这里给执行器一个「永不批准」的策略作为第二道网——审计 F4 之前传的是 null，
+     *   而执行器把 null 解释成「不需要审批」，两层保护实际上只剩一层。
+     *   现在即使第三道门被改坏，执行器也会把危险调用拒成 `approval_denied`。
      * - `beforeEffect`：**在这里**写 DISP，而不是在脚本侧写。
      *   执行器的时序是「熔断判定 → 审批 → 写 DISP → 真正执行」——
      *   被熔断或被审批拒绝的调用**没有越过执行边界**，就不该留下 DISP。
@@ -506,7 +509,7 @@ class SkillExecutor(
     ): ToolExecutor = RegistryToolExecutor(
         registry = registry,
         failureGuard = failureGuard,
-        approval = null,
+        approval = { _, _ -> false },
         hooks = NoopHooks,
         beforeEffect = { call ->
             val step = scope?.currentStep?.get() ?: 0
