@@ -67,10 +67,21 @@ private fun waitUntil(timeoutMs: Long, cond: () -> Boolean): Boolean {
     return cond()
 }
 
-/** 落盘是异步去抖的：flush 后给调度器一点时间，再让断言读磁盘。 */
+/**
+ * 等落盘调度器真正跑完。
+ *
+ * `ConversationStore.flush()` **不是同步写**：它只是把 `flushNow()` 投进单线程
+ * `persistScheduler`（见该方法的 KDoc）。所以「flush 之后 sleep 多久」是经验值，不是判据——
+ * 原来固定 260ms，在 CI 慢机器上队列还没跑到，断言就开始读磁盘，于是 B5「删除会话」
+ * 会报「分片已删」失败。红的不是行为，是等待不够（2026-11-09 main 构建
+ * run 42654692470 即如此，同一份代码在负载低的轮次是绿的）。
+ *
+ * 现在用 [ConversationStore.awaitPersist]：往同一个单线程调度器投一个空任务，
+ * 它执行完时此前排队的写必然已完成。判定依据从「过了多久」变成「写完了没有」。
+ */
 private fun settle(s: ConversationStore) {
     s.flush()
-    Thread.sleep(260)
+    s.awaitPersist(2_000)
 }
 
 fun main() {

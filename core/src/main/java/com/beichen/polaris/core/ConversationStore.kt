@@ -1035,6 +1035,31 @@ class ConversationStore(file: File) {
     }
 
     /**
+     * 等调度器把**已排队的**写任务跑完（最多 [timeoutMs]）。
+     *
+     * 为什么需要它：`flush()` 只投递、不等待。任何「调完 flush 就断言磁盘状态」的代码，
+     * 都在赌调度器跑得够快——CI 慢机器上这个赌局会输。2026-11-09 main 构建就是这么红的：
+     * QA harness 在 flush 后固定 sleep 260ms 再断言「删除会话的分片已清掉」，
+     * 而队列还没跑到那一步，于是报失败；同一份代码在负载低的轮次是绿的。
+     * 那不是行为缺陷，是判据用错了变量（用了「等了多久」而不是「写完了没有」）。
+     *
+     * 做法：往同一个**单线程**调度器投一个空任务。FIFO 保证它执行时，
+     * 此前排队的 `flushNow` 必然已经跑完。
+     *
+     * 仅供诊断与 QA harness 使用：生产路径（App 切后台）仍然只调 [flush]，
+     * 不阻塞 UI 线程。
+     *
+     * @return true = 队列已静默；false = 超时（调度器被占用/已拒绝任务）
+     */
+    fun awaitPersist(timeoutMs: Long = 2_000): Boolean {
+        val done = java.util.concurrent.CountDownLatch(1)
+        runCatching { persistScheduler.execute { done.countDown() } }
+        return runCatching {
+            done.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }.getOrDefault(false)
+    }
+
+    /**
      * R-10：只把**脏会话**写成各自的分片；会话集合变了才顺带重写轻量 index。
      *
      * 与旧实现的三点差别：① 不再 `encodeToString(items)` 序列化全库；
