@@ -123,11 +123,18 @@ fun main() {
     }
 
     check("C8 审批键取值域封闭") {
+        // 闭集：新增审批归组必须在这里显式登记，防止随手写个字符串当键
+        // （那样弹窗文案会退化成裸工具名，且用户勾「不再询问」时范围不可预期）。
         val allowed = setOf(
             ToolCatalog.Approval.UI_ACTION, ToolCatalog.Approval.UI_SCREENSHOT,
             ToolCatalog.Approval.APP_MANAGE, ToolCatalog.Approval.FILE_WRITE,
             ToolCatalog.Approval.GIT_WRITE, ToolCatalog.Approval.GIT_READ,
             ToolCatalog.Approval.DEVICE_OUTPUT, ToolCatalog.Approval.SHELL,
+            // 2026-11-09 审计修复：`http_request` 纳入审批（F1），按域名记忆。
+            ToolCatalog.Approval.NETWORK,
+            // 下面两个只由 ApprovalScope 产出（不进目录），但同属审批键的取值域：
+            // 提权 shell（F1）与「首词安全但整体不可记忆」的 shell（F2）。
+            ToolCatalog.Approval.SHELL_ELEVATED, ToolCatalog.Approval.SHELL_UNMEMORIZABLE,
         )
         val bad = ToolCatalog.tools.mapNotNull { it.approval }.filter { it !in allowed }
         expect(bad.isEmpty(), "所有审批键都在 Approval 词表内", { bad.toString() })
