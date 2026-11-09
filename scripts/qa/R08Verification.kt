@@ -281,7 +281,9 @@ fun testElevatedAndNetwork() {
         val g = ApprovalScope.of("shell_run", shellArgs("ls -la /data/data/com.example", "shizuku"))
         expect(!g.memorizable) { "提权 shell 被判可记忆——审计 F1" }
         expect(g.key.startsWith(ApprovalGrouping.GROUP_SHELL_ELEVATED)) { "键前缀不对：${g.key}" }
-        expect(g.key.contains("shizuku")) { "键应带身份，便于区分 su / adb：${g.key}" }
+        expect(g.key.startsWith("${ApprovalGrouping.GROUP_SHELL_ELEVATED}:shizuku:")) {
+            "键应是「组:身份:命令」，实际：${g.key}"
+        }
         expect(!g.memoLabel.startsWith("本次会话不再询问")) { "文案在骗人：${g.memoLabel}" }
     }
 
@@ -318,7 +320,8 @@ fun testElevatedAndNetwork() {
         eq(a.key, b.key, "同域不同路径应共用一键")
         expect(a.key != c.key) { "跨域共用了同一个键——外泄链正是靠这一步" }
         expect(a.key.startsWith(ApprovalGrouping.GROUP_NETWORK)) { "键前缀不对：${a.key}" }
-        expect(a.key.contains("api.github.com") && c.key.contains("evil.example.com")) { "键里应带域名" }
+        eq(a.key, "${ApprovalGrouping.GROUP_NETWORK}:api.github.com", "同域键应带域名")
+        eq(c.key, "${ApprovalGrouping.GROUP_NETWORK}:evil.example.com", "跨域键应各自带域名")
     }
 
     check("E6 记住 A 域之后，发往 B 域仍要问") {
