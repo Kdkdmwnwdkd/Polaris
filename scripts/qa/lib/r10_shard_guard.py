@@ -119,8 +119,16 @@ check("A9", not missing, "全部 %d 个写方法都标记了脏会话（漏标�
 # ---------------------------------------------------------------- [A10-A12] 纪律
 check("A10", STORE.count("AtomicJsonFile.write(") >= 2 and "writeText(" not in STORE,
       "落盘统一走 AtomicJsonFile（分片 + index），未绕过原子写")
-check("A11", "SAFE_ID.matches(id)" in shard_file and "%02x" in shard_file,
-      "shardFile 对非法 id 做安全编码（路径穿越防护）")
+# W-RT9 把编码逻辑抽到了 safeStem（分片与归档共用一段，避免两边字符集走偏），
+# shardFile 只剩一行调用。断言跟着盯**语义**而不是盯字面：编码这段在谁身上都算数，
+# 前提是 shardFile 确实用了它。同一件事的行为断言是 B12（真造非法 id 看落盘文件名），
+# 那条一直是对的——文本断言红而行为绿，问题在断言不在代码。
+safe_stem = func(STORE, "safeStem", private_only=True) or ""
+check("A11",
+      ("SAFE_ID.matches(id)" in shard_file and "%02x" in shard_file) or
+      ("safeStem(id)" in shard_file and "SAFE_ID.matches(id)" in safe_stem and
+       "%02x" in safe_stem),
+      "分片文件名经安全编码（路径穿越防护）")
 check("A12", "bakFile" not in STORE and "tmpFile" not in STORE and "readTextOrEmpty" not in STORE,
       "整库时代的 bakFile/tmpFile/readTextOrEmpty 已清除")
 check("A13", "fun snapshot(): List<ConversationRecord>" in STORE and
