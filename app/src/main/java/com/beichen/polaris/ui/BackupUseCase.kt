@@ -5,6 +5,7 @@ import android.net.Uri
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.BackupArchive
 import com.beichen.polaris.core.BackupManifest
+import com.beichen.polaris.core.BackupRedaction
 import com.beichen.polaris.core.ConfigBackup
 import com.beichen.polaris.core.ConfigStore
 import com.beichen.polaris.core.ConversationRecord
@@ -55,6 +56,10 @@ sealed interface BackupUiState {
  *   仓库读写权；owner/repo/workflow 不带凭据也能省掉重填。
  * ② **恢复是破坏性的**：调用方必须先二次确认；本类内部还有 [BackupArchive.read] 的
  *   信封校验，坏包在触碰任何生产数据之前就被拒。
+ * ③ **导出不含 API Key**（审计 F6，2026-11-10）：与①同一个理由——包会被存到网盘、
+ *   发微信。做法见 [BackupRedaction]：档案 Key、敏感自定义头、媒体 Key、备用 Key 池
+ *   一律清空，恢复时按 id 沿用本机已填的值。代价是跨设备恢复要重填 Key，
+ *   导出结果文案会明确告知这一点。
  */
 internal class BackupUseCase(
     private val app: Application,
@@ -95,10 +100,11 @@ internal class BackupUseCase(
                 val promptItems = prompts.list()
                 val gh = config.loadGithubConfig()
                 val backup = ConfigBackup(
-                    profilesJson = json.encodeToString(config.loadProfiles()),
+                    // 审计 F6：密钥不进备份包，与 W-47 的 PAT 同一个理由（见类注释①②）
+                    profilesJson = BackupRedaction.redactProfiles(json.encodeToString(config.loadProfiles())),
                     activeProfileId = config.loadActiveId(),
                     favoriteModels = config.loadFavoriteModels(),
-                    mediaKeys = config.loadAllMediaKeys(),
+                    mediaKeys = BackupRedaction.redactMediaKeys(config.loadAllMediaKeys()),
                     githubOwner = gh?.owner,
                     githubRepo = gh?.repo,
                     // W-47：**不把 PAT 写进备份包**，理由见类注释①
@@ -121,13 +127,14 @@ internal class BackupUseCase(
                     json.encodeToString(mems),
                     json.encodeToString(backup),
                     json.encodeToString(promptItems),
-                    // W-26：备用 Key 池一并备份（否则恢复后全丢）
-                    keyPool.exportAll()
+                    // W-26：备用 Key 池一并备份（槽位与名字保留，Key 脱敏）
+                    BackupRedaction.redactKeyPool(keyPool.exportAll())
                 )
                 val out = app.contentResolver.openOutputStream(uri)
                     ?: error("无法写入所选位置（可能已被移除）")
                 out.use { it.write(bytes) }
-                "已导出 ${convs.size} 个会话、${mems.size} 条记忆、${promptItems.size} 条提示词"
+                "已导出 ${convs.size} 个会话、${mems.size} 条记忆、${promptItems.size} 条提示词" +
+                    "（API Key 不随备份导出，恢复后需重新填写）"
             }
             _state.value = result.fold(
                 onSuccess = { BackupUiState.Done(it) },
@@ -169,9 +176,11 @@ internal class BackupUseCase(
                             runCatching { json.decodeFromString<ConfigBackup>(cfgText) }
                                 .getOrNull()?.let { config.restoreFrom(it) }
                         }
-                        // W-26：老备份件没有 Key 池成员 → 保持现状
+                        // W-26：老备份件没有 Key 池成员 → 保持现状。
+                        // F6：新备份里 Key 是空的，按槽位 id 沿用本机已填的，避免恢复一次全丢。
                         read.keyPoolJson?.let { poolText ->
-                            val n = keyPool.importAll(poolText)
+                            val merged = BackupRedaction.mergeKeyPool(poolText, keyPool.exportAll())
+                            val n = keyPool.importAll(merged)
                             if (n > 0) AgentLogger.i("Backup", "已恢复 $n 个档案的备用 Key 池")
                         }
                         // hotfix28：老备份件没有提示词成员 → 跳过，不动现有提示词
