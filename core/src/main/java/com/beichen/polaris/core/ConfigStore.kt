@@ -261,8 +261,12 @@ class ConfigStore(context: Context) {
     fun restoreFrom(backup: ConfigBackup) {
         val profilesText = backup.profilesJson
         if (!profilesText.isNullOrBlank()) {
+            // F6：自本版起备份件不含 API Key（见 [BackupRedaction]）。合并规则与 PAT 一致——
+            // 包里有非空 Key（老版本导出的）照旧覆盖；包里是空值则沿用本机同 id 档案的 Key，
+            // 只更新地址/模型等结构性字段。跨设备恢复时 id 对不上，保持空，由用户重填。
+            val mergedText = BackupRedaction.mergeProfiles(profilesText, json.encodeToString(loadProfiles()))
             val profiles = runCatching {
-                json.decodeFromString<List<ModelProfile>>(profilesText)
+                json.decodeFromString<List<ModelProfile>>(mergedText)
             }.getOrNull()
             if (profiles != null) {
                 // activeId 缺失/失效时 saveProfiles 自动回退第一个档案（见其 KDoc）
@@ -270,7 +274,8 @@ class ConfigStore(context: Context) {
             }
         }
         saveFavoriteModels(backup.favoriteModels)
-        backup.mediaKeys.forEach { (providerId, key) ->
+        val mergedMediaKeys = BackupRedaction.mergeMediaKeys(backup.mediaKeys, loadAllMediaKeys())
+        mergedMediaKeys.forEach { (providerId, key) ->
             sp.edit().putString(KEY_MEDIA_KEY_PREFIX + providerId, key.trim()).apply()
         }
         val ghOwner = backup.githubOwner
