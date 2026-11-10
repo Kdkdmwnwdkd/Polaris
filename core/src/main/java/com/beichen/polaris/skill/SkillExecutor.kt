@@ -17,6 +17,7 @@ import com.beichen.polaris.core.agent.currentAgentScope
 import com.beichen.polaris.core.agent.journal.RunScope
 import com.beichen.polaris.core.agent.journal.ToolSettleStatus
 import com.beichen.polaris.core.time.Monotonic
+import com.beichen.polaris.core.llm.primOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -345,12 +346,32 @@ class SkillRuntimeBridge(
         // （[com.beichen.polaris.core.agent.ShellCommandRules]），不会出现两处口径不一。
         val target = registry.get(name)
         if (target?.needsApprovalFor(obj) == true) {
-            return ToolResult.fail(
-                code = "script_approval_denied",
-                message = "⛔ 工具 $name 需要用户逐次确认，脚本不能代为调用。" +
-                    "请在主对话中直接调用该工具（Agent 会弹出确认框）。",
-                hint = "回到主对话，由用户确认后再发起该工具调用。"
-            )
+            // W-54：唯一的例外是 manifest 里**事先声明过**的域名（[SkillNetGrant]）。
+            //
+            // 判据是纯函数，同一个函数也被传给了执行器的 approval（见 [buildToolExecutor]）——
+            // 两处口径必须一致，否则会出现「桥放行了、执行器又拒了」这种自相矛盾的结果。
+            when (
+                val verdict = SkillNetGrant.evaluate(
+                    toolName = name,
+                    url = obj["url"]?.primOrNull()?.contentOrNull,
+                    trust = skill.trust,
+                    netHosts = skill.net_hosts,
+                    skillName = skill.name,
+                )
+            ) {
+                is SkillNetGrant.Verdict.Granted -> Unit
+                is SkillNetGrant.Verdict.Denied -> return ToolResult.fail(
+                    code = "script_net_denied",
+                    message = "⛔ ${verdict.reason}",
+                    hint = verdict.hint
+                )
+                is SkillNetGrant.Verdict.NotNetwork -> return ToolResult.fail(
+                    code = "script_approval_denied",
+                    message = "⛔ 工具 $name 需要用户逐次确认，脚本不能代为调用。" +
+                        "请在主对话中直接调用该工具（Agent 会弹出确认框）。",
+                    hint = "回到主对话，由用户确认后再发起该工具调用。"
+                )
+            }
         }
         val call = ToolCall(nextCallId(name), name, obj)
         return runBlocking { executeWithJournal(call, obj) }
@@ -486,11 +507,15 @@ class SkillExecutor(
     /**
      * R7：脚本专用的工具执行器。
      *
-     * - `approval = { _, _ -> false }`：脚本不得代弹审批，也**不允许静默放行**。
-     *   需确认的工具在 [SkillRuntimeBridge] 第三道门就已被拒绝（按参数级判据）；
-     *   这里给执行器一个「永不批准」的策略作为第二道网——审计 F4 之前传的是 null，
+     * - `approval`：脚本不得代弹审批，也**不允许静默放行**。需确认的工具在
+     *   [SkillRuntimeBridge] 第三道门就已被拒绝（按参数级判据）；这里给执行器一个
+     *   「只批准 manifest 事先声明过的域名」的策略作为第二道网——审计 F4 之前传的是 null，
      *   而执行器把 null 解释成「不需要审批」，两层保护实际上只剩一层。
      *   现在即使第三道门被改坏，执行器也会把危险调用拒成 `approval_denied`。
+     *
+     *   W-54：这里**不是恒 false**，而是调 [SkillNetGrant]——与第三道门同一份纯函数。
+     *   只放行「技能声明过、且非公网明文」的 `http_request`，别的照旧拒。
+     *   两处若各写一套判据，必然漂移成「桥放了、执行器又拒」或反之。
      * - `beforeEffect`：**在这里**写 DISP，而不是在脚本侧写。
      *   执行器的时序是「熔断判定 → 审批 → 写 DISP → 真正执行」——
      *   被熔断或被审批拒绝的调用**没有越过执行边界**，就不该留下 DISP。
@@ -499,17 +524,27 @@ class SkillExecutor(
      *
      * @param scope 本次技能执行的域（日志句柄 + 作用域 + 步号）。
      * @param dispatchedStep 回调：DISP 写入时的步号，供 SETTLE 使用（两者必须同一步）。
+     * @param skill 本次执行的技能；null 时审批恒拒（harness / 无技能上下文的调用）。
      */
     internal fun buildToolExecutor(
         scope: AgentScope?,
         dispatchedStep: java.util.concurrent.atomic.AtomicInteger,
         failureGuard: FailureGuard = FailureGuard(),
         readOnlyBudgetMs: Long = DEFAULT_READ_ONLY_BUDGET_MS,
-        writeBudgetMs: Long = DEFAULT_WRITE_BUDGET_MS
+        writeBudgetMs: Long = DEFAULT_WRITE_BUDGET_MS,
+        skill: SkillManifest? = null
     ): ToolExecutor = RegistryToolExecutor(
         registry = registry,
         failureGuard = failureGuard,
-        approval = { _, _ -> false },
+        approval = { tool, args ->
+            skill != null && SkillNetGrant.allows(
+                toolName = tool.name,
+                url = args["url"]?.primOrNull()?.contentOrNull,
+                trust = skill.trust,
+                netHosts = skill.net_hosts,
+                skillName = skill.name,
+            )
+        },
         hooks = NoopHooks,
         beforeEffect = { call ->
             val step = scope?.currentStep?.get() ?: 0
@@ -539,7 +574,7 @@ class SkillExecutor(
             val dispatchedStep = java.util.concurrent.atomic.AtomicInteger(0)
             // R7：每次技能执行现建熔断器（见构造注释）。
             val toolExecutor = buildToolExecutor(
-                scope, dispatchedStep, failureGuard = FailureGuard()
+                scope, dispatchedStep, failureGuard = FailureGuard(), skill = skill
             )
             return runCatching {
                 val bridge = SkillRuntimeBridge(

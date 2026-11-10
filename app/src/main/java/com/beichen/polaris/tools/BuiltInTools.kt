@@ -13,6 +13,7 @@ import com.beichen.polaris.core.AgentTool
 import com.beichen.polaris.core.JsonSchema
 import com.beichen.polaris.core.ToolResult
 import com.beichen.polaris.core.io.AtomicJsonFile
+import com.beichen.polaris.core.net.RedirectPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -39,7 +40,16 @@ import java.io.File
 /* ------------------------------------------------------------------ */
 class HttpRequestTool(
     // R-13：原来裸构造（OkHttp 默认 10s 读超时），并入 short（10/30s，只放宽）
-    private val client: OkHttpClient = LlmHttp.short
+    //
+    // W-54：**不再让 OkHttp 自己跟随重定向**。审批按域名记忆（`ApprovalScope.of`），
+    // 而自动跟随会让「批过 api.example.com」变成「批过第一个域名」——302 一次就能
+    // 把数据带到别处，用户全程只看见过一个域名。现在关掉自动跟随，逐跳交给
+    // [RedirectPolicy] 判定：跨域 / 跨端口 / https 降级 / 超跳数一律停下并如实报告，
+    // 由模型或脚本对**新地址**重新发起（那就是一次新的、用户可见的授权）。
+    private val client: OkHttpClient = LlmHttp.short.newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
 ) : AgentTool {
     override val name = "http_request"
     override val description =
@@ -87,30 +97,71 @@ class HttpRequestTool(
 
     override suspend fun execute(args: JsonObject): ToolResult = withContext(Dispatchers.IO) {
         runCatching {
-            val method = args["method"]?.primOrNull()?.contentOrNull ?: "GET"
+            val method0 = args["method"]?.primOrNull()?.contentOrNull?.trim()?.uppercase().orEmpty().ifBlank { "GET" }
             val url = args["url"]?.primOrNull()?.contentOrNull
                 ?: return@withContext ToolResult.fail(
                     code = "missing_param",
                     message = "缺少 url",
                     hint = "http_request 必须提供 url 参数（如 https://example.com/api），请补充后重试。"
                 )
-            val bodyText = args["body"]?.primOrNull()?.contentOrNull
-
-            val builder = Request.Builder().url(url)
-            (args["headers"] as? JsonObject)?.forEach { (k, v) ->
-                v.primOrNull()?.contentOrNull?.let { builder.addHeader(k, it) }
-            }
-            val request = if (bodyText != null) {
-                builder.method(method, bodyText.toRequestBody("application/json".toMediaType())).build()
-            } else {
-                builder.method(method, null).build()
+            val body0 = args["body"]?.primOrNull()?.contentOrNull
+            val headers = buildList {
+                (args["headers"] as? JsonObject)?.forEach { (k, v) ->
+                    v.primOrNull()?.contentOrNull?.let { add(k to it) }
+                }
             }
 
-            client.newCall(request).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
-                val out = if (text.length > 8000) text.take(8000) + "\n...（已截断）" else text
-                ToolResult.ok(code = "http_${resp.code}", message = "HTTP ${resp.code}", data = out)
+            var currentUrl = url
+            var method = method0
+            var bodyText = body0
+            var hop = 0
+
+            while (true) {
+                val builder = Request.Builder().url(currentUrl)
+                headers.forEach { (k, v) -> builder.addHeader(k, v) }
+                val request = if (bodyText != null) {
+                    builder.method(method, bodyText.toRequestBody("application/json".toMediaType())).build()
+                } else {
+                    builder.method(method, null).build()
+                }
+
+                val resp = client.newCall(request).execute()
+                try {
+                    if (resp.isRedirect) {
+                        when (val d = RedirectPolicy.decide(currentUrl, resp.header("Location"), hop, resp.code, method)) {
+                            is RedirectPolicy.Redirect.Follow -> {
+                                currentUrl = d.to
+                                method = d.method
+                                if (d.dropBody) bodyText = null
+                                hop++
+                                continue
+                            }
+                            is RedirectPolicy.Redirect.Stop -> return@withContext ToolResult.fail(
+                                code = "http_redirect_stopped",
+                                message = "⛔ ${d.reason}",
+                                hint = if (d.target != null) {
+                                    "若确实需要该地址，请对 ${d.target} 单独发起一次 http_request" +
+                                        "（会重新走审批）。"
+                                } else {
+                                    "改用最终地址直接请求，或检查服务端重定向配置。"
+                                }
+                            )
+                        }
+                    }
+
+                    val text = resp.body?.string().orEmpty()
+                    val out = if (text.length > 8000) text.take(8000) + "\n...（已截断）" else text
+                    return@withContext ToolResult.ok(
+                        code = "http_${resp.code}",
+                        message = if (hop > 0) "HTTP ${resp.code}（跟随 $hop 次同源跳转）" else "HTTP ${resp.code}",
+                        data = out
+                    )
+                } finally {
+                    resp.close()
+                }
             }
+            // 循环的每个出口都已经 return；这一行只为让 lambda 的类型是 ToolResult 而不是 Unit。
+            error("unreachable: 请求循环必然以 return 结束")
         }.getOrElse {
             ToolResult.fail(
                 code = "http_error",
