@@ -52,6 +52,22 @@ data class SkillManifest(
     val trust: String = "",
 
     /**
+     * 本技能脚本**被允许访问的域名**（`http_request` 的唯一事先授权载体）。
+     *
+     * 写 `["api.example.com"]` 表示只放行该主机；写 `["*.example.com"]` 表示放行其
+     * 任意子域（不含 `example.com` 本身）。裸 `"*"`、带协议、带路径的写法一律非法，
+     * 见 [com.beichen.polaris.core.net.HostAllowlist.validateEntry]。
+     *
+     * **作用范围只有脚本桥**：主对话里模型调 `http_request` 不走这张表，
+     * 仍按域名逐次审批。这条区别是有意的——脚本弹不出审批，只能事先授权；
+     * 主对话弹得出，就该每次都问。
+     *
+     * 字段名用下划线是为了与 manifest 里其它字段（`file_types` / `tool_requirements`）
+     * 保持同一风格，不引入第二种命名习惯。
+     */
+    val net_hosts: List<String> = emptyList(),
+
+    /**
      * 资源目录名（assets/skills/<assetDir>），**不是** [id]。
      *
      * 内置技能的 [id] 是包名式唯一标识（`com.you.wordcount`），而资源目录用的是短名
