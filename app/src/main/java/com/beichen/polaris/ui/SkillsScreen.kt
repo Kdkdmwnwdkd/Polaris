@@ -47,6 +47,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.beichen.polaris.skill.SkillDeclaration
+import com.beichen.polaris.skill.SkillDeclarations
 import com.beichen.polaris.ui.contract.SkillLibraryContract
 
 /**
@@ -179,6 +181,8 @@ fun SkillsScreen(
     }
 
     // —— 授权脚本执行：不可逆风险，二次确认 ——
+    // 确认框里必须列出联网域名：授权脚本正是 `net_hosts` 生效的那一刻，
+    // 在此之前那些域名对用户只是 skill.json 里的一串字符。
     AkModalHost(target = authTarget) { skill, dialogVisible ->
         AkConfirmDialog(
             title = "授权脚本执行",
@@ -192,7 +196,8 @@ fun SkillsScreen(
                 vm.setScriptAuthorization(skill.id, true)
                 authTarget = null
             },
-            onDismiss = { authTarget = null }
+            onDismiss = { authTarget = null },
+            details = { SkillDeclarationDetails(skill.declaration) }
         )
     }
 
@@ -271,6 +276,23 @@ private fun SkillCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            // 声明行：这个技能**说**自己要联网到哪里。
+            // 与下面的工具清单配对读——那里是「实际能做成什么」（能力门放行结果），
+            // 这里是「它想做什么」（manifest 原话）。只有一处，两边会各自误导。
+            Text(
+                text = SkillDeclarations.hostLine(skill.declaration),
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                    letterSpacing = 0.1.sp
+                ),
+                color = if (skill.declaration.invalidHosts.isEmpty()) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.error
+                }
+            )
+
             // 工具清单：白名单 + 全局能力门的最终放行结果
             if (skill.tools.isNotEmpty()) {
                 AkDivider()
@@ -320,6 +342,51 @@ private fun SkillCard(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 授权 / 安装确认里的「声明」区：域名逐条列出 + 会失效的写法 + 声明工具。
+ *
+ * 为什么逐条换行而不是逗号连成一句：域名是用户要拿来核对的（「这个技能凭什么要连
+ * 我的对象存储？」），连成一句就没法逐条比对，只能整体扫一眼然后点确认。
+ */
+@Composable
+private fun SkillDeclarationDetails(d: SkillDeclaration) {
+    Column(verticalArrangement = Arrangement.spacedBy(AgentSpacing.space1)) {
+        Text(
+            text = SkillDeclarations.hostLine(d),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        if (d.hosts.isNotEmpty()) {
+            Text(
+                text = d.hosts.joinToString("\n"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (d.tools.isNotEmpty()) {
+            Text(
+                text = "声明工具：" + d.tools.joinToString("、"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        SkillDeclarations.warnings(d).forEach { w ->
+            Text(
+                text = w,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+        if (d.needsScript && d.hosts.isNotEmpty()) {
+            Text(
+                text = "授权后脚本只能访问上面列出的域名，其它地址一律被拒；主对话里的联网仍会逐次询问。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

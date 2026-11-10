@@ -53,6 +53,12 @@ object HostAllowlist {
         if (entry.contains('/')) return "只写主机名，不要带路径：\"$raw\""
         if (entry.contains(' ')) return "域名里不能有空格：\"$raw\""
         if (entry.contains('@')) return "域名里不能有 userinfo：\"$raw\""
+        // 端口不属于主机名：`matchesOne` 比的是 host（`EndpointPolicy.hostOf` 已剥掉端口），
+        // 声明里写 `:443` 的条目**永远**不会命中——作者以为限定了端口，实际是把这条声明写死了。
+        // IPv6 字面量（`[::1]`）保留：它以 `[` 开头，冒号是地址的一部分。
+        if (entry.contains(':') && !entry.startsWith('[')) {
+            return "只写主机名，不要带端口：\"$raw\"（端口由请求地址决定，写在声明里永远不会命中）"
+        }
 
         val host = normalize(entry)
         if (host.startsWith(WILDCARD)) {

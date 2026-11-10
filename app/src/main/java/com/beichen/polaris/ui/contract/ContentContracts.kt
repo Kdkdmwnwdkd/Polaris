@@ -7,6 +7,7 @@ import com.beichen.polaris.core.PromptDeleteResult
 import com.beichen.polaris.core.PromptItem
 import com.beichen.polaris.core.PromptUpsertResult
 import com.beichen.polaris.memory.MemoryItem
+import com.beichen.polaris.skill.market.MarketInstallPreview
 import com.beichen.polaris.skill.market.MarketSource
 import com.beichen.polaris.skill.market.MarketUiItem
 import com.beichen.polaris.ui.SkillUiInfo
@@ -118,10 +119,24 @@ interface SkillMarketContract {
     val marketLoading: StateFlow<Boolean>
     val marketBusyId: StateFlow<String?>
     val marketStatus: StateFlow<String?>
+
+    /**
+     * 已下载、等待用户确认安装的插件（非空即弹确认框）。
+     *
+     * 没有它，「安装」这个动作就发生在用户看清包里写了什么之前：索引里的 `permissions`
+     * 是市场方的营销文案，真正的 `net_hosts` 只在 zip 的 skill.json 里。
+     */
+    val marketPending: StateFlow<MarketInstallPreview?>
     fun refreshMarket()
     fun addMarketSource(raw: String): Boolean
     fun removeMarketSource(url: String)
     fun installMarketPlugin(id: String)
+
+    /** 用户确认安装 [marketPending] 里那个包（只有此时才解压落盘）。 */
+    fun confirmMarketInstall()
+
+    /** 放弃 [marketPending]（关框等同取消，不保留包体）。 */
+    fun cancelMarketInstall()
 
     /** 卸载市场插件（含它注册的工具回卷）。 */
     fun uninstallMarketPlugin(id: String)
