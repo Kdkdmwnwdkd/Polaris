@@ -77,9 +77,6 @@ object AgentLogger {
     private val LINE_RE =
         Regex("""^(\d{2}):(\d{2}):(\d{2})\.(\d{3}) (DEBUG|INFO|WARN|ERROR) \[([^\]]*)] (.*)$""")
 
-    /** 脱敏替换串。 */
-    private const val MASK = "***"
-
     private val buffer: MutableList<LogEntry> =
         Collections.synchronizedList(ArrayList<LogEntry>())
 
@@ -89,52 +86,32 @@ object AgentLogger {
      */
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
 
-    /**
-     * 敏感信息脱敏规则（大小写不敏感）。
-     * 顺序很重要：先掩码长串凭据（sk-/Bearer），再掩码 key=value 形态，避免残留片段。
-     */
-    private val sanitizeRules: List<Regex> = listOf(
-        Regex("""sk-[A-Za-z0-9_\-]{8,}""", RegexOption.IGNORE_CASE),
-        Regex("""Bearer\s+[A-Za-z0-9._\-]+""", RegexOption.IGNORE_CASE),
-        Regex("""api[_-]?key"?\s*[:=]\s*"?[A-Za-z0-9._\-]+""", RegexOption.IGNORE_CASE),
-        Regex("""token"?\s*[:=]\s*"?[A-Za-z0-9._\-]+""", RegexOption.IGNORE_CASE),
-        Regex("""password"?\s*[:=]\s*"?\S+""", RegexOption.IGNORE_CASE)
-    )
-
-    /**
-     * 内容天然携带隐私/凭据的工具：其入参与返回值**只记长度，不记原文**，
-     * 否则 http_request 的 headers/body（含 API Key）、ui_input 的密码、剪贴板、
-     * 通知正文（验证码/私信）、read_file 的文件内容都会明文落到磁盘上的日志里。
-     */
-    private val sensitiveTools: Set<String> = setOf(
-        "device_notifications",
-        "device_foreground_app",
-        "read_file",
-        "clipboard",
-        "http_request",
-        "ui_input",
-        "ui_screenshot"
-    )
-
     @Volatile
     private var logDir: File? = null
+
+    /**
+     * 该工具的入参与输出是否「只记长度、不记原文」（审计 F12）。
+     *
+     * 判据本体在 [LogRedaction]，与 `ToolCatalog` 一起是零依赖纯 Kotlin——
+     * 这样「哪些工具算敏感」能被 JVM harness 直接断言，而不是只靠 grep 源码。
+     */
+    fun isSensitiveTool(name: String): Boolean = LogRedaction.isSensitiveTool(name)
+
+    /**
+     * URL 进日志前先裁掉 query 与 fragment（审计 F12）。
+     * query 里常见 `?code=` / `?access_token=`，一条 DEBUG 日志就够把授权码带出去。
+     */
+    fun redactUrl(url: String): String = LogRedaction.redactUrl(url)
 
     /**
      * 日志脱敏：把 ApiKey / Bearer / api_key / token / password 等敏感片段替换为 `***`。
      *
      * 公开给调用方（如 LLMClient 抛出的 IOException 文案、ChatViewModel 写进聊天气泡的错误文本）
-     * 在离开日志系统之前先自行脱敏。
+     * 在离开日志系统之前先自行脱敏。规则本体在 [LogRedaction]。
      *
      * @param s 原始文本；为空或正则异常时原样返回，保证「旁路不影响主流程」。
      */
-    fun sanitize(s: String): String {
-        if (s.isEmpty()) return s
-        var out = s
-        for (rule in sanitizeRules) {
-            out = runCatching { rule.replace(out, MASK) }.getOrDefault(out)
-        }
-        return out
-    }
+    fun sanitize(s: String): String = LogRedaction.sanitize(s)
 
     /** 初始化落盘目录、清理历史日志并启动异步写盘（幂等，可重复调用切换到新目录）。 */
     /**
@@ -204,7 +181,7 @@ object AgentLogger {
      * 敏感工具只记 `参数已脱敏(长度=N)`，绝不记原文。
      */
     fun toolCall(name: String, argsPreview: String) {
-        val shown = if (name in sensitiveTools) {
+        val shown = if (LogRedaction.isSensitiveTool(name)) {
             "参数已脱敏(长度=${argsPreview.length})"
         } else {
             argsPreview
@@ -218,7 +195,7 @@ object AgentLogger {
      */
     fun toolResult(name: String, ok: Boolean, ms: Long, preview: String) {
         val level = if (ok) LogLevel.DEBUG else LogLevel.WARN
-        val shown = if (name in sensitiveTools) {
+        val shown = if (LogRedaction.isSensitiveTool(name)) {
             "结果已脱敏(长度=${preview.length})"
         } else {
             preview

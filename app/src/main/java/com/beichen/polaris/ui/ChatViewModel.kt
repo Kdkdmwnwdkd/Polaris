@@ -1395,7 +1395,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** UI 回调：拒绝/要求修改计划。 */
     override fun rejectPlan(planId: String, reason: String) {
         PlanBroker.reject(planId, reason)
-        AgentLogger.i("Chat", "用户拒绝了计划 $planId：${reason.take(80)}")
+        // 审计 F12：理由与回答都是用户手打的，可能含账号、地址；只记长度。
+        AgentLogger.i("Chat", "用户拒绝了计划 $planId（理由 ${reason.length} 字）")
     }
 
     // —— W-26：任务模型（标题生成等轻量任务用便宜模型，省钱降延迟）——
@@ -1407,7 +1408,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** UI 回调：用户点了某个选项 / 提交了自由输入。 */
     override fun answerAskUser(questionId: String, choice: String) {
         AskUserBroker.answer(questionId, choice)
-        AgentLogger.i("Chat", "用户回答了提问：${choice.take(80)}")
+        AgentLogger.i("Chat", "用户回答了提问（${choice.length} 字）")
     }
 
     /**
@@ -1427,7 +1428,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 runCatching {
                     memoryStore.add(content = c.content, kind = c.kind, tags = emptyList(), salience = c.salience)
                     added++
-                    AgentLogger.i("Memory", "自动记住（${c.kind}，重要度 ${c.salience}）：${c.content.take(80)}")
+                    // 记忆内容是从用户话里提炼的个人信息，最不该落盘。
+                    AgentLogger.i("Memory", "自动记住（${c.kind}，重要度 ${c.salience}，${c.content.length} 字）")
                 }
             }
             if (added > 0) refreshMemories()
@@ -2637,12 +2639,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         }
         // W-54：开场仪式（置 owner / 生成中标识 / 清缓冲 / 开运行态）由控制器在 start 里做。
         // placeholderDraft=false——用户消息气泡本身就是「在生成」的占位，不必再造空草稿行。
-        AgentLogger.i(
-            "Chat",
-            "用户发送：${text.take(120)}" +
-                (if (images.isNotEmpty()) "（含 ${images.size} 张图片）" else "") +
-                (if (files.isNotEmpty()) "（含 ${files.size} 个文件）" else "")
-        )
+        // 审计 F12：只记长度不记内容——这行进磁盘日志，导出诊断包会整段带走。
+        AgentLogger.i("Chat", "用户发送 ${text.length} 字" +
+            (if (images.isNotEmpty()) "（含 ${images.size} 张图片）" else "") +
+            (if (files.isNotEmpty()) "（含 ${files.size} 个文件）" else ""))
 
         // L4 主动感知：把当前设备上下文自动拼进用户输入，让模型“知道”手机在干什么
         val ctxPrompt = DeviceContextStore.snapshot().toPrompt()
