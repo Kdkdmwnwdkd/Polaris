@@ -271,6 +271,15 @@ internal class MarketFacade(
     }
 
     /**
+     * 按用户输入的地址取一个 zip（审计 F10），供技能中心「从 URL 导入」使用。
+     *
+     * 只是把 [MarketClient.fetchPackage] 透出来。透传而不是让 VM 自己 new 一个客户端：
+     * 统一 HTTP 出口这条约定（`run-http-client-single-source`）和市场那三道限制
+     * （协议 / 体积 / 超时）都要跟着走，谁开第二条路，谁就绕过了它们。
+     */
+    suspend fun fetchPackage(url: String): Result<ByteArray> = marketClient.fetchPackage(url)
+
+    /**
      * 用户确认安装 [marketPending] 里那个包（此时才解压落盘）。
      *
      * 包体取自 [pendingBytes] 而不是重新下载：重新下载会引入一次 TOCTOU——

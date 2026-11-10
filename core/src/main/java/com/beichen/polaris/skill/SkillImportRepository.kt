@@ -95,6 +95,9 @@ class ImportedSkillRepository(private val context: Context) {
     fun installZip(zipBytes: ByteArray): Result<String> {
         var destDir: File? = null
         val result = runCatching {
+            // 审计 F10：最后一道闸。三个入口（URL / SAF / 字节）各自有流式上限，这里是兜底——
+            // 将来多一个入口（分享 Intent、MCP 拉包）忘了加，也不会一路走进解压循环。
+            SkillPackage.requireWithin(zipBytes.size.toLong(), "技能包")
             // 第一遍：仅读取 zip 内 skill.json 拿 id（不落盘）
             val skillJsonText = readZipEntry(zipBytes) { name ->
                 name == "skill.json" || name.endsWith("/skill.json")
