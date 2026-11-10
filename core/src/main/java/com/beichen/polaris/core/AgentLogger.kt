@@ -179,9 +179,17 @@ object AgentLogger {
     /**
      * 工具调用入参。
      * 敏感工具只记 `参数已脱敏(长度=N)`，绝不记原文。
+     *
+     * @param sensitive 由调用方判定「这个工具这次调用敏不敏感」，默认查 [LogRedaction] 的
+     *   静态名单。**动态注册的工具（MCP）必须显式传 true**——它们不在 `ToolCatalog` 里，
+     *   静态名单覆盖不到（审计 F13）。判据在调用方手里，因为只有它拿得到工具实例。
      */
-    fun toolCall(name: String, argsPreview: String) {
-        val shown = if (LogRedaction.isSensitiveTool(name)) {
+    fun toolCall(
+        name: String,
+        argsPreview: String,
+        sensitive: Boolean = LogRedaction.isSensitiveTool(name)
+    ) {
+        val shown = if (sensitive) {
             "参数已脱敏(长度=${argsPreview.length})"
         } else {
             argsPreview
@@ -192,10 +200,18 @@ object AgentLogger {
     /**
      * 工具返回结果（是否出错 / 耗时 / 结果预览）。
      * 敏感工具只记 `结果已脱敏(长度=N)`，绝不记内容。
+     *
+     * @param sensitive 同 [toolCall]：动态注册的工具不在静态名单里，调用方必须显式判定。
      */
-    fun toolResult(name: String, ok: Boolean, ms: Long, preview: String) {
+    fun toolResult(
+        name: String,
+        ok: Boolean,
+        ms: Long,
+        preview: String,
+        sensitive: Boolean = LogRedaction.isSensitiveTool(name)
+    ) {
         val level = if (ok) LogLevel.DEBUG else LogLevel.WARN
-        val shown = if (LogRedaction.isSensitiveTool(name)) {
+        val shown = if (sensitive) {
             "结果已脱敏(长度=${preview.length})"
         } else {
             preview

@@ -4,6 +4,7 @@ import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.FailureGuard
 import com.beichen.polaris.core.GuardVerdict
 import com.beichen.polaris.core.KernelExposure
+import com.beichen.polaris.core.LogRedaction
 import com.beichen.polaris.core.MAX_TOOL_RESULT_CHARS
 import com.beichen.polaris.core.ToolApproval
 import com.beichen.polaris.core.ToolCall
@@ -404,7 +405,14 @@ class RegistryToolExecutor(
                 emptyList()
             )
         }
-        AgentLogger.toolCall(call.name, call.arguments.toString().take(300))
+        // 审计 F13：敏感判据不能只查静态名单。MCP 工具是运行期注册的、不在 ToolCatalog 里，
+        // 查表恒为 false —— 而它们的入参与输出正是「外部服务能看到的全部内容」。
+        // 判据在这里算，因为只有这里拿得到工具实例（`tool.needsApprovalFor`）。
+        val logSensitive = LogRedaction.shouldRedact(
+            call.name,
+            runCatching { tool.needsApprovalFor(call.arguments) }.getOrDefault(tool.needsApproval)
+        )
+        AgentLogger.toolCall(call.name, call.arguments.toString().take(300), logSensitive)
         return try {
             val start = System.currentTimeMillis()
             // R2 第二层：工具级预算。null = 本层超时（工具内部自己抛的
@@ -438,7 +446,7 @@ class RegistryToolExecutor(
             )
             // T02 + T06：统一契约格式化 + 单结果截断（UI 与模型历史共用同一份文本）
             val text = truncateToolResult(formatToolResult(result), maxResultChars)
-            AgentLogger.toolResult(call.name, !result.isError, cost, text.take(300))
+            AgentLogger.toolResult(call.name, !result.isError, cost, text.take(300), logSensitive)
             ToolCallOutcome.Completed(
                 ToolMessage(call.id, tool.name, call.arguments, text, result.isError, imgUrls),
                 imgUrls,
