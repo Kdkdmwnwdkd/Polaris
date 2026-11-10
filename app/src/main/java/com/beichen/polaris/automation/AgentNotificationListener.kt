@@ -12,6 +12,13 @@ import java.util.concurrent.ConcurrentLinkedQueue
  * 收到的通知只做结构化落库（package / title / text / time），不读取通知以外的任何内容，
  * 也不拦截、不转发到外部，符合最小权限与隐私底线。
  *
+ * ## 两条下游，两种待遇（审计 F11）
+ *
+ *  - [NotificationStore]：存全文，只由 `device_notifications` 工具读取，**那个工具要审批**；
+ *  - [DeviceContextStore]：只收来源与时间，会被自动拼进每条模型请求，**不收正文**。
+ *
+ * 修前两条都收全文，于是「读通知要授权」形同虚设——自动注入那条路根本不用授权。
+ *
  * 注：这是系统级服务而非普通权限，必须在
  *   “设置 → 通知 → 通知访问权限” 中手动授予本应用。
  */
@@ -57,16 +64,24 @@ class AgentNotificationListener : NotificationListenerService() {
                 key = sbn.key
             )
         )
-        // L4 主动感知：把通知摘要同步到设备上下文，供对话层自动注入
+        // L4 主动感知：把通知**来源**同步到设备上下文，供对话层自动注入。
+        //
+        // 审计 F11：修前这里传的是 "$label - $body"（正文全在里面），而设备上下文
+        // 会在每条用户消息里自动拼进模型请求——等于「读通知」这件事从来没经过授权，
+        // F9 加在 device_notifications 上的审批被这条自动通道整个绕开。
+        // 现在只传来源与时间；正文留在上面那份 NotificationStore 里，由那个已审批的工具取。
         val label = try {
             packageManager.getApplicationLabel(
                 packageManager.getApplicationInfo(sbn.packageName, 0)
             ).toString()
         } catch (_: Throwable) { sbn.packageName }
-        val body = if (title.isNotBlank()) {
-            if (text.isNotBlank()) "$title：$text" else title
-        } else text
-        DeviceContextStore.addNotification("$label - $body")
+        DeviceContextStore.addNotification(
+            NotificationSummary(
+                packageName = sbn.packageName,
+                label = label,
+                postTime = sbn.postTime
+            )
+        )
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {}

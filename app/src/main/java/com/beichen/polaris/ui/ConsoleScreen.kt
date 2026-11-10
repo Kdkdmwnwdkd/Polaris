@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -27,6 +28,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.beichen.polaris.automation.DeviceContext
+import com.beichen.polaris.automation.NotificationDigest
 import com.beichen.polaris.ui.contract.ConsoleContract
 
 /**
@@ -283,8 +285,15 @@ private fun DeviceContextBlock(deviceContext: DeviceContext) {
         }
         AkLine(title = "前台应用", meta = fg, dense = true)
     }
+    // 审计 F11：这里展示的是「应用 ×条数（多久前）」，不是通知正文——设备上下文
+    // 从类型上就装不下正文了。想看内容要在对话里让 Agent 去读（会弹授权）。
     val notifications = deviceContext.recentNotifications
     if (notifications.isNotEmpty()) {
+        // 时间基准用「进入这张卡的时刻」而不是 updatedAt：updatedAt 是上次 probe 的时间，
+        // 拿它当 now 会让三小时前的通知显示成「刚刚」（delta 为负）。只在快照变化时重算，
+        // 避免每帧取时钟。
+        val nowMs = remember(notifications) { System.currentTimeMillis() }
+        val lines = NotificationDigest.lines(notifications, nowMs)
         Spacer(Modifier.height(AgentSpacing.space3))
         Text(
             text = "最近通知",
@@ -296,7 +305,7 @@ private fun DeviceContextBlock(deviceContext: DeviceContext) {
         )
         Spacer(Modifier.height(AgentSpacing.space2))
         Column(verticalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
-            notifications.take(3).forEach { line ->
+            lines.forEach { line ->
                 Row(verticalAlignment = Alignment.Top) {
                     // 装饰性中性小点：条目已由文字承载语义，不做状态双编码
                     AkStatusDot(MaterialTheme.colorScheme.onSurfaceVariant, 5.dp)
@@ -313,14 +322,8 @@ private fun DeviceContextBlock(deviceContext: DeviceContext) {
                     )
                 }
             }
-            val rest = notifications.size - 3
-            if (rest > 0) {
-                Text(
-                    text = "等 $rest 条",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            // 聚合后不再有「等 N 条」：条数已经写在每一行（「微信 ×3」），
+            // 再报一次总数是同一件事说两遍。超出的应用由 lines() 折成「等 N 个应用」。
         }
     }
 }
