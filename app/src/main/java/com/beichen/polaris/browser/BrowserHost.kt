@@ -81,7 +81,8 @@ object BrowserHost {
                 }
                 wv.webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, url: String?) {
-                        AgentLogger.d(TAG, "页面加载完成：${url?.take(120)}")
+                        // 审计 F12：query 里可能是 ?code= / ?access_token=，日志只留 host/path。
+                        AgentLogger.d(TAG, "页面加载完成：${AgentLogger.redactUrl(url?.take(200) ?: "")}")
                         // 每个等待者自己决定收不收（有人可能已被超时取消，deferred 已完成）
                         pageFinishedListeners.forEach { runCatching { it() } }
                     }

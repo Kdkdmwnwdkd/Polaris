@@ -255,4 +255,23 @@
 #   变红（过度修也能抓到）；退出码均为 1。
 #   纯函数零依赖（只用 stdlib），沙箱与 CI 都能真跑，不 SKIP。
 
-132
+# 2026-11-10：132 → 133（审计 F12「日志里的用户内容随诊断包外发」新增
+#   run-log-user-content-verification.sh）。
+#   AgentLogger 是磁盘日志的唯一写入口，而「导出诊断包」把日志尾部 300 行原样打包。
+#   它的 sensitiveTools 是一张手写的 7 项名单，而「哪个工具的入参与输出会带用户数据」
+#   ToolCatalog 已经用 approval 字段回答过一遍——两张表各自维护，静默不同步：
+#   ocr_image（F9b 刚认定与 ui_screenshot 同档）、shell_run/shell_background/
+#   container_toolchain（输出任意内容）、write_file/edit_file（参数是文件内容）全没在名单里。
+#   另外还有几处绕过名单直接写用户内容：用户发送正文、拒绝计划的理由、弹窗自由输入、
+#   自动抽取的记忆正文、浏览器 URL 的 query（?code= 就是授权码）。
+#   修法：sensitiveTools 派生自审批真源 + 手工补充集（read_file / device_foreground_app /
+#   web_snapshot / web_eval）；那几处改成只记长度；URL 裁掉 query 与 fragment。
+#   判据本体搬到 LogRedaction.kt——原文件经 ConfigSanitizer → ModelConfig →
+#   SkillProtocol 把 android 拖进编译依赖链，「哪些字段该打码」只能在设备上验证。
+#   35 条行为断言 + 7 条接线断言。
+#   变异验证：白名单退回手写 7 项 → A1 抓出 16 个漏网工具、A2 逐个点名、A3 挂；
+#   redactUrl 变恒等 → E1/E2/E3/E6c 红；删掉 sk- 规则 → D1 红；
+#   用户正文改回原文 → W2 红。退出码均为 1。
+#   纯函数零依赖（只用 stdlib），沙箱与 CI 都能真跑，不 SKIP。
+
+133
