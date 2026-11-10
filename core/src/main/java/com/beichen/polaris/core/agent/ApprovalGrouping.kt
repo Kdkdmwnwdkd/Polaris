@@ -42,6 +42,9 @@ object ApprovalGrouping {
     /** 网络外发通道：按域名记忆，换域重问。 */
     const val GROUP_NETWORK = ToolCatalog.Approval.NETWORK
 
+    /** 工作区外的只读访问（`cat /sdcard/DCIM/…`）：按目录记忆，换目录重问。 */
+    const val GROUP_SHELL_READ = ToolCatalog.Approval.SHELL_READ
+
     /**
      * 工具名 → 归组键。
      *
@@ -68,6 +71,7 @@ object ApprovalGrouping {
         GROUP_SHELL_ELEVATED -> "提权 shell（uid 2000）"
         GROUP_SHELL_UNMEMORIZABLE -> "shell 命令"
         GROUP_NETWORK -> "网络请求"
+        GROUP_SHELL_READ -> "工作区外文件读取"
         else -> group
     }
 }

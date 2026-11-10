@@ -72,7 +72,8 @@ object ApprovalScope {
      *  3. 提权 shell（`identity=shizuku`）→ **永不记忆**：命令没变、权限变了；
      *  4. 不可逆命令 → 永不记忆；
      *  5. 首词安全但整体不可记忆（包装器 / 命令替换 / 重定向 / 解释器 / `cp`）→ 永不记忆；
-     *  6. 其余 → 可记忆（`npm install`、`gradle build`、`ls`…）。
+     *  6. 读工作区外的受保护目录（`cat /sdcard/DCIM/…`）→ 按**目录**记忆，换目录重问；
+     *  7. 其余 → 可记忆（`npm install`、`gradle build`、`ls`…）。
      */
     fun of(toolName: String, args: JsonObject): ApprovalGrant {
         val group = ApprovalGrouping.groupOf(toolName)
@@ -120,11 +121,27 @@ object ApprovalScope {
         }
 
         // 审计 F2：首词无害不代表可以被记住（`busybox rm`、`$(rm -rf)`、`cp`、`>`）。
-        if (!ShellCommandRules.isMemorizable(command)) {
+        val memorizable = ShellCommandRules.isMemorizable(command)
+        if (!memorizable) {
             return ApprovalGrant(
                 key = "${ApprovalGrouping.GROUP_SHELL_UNMEMORIZABLE}:$prefix",
                 label = "shell 命令（$prefix）",
                 memorizable = false
+            )
+        }
+
+        // F7 路径边界：只读命令不弹窗，但「读的是谁的文件」是另一件事——
+        // `cat /sdcard/DCIM/x.jpg` 把文件工具的工作区沙箱整条绕开了。
+        // 只在**本来可记忆**的命令上取这一档：带重定向 / 包装器的命令已在上一步
+        // 落进「每次都问」，若在这里再给一个可记忆的读键，`echo x > /sdcard/a`
+        // 就能复用「读 /sdcard/a」的授权，等于把写入洗白了。
+        val readScope = ShellCommandRules.sensitiveReadRoot(command)
+        if (readScope != null) {
+            return ApprovalGrant(
+                key = "${ApprovalGrouping.GROUP_SHELL_READ}:$readScope",
+                // 文案带上具体目录：用户要知道自己同意的是「相册」还是「下载」。
+                label = "读取 $readScope",
+                memorizable = true
             )
         }
 

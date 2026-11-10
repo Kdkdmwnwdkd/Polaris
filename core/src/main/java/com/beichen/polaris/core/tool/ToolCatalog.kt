@@ -221,6 +221,16 @@ object ToolCatalog {
 
         /** 网络外发：按域名记忆，换一个域就要重新问。 */
         const val NETWORK = "net_request"
+
+        /**
+         * 工作区外的**只读**访问（`cat /sdcard/DCIM/…`）。只由
+         * [com.beichen.polaris.core.agent.ApprovalScope] 产出，目录里没有成员。
+         *
+         * 与 [SHELL] 分开的理由：`ls`、`npm install` 的授权说的是「这条命令可以跑」，
+         * 而读相册是**另一件事**——把两者并进同一个可记忆的键，等于用一次构建授权
+         * 换掉了整个相册的读取权。粒度按目录记（`/sdcard/DCIM`），换目录重问。
+         */
+        const val SHELL_READ = "shell_read"
     }
 
     private val byName: Map<String, CatalogTool> = tools.associateBy { it.name }

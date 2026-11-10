@@ -176,5 +176,15 @@
 #   恢复以本机现值为基底、提示告知、无残留原样写入）。
 #   两个方向都是错的代价：脱敏漏一处 = 密钥进网盘；合并写反 = 重装后 Key 全丢。
 #   纯 JSON 层实现，沙箱与 CI 都能真跑，不 SKIP。
+#
+# 2026-11-10：126 → 127（审计遗留项「三条高权限后端无路径边界」新增
+#   run-shell-read-boundary-verification.sh）。
+#   验「工作区沙箱对 shell 不是句空话」：read_file 被 PathGuard 锁在工作区里，但
+#   `cat /sdcard/DCIM/…` 整条绕过（proot 把 /sdcard bind 进容器、调试通道以 uid 2000 跑）。
+#   27 条行为断言（受保护目录识别 / 前缀边界 / `..` 规范化 / 授权键按目录分档 /
+#   三条不变量）+ 4 条接线断言（ShellTool 真的接了判据、ApprovalScope 真的产出 shell_read 键、
+#   读档在不可记忆判定之后、文案有人话）。
+#   变异验证：让 sensitiveReadRoot 恒返回 null，行为断言 11 条变红、退出码 1。
+#   纯函数零依赖，沙箱与 CI 都能真跑，不 SKIP。
 
-126
+127
