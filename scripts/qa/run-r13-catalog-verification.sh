@@ -138,6 +138,39 @@ print("  PASS  B4 %d 个需审批工具全部有审批归组" % len(set(need)))
 PY
 then p=$((p+1)); else f=$((f+1)); fi
 
+# B5：反方向——目录里标了审批归组的工具，工具类必须真的覆写 needsApproval。
+#
+# B4 查的是「实例说要审 -> 目录要有归组」，漏掉的方向是「目录说有归组 -> 实例要真审」。
+# 而 ToolExecutor 的闸门判据是 `tool.needsApprovalFor(args)`，**只看实例**；
+# ToolCatalog.approval 只用于归组与文案。所以「目录有、实例没有」的后果是：
+# 归组、文案、授权键全都配好了，实际一次都不弹窗——用户以为有保护，实际没有。
+# 这种不一致不报错、不崩溃，也不会被 B4 发现，只会在某一天安静地少一次确认。
+if python3 - "$SRC" "$CATALOG" <<'PYB5'
+import re, sys, os
+src, catalog = sys.argv[1], sys.argv[2]
+need = set()
+for dp, _, fs in os.walk(src):
+    for fn in fs:
+        if not fn.endswith(".kt"):
+            continue
+        t = open(os.path.join(dp, fn), encoding="utf-8").read()
+        ms = list(re.finditer(r'override val name\s*=\s*"([a-z0-9_]+)"', t))
+        for i, m in enumerate(ms):
+            end = ms[i + 1].start() if i + 1 < len(ms) else len(t)
+            seg = t[m.end():end]
+            if re.search(r'override val needsApproval\s*(:\s*Boolean\s*)?=\s*true', seg) \
+               or re.search(r'override fun needsApprovalFor\s*\(', seg):
+                need.add(m.group(1))
+cat = open(catalog, encoding="utf-8").read()
+have = set(re.findall(r'CatalogTool\("([a-z0-9_]+)"[^)]*Approval\.\w+', cat))
+rev = sorted(have - need)
+if rev:
+    print("  FAIL  B5 目录标了审批归组但工具类没覆写 needsApproval（实际不弹窗）：%s" % " ".join(rev))
+    sys.exit(1)
+print("  PASS  B5 %d 个审批归组都有真实的 needsApproval 实现" % len(have))
+PYB5
+then p=$((p+1)); else f=$((f+1)); fi
+
 # ---------------------------------------------------------------- [C] 行为
 echo ""
 echo "[C] 行为：真跑 ToolCatalog（不是源码扫描）"
