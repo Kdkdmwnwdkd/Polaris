@@ -24,6 +24,15 @@ class DeviceNotificationsTool : AgentTool {
     /** 只读：仅读取已捕获的通知缓存，无副作用。 */
     override val readOnly = true
 
+    /**
+     * 审计 F9：通知正文里有验证码、聊天内容、银行推送——读一次等于把用户此刻的手机
+     * 摊开在上下文里，而这些内容随时会随下一次模型请求离开本机。
+     *
+     * 与 `clipboard` 同属一档（`Approval.PRIVATE_READ`），但按工具分开记：
+     * 同意读剪贴板不等于同意读通知。
+     */
+    override val needsApproval = true
+
     override suspend fun execute(args: JsonObject): ToolResult {
         val list = NotificationStore.all
         if (list.isEmpty()) {

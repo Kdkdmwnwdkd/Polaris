@@ -137,6 +137,9 @@ fun main() {
             ToolCatalog.Approval.SHELL_ELEVATED, ToolCatalog.Approval.SHELL_UNMEMORIZABLE,
             // 2026-11-10 F7：工作区外的只读访问（按目录记忆），同样只由 ApprovalScope 产出。
             ToolCatalog.Approval.SHELL_READ,
+            // 2026-11-10 F9：读用户私有数据（剪贴板 / 通知）。它进目录（clipboard、
+            // device_notifications 两个工具都标注了），粒度由 ApprovalScope 再细到工具名。
+            ToolCatalog.Approval.PRIVATE_READ,
         )
         val bad = ToolCatalog.tools.mapNotNull { it.approval }.filter { it !in allowed }
         expect(bad.isEmpty(), "所有审批键都在 Approval 词表内", { bad.toString() })

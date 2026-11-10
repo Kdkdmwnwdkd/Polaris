@@ -45,6 +45,9 @@ object ApprovalGrouping {
     /** 工作区外的只读访问（`cat /sdcard/DCIM/…`）：按目录记忆，换目录重问。 */
     const val GROUP_SHELL_READ = ToolCatalog.Approval.SHELL_READ
 
+    /** 读用户私有数据（剪贴板 / 通知）：按工具记忆，换工具重问。 */
+    const val GROUP_PRIVATE_READ = ToolCatalog.Approval.PRIVATE_READ
+
     /**
      * 工具名 → 归组键。
      *
@@ -72,6 +75,7 @@ object ApprovalGrouping {
         GROUP_SHELL_UNMEMORIZABLE -> "shell 命令"
         GROUP_NETWORK -> "网络请求"
         GROUP_SHELL_READ -> "工作区外文件读取"
+        GROUP_PRIVATE_READ -> "本机隐私数据读取"
         else -> group
     }
 }

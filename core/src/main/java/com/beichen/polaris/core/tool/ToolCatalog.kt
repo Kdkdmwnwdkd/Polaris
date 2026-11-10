@@ -158,7 +158,9 @@ object ToolCatalog {
         CatalogTool("workflow_delete", "workflow", Capability.PRIVILEGED),
         CatalogTool("workflow_toggle", "workflow", Capability.PRIVILEGED),
         // ── device：设备状态与通知
-        CatalogTool("device_notifications", "device", Capability.DANGEROUS),
+        // 审计 F9：通知正文里有验证码、聊天内容、银行推送——读它等于读用户此刻的手机。
+        CatalogTool("device_notifications", "device", Capability.DANGEROUS, Approval.PRIVATE_READ),
+        // 前台应用只给包名，不含内容。隐私度与通知差一个量级，并进同一档只会多一次无意义弹窗。
         CatalogTool("device_foreground_app", "device", Capability.DANGEROUS),
         // ── media：图片识别与语音播报
         CatalogTool("ocr_image", "media", Capability.PRIVILEGED),
@@ -179,7 +181,9 @@ object ToolCatalog {
         CatalogTool("github_diff", "github", Capability.SAFE),
         CatalogTool("github_clone", "github", Capability.PRIVILEGED),
         // ── sys：剪贴板、容器、通知等系统能力
-        CatalogTool("clipboard", "sys", Capability.PRIVILEGED),
+        // 审计 F9：剪贴板里常有密码与验证码。`action=get` 把内容整个读进上下文，
+        // 此后它随下一次模型请求离开本机——这一步必须过一次人（`action=set` 不问，见工具侧）。
+        CatalogTool("clipboard", "sys", Capability.PRIVILEGED, Approval.PRIVATE_READ),
         // 通知本身是用户可见、可撤销的提示，弹审批比通知本身更打扰。
         CatalogTool("send_notification", "sys", Capability.PRIVILEGED),
         CatalogTool("calculator", "sys", Capability.SAFE),
@@ -231,6 +235,19 @@ object ToolCatalog {
          * 换掉了整个相册的读取权。粒度按目录记（`/sdcard/DCIM`），换目录重问。
          */
         const val SHELL_READ = "shell_read"
+
+        /**
+         * 读用户私有数据（剪贴板 / 通知）。审计 F9。
+         *
+         * 与 [SHELL_READ] 同族但不同路：那条防的是「绕开工作区沙箱读文件」，这条防的是
+         * 「两个工具本来就没有沙箱」——`clipboard get` 拿到的是用户刚复制的密码，
+         * `device_notifications` 拿到的是验证码短信与聊天消息，两者都直接进上下文、
+         * 再随下一次请求出去。它们不经过任何路径，所以 PathGuard 一类判据对它们无效。
+         *
+         * 粒度按**工具**记（`private_read:clipboard` / `private_read:device_notifications`）：
+         * 同意读剪贴板不等于同意读通知，两者的敏感度不在一个量级。
+         */
+        const val PRIVATE_READ = "private_read"
     }
 
     private val byName: Map<String, CatalogTool> = tools.associateBy { it.name }
