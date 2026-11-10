@@ -135,6 +135,8 @@ fun main() {
             // 下面两个只由 ApprovalScope 产出（不进目录），但同属审批键的取值域：
             // 提权 shell（F1）与「首词安全但整体不可记忆」的 shell（F2）。
             ToolCatalog.Approval.SHELL_ELEVATED, ToolCatalog.Approval.SHELL_UNMEMORIZABLE,
+            // 2026-11-10 F7：工作区外的只读访问（按目录记忆），同样只由 ApprovalScope 产出。
+            ToolCatalog.Approval.SHELL_READ,
         )
         val bad = ToolCatalog.tools.mapNotNull { it.approval }.filter { it !in allowed }
         expect(bad.isEmpty(), "所有审批键都在 Approval 词表内", { bad.toString() })

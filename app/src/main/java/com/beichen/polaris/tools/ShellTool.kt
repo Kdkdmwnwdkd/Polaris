@@ -166,7 +166,11 @@ class ShellRunTool(
         // 同一条 `ls`/`cat` 能看到的范围完全不同——提权这件事本身就必须过一次人。
         val identity = args["identity"]?.primOrNull()?.contentOrNull?.trim()
         if (!identity.isNullOrEmpty() && identity != "user") return true
-        return ShellCommandRules.needsApproval(command)
+        if (ShellCommandRules.needsApproval(command)) return true
+        // F7 路径边界：只读命令本来不问，但 `cat /sdcard/DCIM/…` 把 read_file 的
+        // 工作区沙箱整条绕开（容器把 /sdcard bind 进来，调试通道以 uid 2000 跑）。
+        // 读受保护目录时过一次人，粒度按目录记（见 ApprovalScope）。
+        return ShellCommandRules.sensitiveReadRoot(command) != null
     }
 
     override suspend fun execute(args: JsonObject): ToolResult {

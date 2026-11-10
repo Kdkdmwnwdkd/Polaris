@@ -20,6 +20,12 @@ package com.beichen.polaris.core.agent
  * `uniq a.txt b.txt`（第二个参数是输出文件）都是披着只读外衣的写操作。
  * 而 `$(...)`、反引号、`<(...)` 可以在一条「看起来只读」的命令里执行任意东西，
  * 只要出现就必须问。
+ *
+ * ## 第三个问题：读的是谁的文件
+ *
+ * 「只读」不等于「无害」：`cat /sdcard/DCIM/x.jpg` 完全只读，但它把文件工具的
+ * 工作区沙箱整条绕开了。所以本文件还回答 [sensitiveReadRoot]——这一条不决定
+ * 「要不要问」（只读命令照旧不问），而是决定「问的时候按什么粒度记住」。
  */
 object ShellCommandRules {
 
@@ -159,6 +165,109 @@ object ShellCommandRules {
             "cmd" -> words.any { it == "wipe" || it == "delete" }
             else -> false
         }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 路径边界：只读命令读的是不是「工作区以外」的用户数据                    */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * 受保护的读目录：共享存储（相册 / 下载 / 微信目录）与其它应用的数据目录。
+     *
+     * ## 为什么要有这一档
+     *
+     * 文件工具（`read_file` / `write_file`）被 [com.beichen.polaris.core.workspace.PathGuard]
+     * 锁在工作区里，但 `shell_run` 里的 `cat` 是**整条绕过**：容器把 `/sdcard` 直接
+     * bind 进去（`-b /sdcard`），无线调试 / Shizuku 以 uid 2000 跑，本机 shell 也照样能读。
+     * 于是「工作区沙箱」只对文件工具成立，对 shell 是句空话——
+     * 一条提示注入就能让 Agent `cat /sdcard/DCIM/…`，把相册读进上下文，
+     * 再经模型自身的通道发出去（读是 Agent 的本职，这一层拦不住也不该拦）。
+     *
+     * 拦截点只能是**读的那一刻**：让用户看见「要读相册了」，而不是事后发现。
+     * 判定放在审批层而不是后端里，是因为它要覆盖 proot / 无线调试 / Shizuku / 本机
+     * 四条通道——那四条通道的启动方式各不相同，但审批链只有一条。
+     *
+     * 尺度：只收**用户数据**所在的根。`/proc`、`/sys`、`/system`、`/data/local/tmp`
+     * 这类读起来不泄露用户内容的位置一律不收，避免把「看一眼 CPU 型号」也变成弹窗。
+     */
+    private val PROTECTED_READ_ROOTS: List<String> = listOf(
+        "/sdcard", "/storage", "/mnt/media_rw", "/mnt/user", "/mnt/runtime",
+        "/data/media", "/data/data", "/data/user", "/data/misc", "/data/system", "/data/app",
+    )
+
+    /**
+     * 这条命令读的是不是受保护目录；返回**同意粒度**（见 [consentScope]），否则 null。
+     *
+     * 只看**只读段**里的**绝对路径**：写命令本来就要审批（且多半不可记忆），
+     * 相对路径落在 cwd 里（本机=filesDir、容器=/root），都不构成「绕过工作区」——
+     * 唯一能越界的写法就是写死一个绝对路径。
+     *
+     * 注意这**不是**「要不要弹窗」的完整判据：`cat /sdcard/x > out` 这种带重定向的命令
+     * 由 [isMemorizable] 判成不可记忆，走的是「每次都问」那一档；本函数只回答
+     * 「它在读哪个受保护目录」，供审批链生成**按目录**的授权键。
+     */
+    fun sensitiveReadRoot(command: String): String? {
+        if (command.isBlank()) return null
+        for (seg in segments(command)) {
+            if (!isReadOnly(seg)) continue
+            for (token in seg.split(Regex("\\s+"))) {
+                val raw = absolutePathIn(token) ?: continue
+                val normalized = normalizeAbsolute(raw) ?: continue
+                val root = PROTECTED_READ_ROOTS.firstOrNull {
+                    normalized == it || normalized.startsWith("$it/")
+                } ?: continue
+                return consentScope(normalized, root)
+            }
+        }
+        return null
+    }
+
+    /**
+     * 从 argv 里一枚 token 取出绝对路径；不是绝对路径返回 null。
+     *
+     * 处理的三种写法都是真机上常见的：`/sdcard/a`、`"/sdcard/My Files/a.jpg"`（引号被
+     * 分词留下）、`--file=/sdcard/a`（长选项带值）。
+     */
+    private fun absolutePathIn(token: String): String? {
+        var t = token.trim().trimEnd(',', ';', ')', ']', '}')
+        t = t.trim('"', '\'')
+        if (t.startsWith("--")) {
+            val eq = t.indexOf('=')
+            if (eq < 0) return null
+            t = t.substring(eq + 1).trim('"', '\'')
+        }
+        return t.takeIf { it.startsWith("/") }
+    }
+
+    /**
+     * 规范化绝对路径：折叠 `.` / `..` 与重复分隔符。
+     *
+     * 必须做，否则 `cat /sdcard/../data/data/x` 会被当成 `/sdcard` 下的读——
+     * 授权键按字面量算，用户同意的是「相册」，实际读的却是别的应用的私有目录。
+     */
+    private fun normalizeAbsolute(path: String): String? {
+        val parts = ArrayDeque<String>()
+        for (piece in path.split('/')) {
+            when (piece) {
+                "", "." -> Unit
+                ".." -> if (parts.isNotEmpty()) parts.removeLast()
+                else -> parts.addLast(piece)
+            }
+        }
+        return if (parts.isEmpty()) null else "/" + parts.joinToString("/")
+    }
+
+    /**
+     * 同意粒度：受保护根 + **第一层子目录**（`/sdcard/DCIM/a.jpg` → `/sdcard/DCIM`）。
+     *
+     * 比文件粒度粗一档是刻意的：用户勾「不再询问」时想要的是「这个目录里的东西别问我」，
+     * 按文件记会让「统计整个下载目录」变成十几次弹窗，最后又训练出闭眼点允许的习惯。
+     * 粗到根本身（`/sdcard`）则不行——那等于一次点击放行整个相册。
+     */
+    private fun consentScope(normalized: String, root: String): String {
+        if (normalized == root) return root
+        val first = normalized.removePrefix("$root/").substringBefore('/')
+        return if (first.isEmpty()) root else "$root/$first"
     }
 
     /* ------------------------------------------------------------------ */
