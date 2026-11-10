@@ -33,7 +33,7 @@ import kotlin.coroutines.resume
  * - **完全离线**：不上传图片，不产生网络请求。
  * - 两个来源：不传 path → 无障碍截当前屏（复用 W-12 唯一截图通道）；传 path → 读工作区图片。
  *
- * 只读：读图/截图无副作用。
+ * 只读：读图/截图无副作用。但「读的是谁的画面」要过一次人，见 [needsApprovalFor]。
  */
 class OcrTool(
     private val workspace: File,
@@ -57,6 +57,19 @@ class OcrTool(
 
     /** 只读：读取画面内容，不改变设备状态。 */
     override val readOnly = true
+
+    /**
+     * 审计 F9b：不传 `path` 时截当前屏——这**就是** `ui_screenshot` 做的那件事，
+     * 只是产出从图片变成了文本。两个工具两种待遇，等于给审批留了一条后门：
+     * 用户拒了截图，模型改用 OCR 就能拿到同样的内容，而且纯文本更容易随下一次请求外发。
+     *
+     * 归组与 `ui_screenshot` 共用（`Approval.UI_SCREENSHOT`）：用户同意的是「读这块屏幕」，
+     * 不是「用某个特定工具读这块屏幕」——按工具分档只会让同一个动作问两遍。
+     *
+     * 传了 `path` 不问：读的是工作区里的文件，边界由 [PathGuard] 管，与 `read_file` 同一档。
+     */
+    override fun needsApprovalFor(args: JsonObject): Boolean =
+        args["path"]?.primOrNull()?.contentOrNull?.trim().isNullOrEmpty()
 
     override suspend fun execute(args: JsonObject): ToolResult = withContext(Dispatchers.IO) {
         val path = args["path"]?.primOrNull()?.contentOrNull?.trim().orEmpty()
