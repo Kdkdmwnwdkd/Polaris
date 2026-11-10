@@ -25,6 +25,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.mozilla.javascript.ClassShutter
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
