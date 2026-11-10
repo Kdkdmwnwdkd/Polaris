@@ -163,7 +163,11 @@ object ToolCatalog {
         // 前台应用只给包名，不含内容。隐私度与通知差一个量级，并进同一档只会多一次无意义弹窗。
         CatalogTool("device_foreground_app", "device", Capability.DANGEROUS),
         // ── media：图片识别与语音播报
-        CatalogTool("ocr_image", "media", Capability.PRIVILEGED),
+        // 审计 F9b：不传 path 时它截当前屏再识别——和 ui_screenshot 是同一个动作，
+        // 只是产出从图片变成文本。共用 UI_SCREENSHOT 档：用户同意的是「读这块屏幕」，
+        // 不是「用某个特定工具读」；分成两档只会让同一个动作问两遍。
+        // 传了 path 则由工具自己放行（走 PathGuard，与 read_file 同一档）。
+        CatalogTool("ocr_image", "media", Capability.PRIVILEGED, Approval.UI_SCREENSHOT),
         // 不带 approval：朗读是用户明说「念给我听」才发生的动作，不是 Agent 自作主张的
         // 危险操作；每次弹窗只会训练用户闭眼点允许。归组键只服务于弹窗文案，
         // 不弹窗的工具填了就是死元数据（见 ApprovalGroupingVerification 的 C13）。

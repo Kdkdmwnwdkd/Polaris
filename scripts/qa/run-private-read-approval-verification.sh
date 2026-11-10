@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# F9「读用户私有数据的工具零审批」验证（剪贴板 / 通知）。
+# F9「读用户私有数据的工具零审批」验证（剪贴板 / 通知 / 截屏 OCR）。
 #
-# [行为] 编译真实的 ApprovalScope / ApprovalGrouping / ToolCatalog 跑 18 条断言：
+# [行为] 编译真实的 ApprovalScope / ApprovalGrouping / ToolCatalog 跑 23 条断言：
 #        剪贴板读取（含缺省与大小写）、写入不问、通知读取要问、两档互不放行、
-#        勾选框文案，以及四条「既有授权不能顺带放行」的不变量。
-# [接线] 两个工具类拖 Android（Context / org.json），只能静态断言：
-#        它们真的覆盖了 needsApproval(For)，目录里真的标了 PRIVATE_READ，归组真的有文案。
+#        勾选框文案、读屏的第二个入口（ocr_image 与 ui_screenshot 同档），
+#        以及四条「既有授权不能顺带放行」的不变量。
+# [接线] 三个工具类拖 Android（Context / org.json），只能静态断言：
+#        它们真的覆盖了 needsApproval(For)，目录里真的标了归组键，归组真的有文案。
 #        判据写得再对，工具不接就是白写——这正是这条缺陷的形态（工具从来没问过）。
 #
 # 为什么值得单独一个 runner：这两个工具没有「路径」可判，PathGuard 一类判据够不着；
@@ -139,6 +140,25 @@ if grep -q 'GROUP_PRIVATE_READ ->' "$GROUPING"; then
   w_good "W5 归组有中文文案"
 else
   w_bad "W5 ApprovalGrouping 没有 private_read 的文案"
+fi
+
+OCR_TOOL=app/src/main/java/com/beichen/polaris/automation/OcrTool.kt
+
+# W6（F9b）：ocr_image 不传 path 时截当前屏——这个分支必须自己问，否则「拒了截图
+# 就改用 OCR」是一条现成的侧门。光有签名不算数：判据里必须真的看 path，
+# 否则一个恒 false 的实现照样把侧门留着（这正是「签名对、语义空」的老毛病）。
+if grep -A2 'override fun needsApprovalFor(args: JsonObject): Boolean' "$OCR_TOOL" | grep -q 'args\["path"\]'; then
+  w_good "W6 OcrTool 按 path 是否为空决定要不要问"
+else
+  w_bad "W6 OcrTool 没按 path 判定 —— 截屏 OCR 仍然零审批"
+fi
+
+# W7（F9b）：光问还不够，要落在**截图那一档**。落在私有数据档会让同一个动作
+# 在不同工具名下问两遍；落空（没标归组）则退化成裸键 ocr_image。
+if grep -q 'CatalogTool("ocr_image", "media", Capability.PRIVILEGED, Approval.UI_SCREENSHOT)' "$CATALOG"; then
+  w_good "W7 ocr_image 与 ui_screenshot 共用一个审批档"
+else
+  w_bad "W7 ocr_image 没标 UI_SCREENSHOT —— 读屏被拆成两档，同一个动作要问两遍"
 fi
 
 total_pass=$((jp + gp))

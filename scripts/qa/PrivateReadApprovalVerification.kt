@@ -21,6 +21,16 @@
  *  - F7 按**目录**（同意读 `/sdcard/DCIM` 不等于同意读 `/data/data`）；
  *  - F9 按**工具**（同意读剪贴板不等于同意读通知，后者范围大到用户很难想象）。
  *
+ * ## F9b：读屏的第二个入口
+ *
+ * 同一族缺陷的另一种形态：`ocr_image` 不传 `path` 时截当前屏再识别——和
+ * `ui_screenshot` 是同一个动作，只是产出从图片变成文本。改之前它零审批，
+ * 于是「用户拒了截图」这条防线上留了一道侧门：模型改用 OCR 就能拿到同样的内容，
+ * 而且纯文本更容易随下一次请求外发。
+ *
+ * 修法与 F9 同构：**归组按动作，不按工具**（两者共用 `ui_screenshot` 档）。
+ * 分成两档的后果不是更安全，而是同一个动作在不同的工具名下被问两遍。
+ *
  * ## 覆盖
  *  A. 剪贴板读取：默认（缺 action）与显式 get 都要问，可记忆，键带工具名
  *  B. 剪贴板写入（set）：不问——它把内容**放到**用户手上，没有把秘密送出去
@@ -28,6 +38,7 @@
  *  D. 分档隔离：剪贴板与通知的键不同，同意一个不放行另一个
  *  E. 文案：勾选框要写清是「读剪贴板」还是「读通知」
  *  F. 不变量：不会被 shell / shell_read / network 的既有授权顺带放行
+ *  G. 读屏的第二个入口：`ocr_image` 不传 path 时截当前屏，必须与 `ui_screenshot` 同档
  *
  * 运行：scripts/qa/run-private-read-approval-verification.sh
  */
@@ -198,6 +209,49 @@ private fun testInvariants() {
     }
 }
 
+/* ------------------------------ G 读屏入口 -------------------------------- */
+
+/** 一次「截当前屏」的授权语义：ocr_image 不传 path 就等同于 ui_screenshot。 */
+private fun ocrScreen() = ApprovalScope.of("ocr_image", buildJsonObject { })
+private fun screenshot() = ApprovalScope.of("ui_screenshot", buildJsonObject { })
+
+private fun testSecondScreenReader() {
+    check("G1 ocr_image 截屏（不传 path）与 ui_screenshot 同档") {
+        // 分档的判据是「读的是不是这块屏幕」，不是「用哪个工具读」。
+        eq(ocrScreen().key, screenshot().key, "OCR 截屏落到截图档")
+    }
+
+    check("G2 同意过截图之后 OCR 不再问（同一个动作只该问一次）") {
+        expect(ApprovalScope.allows(ocrScreen(), setOf(screenshot().key))) {
+            "读这块屏幕就是读这块屏幕，不因为换成 OCR 再问一遍"
+        }
+        expect(ApprovalScope.allows(screenshot(), setOf(ocrScreen().key))) {
+            "反向也必须成立：先同意 OCR 截屏，之后 ui_screenshot 不该再问"
+        }
+    }
+
+    check("G3 屏幕授权不放行剪贴板与通知（读屏 ≠ 读私有数据）") {
+        val screen = ocrScreen()
+        expect(!ApprovalScope.allows(clip("get"), setOf(screen.key))) {
+            "同意读屏不能顺带放行读剪贴板"
+        }
+        expect(!ApprovalScope.allows(notify(), setOf(screen.key))) {
+            "同意读屏不能顺带放行读通知"
+        }
+    }
+
+    check("G4 弹窗文案落在「屏幕」上，不是裸工具名") {
+        val label = ocrScreen().label
+        expect(label.indexOf("屏幕") >= 0 || label.indexOf("截图") >= 0) {
+            "文案要让用户知道同意的是「读这块屏幕」，实际：$label"
+        }
+    }
+
+    check("G5 截屏授权可记忆（每截一次弹一次等于训练用户闭眼点允许）") {
+        eq(ocrScreen().memorizable, true, "同一次会话里截屏应可记住")
+    }
+}
+
 /* --------------------------------- 入口 ----------------------------------- */
 
 fun main() {
@@ -214,6 +268,8 @@ fun main() {
     testLabels()
     println("[F] 不变量")
     testInvariants()
+    println("[G] 读屏的第二个入口")
+    testSecondScreenReader()
     println()
     println("$passed 通过 / ${failures.size} 失败")
     if (failures.isNotEmpty()) {
