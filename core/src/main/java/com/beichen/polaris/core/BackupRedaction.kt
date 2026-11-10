@@ -8,8 +8,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import com.beichen.polaris.core.llm.primOrNull
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * 备份件脱敏：**密钥不写进导出包**，恢复时沿用本机已有的。
@@ -68,7 +68,7 @@ object BackupRedaction {
                 }
                 JsonObject(cfg + ("customHeaders" to JsonObject(cleaned)))
             }
-            val safeBody = redactBody(safeCfg["customBody"]?.jsonPrimitive?.contentOrNull)
+            val safeBody = redactBody(safeCfg["customBody"]?.primOrNull()?.contentOrNull)
             val outCfg = JsonObject(
                 (if (safeBody == null) safeCfg else JsonObject(safeCfg + ("customBody" to JsonPrimitive(safeBody))))
                     + ("apiKey" to JsonPrimitive(CLEARED))
@@ -125,7 +125,7 @@ object BackupRedaction {
         // id → 本机该档案的 config；Key 与敏感头的回填都查这张表
         val localConfigById = existing.mapNotNull { el ->
             val obj = el as? JsonObject ?: return@mapNotNull null
-            val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val id = obj["id"]?.primOrNull()?.contentOrNull ?: return@mapNotNull null
             val cfg = obj["config"] as? JsonObject ?: return@mapNotNull null
             id to cfg
         }.toMap()
@@ -133,15 +133,15 @@ object BackupRedaction {
         val out = incoming.map { el ->
             val obj = el as? JsonObject ?: return@map el
             val cfg = obj["config"] as? JsonObject ?: return@map obj
-            val id = obj["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val id = obj["id"]?.primOrNull()?.contentOrNull.orEmpty()
             val local = localConfigById[id]
 
             var next = cfg
 
             // Key：包里为空才回填（包里的非空值来自老版本，照旧覆盖）
-            val ownKey = cfg["apiKey"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val ownKey = cfg["apiKey"]?.primOrNull()?.contentOrNull.orEmpty()
             if (ownKey.isBlank()) {
-                val localKey = local?.get("apiKey")?.jsonPrimitive?.contentOrNull.orEmpty()
+                val localKey = local?.get("apiKey")?.primOrNull()?.contentOrNull.orEmpty()
                 if (localKey.isNotBlank()) next = JsonObject(next + ("apiKey" to JsonPrimitive(localKey)))
             }
 
@@ -150,18 +150,18 @@ object BackupRedaction {
             val localHeaders = local?.get("customHeaders") as? JsonObject
             if (headers != null && localHeaders != null) {
                 val filled = headers.mapValues { (name, value) ->
-                    val own = value.jsonPrimitive.contentOrNull.orEmpty()
+                    val own = value.primOrNull()?.contentOrNull.orEmpty()
                     if (own.isNotBlank() || !isSensitiveHeader(name)) return@mapValues value
-                    val localValue = localHeaders[name]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val localValue = localHeaders[name]?.primOrNull()?.contentOrNull.orEmpty()
                     if (localValue.isBlank()) value else JsonPrimitive(localValue)
                 }
                 next = JsonObject(next + ("customHeaders" to JsonObject(filled)))
             }
 
             // 请求体顶层的敏感键同样回填（与头同一套规则，见 redactBody 的边界说明）
-            val localBody = local?.get("customBody")?.jsonPrimitive?.contentOrNull
+            val localBody = local?.get("customBody")?.primOrNull()?.contentOrNull
             if (localBody != null) {
-                val ownBody = next["customBody"]?.jsonPrimitive?.contentOrNull
+                val ownBody = next["customBody"]?.primOrNull()?.contentOrNull
                 val filledBody = fillBody(ownBody, localBody)
                 if (filledBody != null) {
                     next = JsonObject(next + ("customBody" to JsonPrimitive(filledBody)))
@@ -184,9 +184,9 @@ object BackupRedaction {
 
         var changed = false
         val out = own.mapValues { (name, value) ->
-            val ownValue = value.jsonPrimitive.contentOrNull.orEmpty()
+            val ownValue = value.primOrNull()?.contentOrNull.orEmpty()
             if (ownValue.isNotBlank() || !isSensitiveHeader(name)) return@mapValues value
-            val localValue = local[name]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val localValue = local[name]?.primOrNull()?.contentOrNull.orEmpty()
             if (localValue.isBlank()) return@mapValues value
             changed = true
             JsonPrimitive(localValue)
@@ -244,16 +244,16 @@ object BackupRedaction {
             val localById = existing[profileId].orEmpty()
                 .mapNotNull { el ->
                     val s = el as? JsonObject ?: return@mapNotNull null
-                    val id = s["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                    val k = s["key"]?.jsonPrimitive?.contentOrNull
+                    val id = s["id"]?.primOrNull()?.contentOrNull ?: return@mapNotNull null
+                    val k = s["key"]?.primOrNull()?.contentOrNull
                     if (k.isNullOrBlank()) null else id to k
                 }.toMap()
 
             slots.map { el ->
                 val slot = el as? JsonObject ?: return@map el
-                val own = slot["key"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val own = slot["key"]?.primOrNull()?.contentOrNull.orEmpty()
                 if (own.isNotBlank()) return@map slot
-                val id = slot["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val id = slot["id"]?.primOrNull()?.contentOrNull.orEmpty()
                 val inherited = localById[id] ?: return@map slot
                 JsonObject(slot + ("key" to JsonPrimitive(inherited)))
             }

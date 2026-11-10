@@ -13,6 +13,8 @@ source "$ROOT/scripts/qa/lib/deps.sh"
 
 SRC_CORE=core/src/main/java/com/beichen/polaris
 IMPL="$SRC_CORE/core/BackupRedaction.kt"
+# 硬转换走 JsonSafe（S4 守卫要求），所以它也是被测源的一部分
+JSONSAFE="$SRC_CORE/core/llm/JsonSafe.kt"
 HARNESS=scripts/qa/BackupRedactionVerification.kt
 BACKUP_USE=app/src/main/java/com/beichen/polaris/ui/BackupUseCase.kt
 CONFIG_STORE="$SRC_CORE/core/ConfigStore.kt"
@@ -40,7 +42,7 @@ need "kotlin-stdlib" "$STDLIB"
 need "kotlinx-serialization-json-jvm" "$SER_JSON"
 need "kotlinx-serialization-core-jvm" "$SER_CORE"
 
-for f in "$IMPL" "$HARNESS" "$BACKUP_USE" "$CONFIG_STORE"; do
+for f in "$IMPL" "$JSONSAFE" "$HARNESS" "$BACKUP_USE" "$CONFIG_STORE"; do
   [ -f "$f" ] || { echo "FAIL 缺少源文件 $f（无法判定，视为失败）"; exit 1; }
 done
 
@@ -54,7 +56,7 @@ compile_and_run() {
     -no-stdlib -no-reflect \
     -cp "$RUNTIME" \
     -d "$OUT" -nowarn \
-    "$IMPL" "$HARNESS" 2>&1 | grep -v '^warning:' | head -30
+    "$IMPL" "$JSONSAFE" "$HARNESS" 2>&1 | grep -v '^warning:' | head -30
   [ -d "$OUT/com" ] || return 1
   java -cp "$OUT:$RUNTIME" BackupRedactionVerificationKt
 }
