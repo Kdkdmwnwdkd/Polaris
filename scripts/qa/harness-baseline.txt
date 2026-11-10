@@ -223,4 +223,19 @@
 #   退出码均为 1。
 #   纯函数零依赖，沙箱与 CI 都能真跑，不 SKIP。
 
-130
+# 2026-11-10：130 → 131（审计 F10「本地 zip 导入没有体积上限」新增
+#   run-skill-package-limit-verification.sh）。
+#   市场的下载路径早就有 8MB 上限、20s 读超时、60s 整通上限；本地导入却是
+#   `URL(url).openStream().readBytes()` 与 `openInputStream(uri).readBytes()`——
+#   没有上限。`OutOfMemoryError` 是 Error 不是 Exception，runCatching 抓不住，
+#   于是「导入失败」直接变成进程崩溃。同一个动作两条入口两套规矩。
+#   本 runner 验：readCapped 的边界（== 上限放行、+1 字节中止、空流、分块无长度）、
+#   不替调用方关流、内容原样；requireWithin 的预判（-1 未知长度不算超限）；上限值；
+#   面向用户的消息。
+#   13 条行为断言 + 6 条接线断言（URL 不再自己开流、SAF 走 readCapped、
+#   installZip 有兜底、fetchPackage 先过协议白名单、两处上限相等）。
+#   变异验证：放宽上限一倍 → 2 条变红；删掉兜底与协议校验 → 2 条变红；
+#   上限改成 4MB → 1 条变红；退出码均为 1。
+#   纯函数零依赖（只用 java.io），沙箱与 CI 都能真跑，不 SKIP。
+
+131

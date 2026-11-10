@@ -109,6 +109,7 @@ import com.beichen.polaris.skill.SkillDeclarations
 import com.beichen.polaris.skill.SkillLoader
 import com.beichen.polaris.skill.ImportedSkillRepository
 import com.beichen.polaris.skill.SkillManifest
+import com.beichen.polaris.skill.SkillPackage
 import com.beichen.polaris.skill.createUseSkillTool
 import com.beichen.polaris.tools.AppInstallTool
 import com.beichen.polaris.tools.AppUninstallTool
@@ -239,7 +240,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import java.io.File
-import java.net.URL
 import java.util.UUID
 
 /** `SkillUiInfo` / `SkillToolInfo` 已搬到 SkillUi.kt（纯数据，不必占这个冻结文件的行数）。 */
@@ -3182,9 +3182,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     override fun importFromUrl(url: String) {
         viewModelScope.launch {
             val result = runCatching {
-                val bytes = withContext(Dispatchers.IO) {
-                    URL(url).openStream().use { it.readBytes() }
-                }
+                // 审计 F10：原先 `URL(url).openStream().readBytes()` 无上限（OOM 抓不住、直接崩进程）、
+                // 无超时、且绕开统一 HTTP 客户端。改走市场那条：协议白名单 + 8MB + 20s/60s。
+                val bytes = market.fetchPackage(url).getOrThrow()
                 importRepo.installZip(bytes).getOrThrow()
             }.onFailure { if (it is CancellationException) throw it }
             // onFailure 里重抛取消：`withContext` 是挂起点，ViewModel 销毁/用户离开时抛的是
@@ -3236,10 +3236,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     override fun importFromUri(uri: Uri) {
         viewModelScope.launch {
             val result = runCatching {
-                val bytes = withContext(Dispatchers.IO) {
-                    app.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                        ?: throw IllegalArgumentException("无法读取所选文件")
-                }
+                // 审计 F10：content:// 常无 Content-Length，必须边读边计数；`readBytes()` 会整份铺进内存。
+                val stream = app.contentResolver.openInputStream(uri)
+                    ?: throw IllegalArgumentException("无法读取所选文件")
+                val bytes = withContext(Dispatchers.IO) { stream.use { SkillPackage.readCapped(it, "所选文件") } }
                 importRepo.installZip(bytes).getOrThrow()
             }.onFailure { if (it is CancellationException) throw it }
             if (result.isFailure) {

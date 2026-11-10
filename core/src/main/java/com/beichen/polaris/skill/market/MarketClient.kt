@@ -75,6 +75,24 @@ class MarketClient(
         }
     }
 
+    /**
+     * 按用户给的地址取一个技能包（审计 F10）。
+     *
+     * 存在的意义是**让本地「从 URL 导入」不再自己开一条网络路径**。它原来写的是
+     * `URL(url).openStream().readBytes()`：没有体积上限（OOM 崩进程）、没有超时
+     * （连接挂住只能杀 App）、也不走统一 HTTP 客户端。市场安装走这里、本地导入走那条，
+     * 同一个动作两套规矩——和「F8 判定成立但告知不成立」是同一类漂移。
+     *
+     * 不复用 [downloadPlugin]：那条要对索引声明的 `sha256` 校验，用户手输的地址没有哈希可对。
+     */
+    suspend fun fetchPackage(url: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        runCatching {
+            val clean = MarketRules.validHttpUrl(url)
+                ?: throw IllegalArgumentException("地址必须是 http/https：${url.take(60)}")
+            getBytes(clean, MAX_PACKAGE_BYTES)
+        }
+    }
+
     /* ------------------------------ 内部实现 ------------------------------ */
 
     private fun getText(url: String, limit: Int): String =
