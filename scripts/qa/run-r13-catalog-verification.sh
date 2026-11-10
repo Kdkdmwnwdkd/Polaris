@@ -119,7 +119,14 @@ for dp, _, fs in os.walk(src):
         ms = list(re.finditer(r'override val name\s*=\s*"([a-z0-9_]+)"', t))
         for i, m in enumerate(ms):
             end = ms[i + 1].start() if i + 1 < len(ms) else len(t)
-            if re.search(r'override val needsApproval\s*=\s*true', t[m.end():end]):
+            seg = t[m.end():end]
+            # 两种写法都算「会弹窗」：
+            #  - `override val needsApproval = true`（含显式 `: Boolean =` 类型标注）；
+            #  - `override fun needsApprovalFor(...)`（按入参决定，shell_run / clipboard）。
+            # 只认第一种会漏掉后者——审计 F9 的 clipboard 正是这么漏掉的：它确实会弹窗，
+            # 但 B4 看不见它，于是「弹窗文案退化成裸工具名」这条守卫对它完全失效。
+            if re.search(r'override val needsApproval\s*(:\s*Boolean\s*)?=\s*true', seg) \
+               or re.search(r'override fun needsApprovalFor\s*\(', seg):
                 need.append(m.group(1))
 cat = open(catalog, encoding="utf-8").read()
 have = set(re.findall(r'CatalogTool\("([a-z0-9_]+)"[^)]*Approval\.\w+', cat))

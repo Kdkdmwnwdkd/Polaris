@@ -57,6 +57,18 @@ object ApprovalScope {
     /** 网络外发通道（审计 F1）：唯一能把任意内容发到任意地址的工具。 */
     private const val NETWORK_TOOL = "http_request"
 
+    /** 剪贴板工具（审计 F9）：`get` 是读取，`set` 是写入。 */
+    private const val CLIPBOARD_TOOL = "clipboard"
+
+    /** 通知读取工具（审计 F9）。 */
+    private const val NOTIFICATIONS_TOOL = "device_notifications"
+
+    /** 读用户私有数据的工具。两者都**没有路径**可判——内容本来就在内存里。 */
+    private val PRIVATE_READ_TOOLS = setOf(CLIPBOARD_TOOL, NOTIFICATIONS_TOOL)
+
+    /** 剪贴板写入不算隐私读：它把内容**放到**用户手上，不把用户的秘密带进上下文。 */
+    private const val CLIPBOARD_SET = "set"
+
     /** MCP 工具命名前缀，见 [com.beichen.polaris.core.mcp.mcpWireName]。 */
     private const val MCP_PREFIX = "mcp_"
 
@@ -73,7 +85,8 @@ object ApprovalScope {
      *  4. 不可逆命令 → 永不记忆；
      *  5. 首词安全但整体不可记忆（包装器 / 命令替换 / 重定向 / 解释器 / `cp`）→ 永不记忆；
      *  6. 读工作区外的受保护目录（`cat /sdcard/DCIM/…`）→ 按**目录**记忆，换目录重问；
-     *  7. 其余 → 可记忆（`npm install`、`gradle build`、`ls`…）。
+     *  7. 读用户私有数据（剪贴板 / 通知）→ 按**工具**记忆，换工具重问；
+     *  8. 其余 → 可记忆（`npm install`、`gradle build`、`ls`…）。
      */
     fun of(toolName: String, args: JsonObject): ApprovalGrant {
         val group = ApprovalGrouping.groupOf(toolName)
@@ -94,6 +107,20 @@ object ApprovalScope {
 
         if (toolName.startsWith(MCP_PREFIX)) {
             return ApprovalGrant("mcp:$toolName", label, memorizable = false)
+        }
+
+        // 审计 F9：剪贴板与通知没有「路径」可判——内容本来就在内存里，PathGuard 一类
+        // 判据够不着。能做的只有让用户看见。粒度按工具：同意读剪贴板不等于同意读通知
+        // （一个是「我刚复制的那段」，一个是「此刻手机在响什么」，后者的范围用户很难想象）。
+        if (toolName in PRIVATE_READ_TOOLS) {
+            val isRead = toolName != CLIPBOARD_TOOL || actionOf(args) != CLIPBOARD_SET
+            if (isRead) {
+                return ApprovalGrant(
+                    key = "${ApprovalGrouping.GROUP_PRIVATE_READ}:$toolName",
+                    label = privateReadLabel(toolName),
+                    memorizable = true
+                )
+            }
         }
 
         if (toolName !in SHELL_TOOLS) return ApprovalGrant(group, label, memorizable = true)
@@ -146,6 +173,17 @@ object ApprovalScope {
         }
 
         return ApprovalGrant(group, label, memorizable = true)
+    }
+
+    /** `action` 参数（小写）；缺省按工具自身语义处理。 */
+    private fun actionOf(args: JsonObject): String? =
+        args["action"]?.primOrNull()?.contentOrNull?.trim()?.lowercase()
+
+    /** 弹窗里的类别名。写具体是哪个工具——用户要知道自己放行的是剪贴板还是通知。 */
+    private fun privateReadLabel(toolName: String): String = when (toolName) {
+        CLIPBOARD_TOOL -> "读取剪贴板"
+        NOTIFICATIONS_TOOL -> "读取通知"
+        else -> "读取本机数据"
     }
 
     /** 从 url 参数取主机名；解析失败返回 null（退化为整组记忆，仍然会弹窗）。 */

@@ -429,8 +429,23 @@ class ClipboardTool(private val context: Context) : AgentTool {
     /**
      * 只读（按 roadmap 首批标注）：action=set 的剪贴板写入是本地、可逆、无破坏性的
      * 轻副作用，与文件写入不同级；如需更严格可改 false（整批含 set 时走串行）。
+     *
+     * 注意 `readOnly` 与审批是两件事：前者决定能不能并行，后者决定要不要问人。
      */
     override val readOnly = true
+
+    /**
+     * 审计 F9：`action=get` 把剪贴板内容整个读进上下文，此后它随下一次模型请求离开本机。
+     * 剪贴板里常有密码、验证码、卡号——「读」本身是 Agent 的本职，拦不住也不该拦，
+     * 能拦的只有**读的那一刻让用户看见**。
+     *
+     * `action=set` 不问：它把内容**放到**用户手上，没有把用户的秘密送出去；
+     * 而且弹窗会出现在「模型帮你复制一段文本」这种完全无害的场景里。
+     */
+    override fun needsApprovalFor(args: JsonObject): Boolean {
+        val action = args["action"]?.primOrNull()?.contentOrNull?.trim()?.lowercase()
+        return action != "set"
+    }
 
     override suspend fun execute(args: JsonObject): ToolResult = withContext(Dispatchers.IO) {
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
