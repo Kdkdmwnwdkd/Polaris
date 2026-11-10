@@ -4,7 +4,9 @@ import android.app.Application
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.StartupMark
 import com.beichen.polaris.skill.ImportedSkillRepository
+import com.beichen.polaris.skill.SkillDeclarations
 import com.beichen.polaris.skill.market.MarketClient
+import com.beichen.polaris.skill.market.MarketInstallPreview
 import com.beichen.polaris.skill.market.MarketInstallState
 import com.beichen.polaris.skill.market.MarketPlugin
 import com.beichen.polaris.skill.market.MarketRules
@@ -72,6 +74,18 @@ internal class MarketFacade(
     /** 面向用户的一行状态（成功/失败/源为空），UI 原样展示。 */
     private val _marketStatus = MutableStateFlow<String?>(null)
     val marketStatus: StateFlow<String?> = _marketStatus.asStateFlow()
+
+    /** 已下载、待用户确认的安装（非空即弹确认框）。 */
+    private val _marketPending = MutableStateFlow<MarketInstallPreview?>(null)
+    val marketPending: StateFlow<MarketInstallPreview?> = _marketPending.asStateFlow()
+
+    /**
+     * 待确认的包体（最大 8MB，与 `MarketRules.MAX_PACKAGE_BYTES` 同源）。
+     *
+     * 不放 [MarketInstallPreview] 里：data class 的 equals 对 ByteArray 是引用比较，
+     * 放进去等于每次状态重放都白持有一份 8MB 引用，而且比较结果恒不等。
+     */
+    private var pendingBytes: ByteArray? = null
 
     /**
      * 刷新期间又被要求刷新（例如「删源」触发的重刷）。
@@ -209,9 +223,15 @@ internal class MarketFacade(
      *
      * 复用 `SkillImportRepository.installZip`：解压、Zip Slip 防护、id 白名单、失败回滚、
      * **重新导入即撤销旧授权** 全部沿用既有实现——市场只负责「取包 + 校验 + 交给它」。
+     *
+     * 本方法**只下载、只校验、不落盘**：校验通过后把包体与声明挂到 [marketPending]，
+     * 由 UI 弹确认框；用户点「安装」才走 [confirmMarketInstall]。
+     * 落盘发生在用户看过 `net_hosts` 之后——否则「事先授权」只是实现上的说法。
      */
     fun installMarketPlugin(id: String) {
         if (_marketBusyId.value != null) return
+        // 已有待确认的包：先处理那一个，否则两个包的字节会互相覆盖
+        if (_marketPending.value != null) return
         val item = _marketItems.value.firstOrNull { it.plugin.id == id } ?: return
         scope.launch {
             _marketBusyId.value = id
@@ -220,12 +240,55 @@ internal class MarketFacade(
                 val bytes = marketClient.downloadPlugin(item.plugin).getOrThrow()
                 // W-48 安全边界：市场条目 id 必须与包内 skill.json 的 id 一致。
                 // 不校验的话，一个「挂着 A 的名、装着 B 的包」会覆盖已装的 B，市场还以为装的是 A。
-                val declaredId = withContext(Dispatchers.IO) { importRepo.peekSkillId(bytes) }
-                if (declaredId != item.plugin.id) {
+                val manifest = withContext(Dispatchers.IO) { importRepo.peekManifest(bytes) }
+                val declaredId = manifest?.id?.takeIf { it.isNotBlank() }
+                if (manifest == null || declaredId != item.plugin.id) {
                     throw IllegalStateException(
                         "包内技能 id（${declaredId ?: "无法读取"}）与市场条目（${item.plugin.id}）不一致，已拒绝安装"
                     )
                 }
+                val declaration =
+                    SkillDeclarations.of(manifest.net_hosts, manifest.entry, manifest.tools)
+                pendingBytes = bytes
+                _marketPending.value = MarketInstallPreview(
+                    id = item.plugin.id,
+                    name = item.plugin.name.ifBlank { manifest.name },
+                    version = item.plugin.version,
+                    declaration = declaration,
+                    hostLine = SkillDeclarations.hostLine(declaration),
+                    warnings = SkillDeclarations.warnings(declaration)
+                )
+                _marketStatus.value = "「${item.plugin.name}」已下载，确认声明后才会安装"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                AgentLogger.e("Market", "下载 ${item.plugin.id} 失败", e)
+                _marketStatus.value = "下载失败：${e.message ?: "未知错误"}"
+            } finally {
+                _marketBusyId.value = null
+            }
+        }
+    }
+
+    /**
+     * 用户确认安装 [marketPending] 里那个包（此时才解压落盘）。
+     *
+     * 包体取自 [pendingBytes] 而不是重新下载：重新下载会引入一次 TOCTOU——
+     * 用户确认的是「他看过声明的那一份」，再取一次可能已经不是同一份。
+     */
+    fun confirmMarketInstall() {
+        val preview = _marketPending.value ?: return
+        val bytes = pendingBytes
+        if (bytes == null) {
+            // 状态不一致（理论上不可达）：宁可让用户重来，也不要静默装一个没声明过的包
+            cancelMarketInstall()
+            return
+        }
+        if (_marketBusyId.value != null) return
+        scope.launch {
+            _marketBusyId.value = preview.id
+            _marketStatus.value = "正在安装「${preview.name}」…"
+            try {
                 withContext(Dispatchers.IO) {
                     importRepo.installZip(bytes).getOrThrow()
                     // reloadSkills 内部会扫 filesDir 下的技能目录，必须留在 IO 线程
@@ -233,19 +296,29 @@ internal class MarketFacade(
                 }
                 refreshMarketInstallState()
                 _marketStatus.value =
-                    "已安装「${item.plugin.name}」${item.plugin.version}" +
+                    "已安装「${preview.name}」${preview.version}" +
                     "（重新导入会撤销旧授权，请在技能中心重新授权）"
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                AgentLogger.e("Market", "安装 ${item.plugin.id} 失败", e)
+                AgentLogger.e("Market", "安装 ${preview.id} 失败", e)
                 _marketStatus.value = "安装失败：${e.message ?: "未知错误"}"
             } finally {
                 // 必须 finally：onSuccess 里的 reloadSkills/重排也可能抛（例如磁盘满），
                 // 漏掉复位会让 busy 永久卡住，整个市场页从此装不了任何东西。
+                pendingBytes = null
+                _marketPending.value = null
                 _marketBusyId.value = null
             }
         }
+    }
+
+    /** 放弃待确认的安装（关框等同取消）：包体立即释放，不留到下一次点击。 */
+    fun cancelMarketInstall() {
+        val preview = _marketPending.value ?: return
+        pendingBytes = null
+        _marketPending.value = null
+        _marketStatus.value = "已取消安装「${preview.name}」"
     }
 
     /** 卸载一个已装插件（只删本地目录，市场列表保留该条目）。 */

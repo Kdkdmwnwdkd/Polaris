@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -35,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.beichen.polaris.skill.market.MarketInstallPreview
 import com.beichen.polaris.skill.market.MarketInstallState
 import com.beichen.polaris.skill.market.MarketUiItem
 import com.beichen.polaris.ui.contract.SkillMarketContract
@@ -61,6 +63,7 @@ fun SkillMarketScreen(vm: SkillMarketContract) {
     val loading by vm.marketLoading.collectAsStateWithLifecycle()
     val busyId by vm.marketBusyId.collectAsStateWithLifecycle()
     val status by vm.marketStatus.collectAsStateWithLifecycle()
+    val pending by vm.marketPending.collectAsStateWithLifecycle()
 
     var sourceInput by rememberSaveable { mutableStateOf("") }
     // 市场源默认收起：首屏先给"能装什么"，配置放进去才展开（低频操作不占首屏）
@@ -249,6 +252,66 @@ fun SkillMarketScreen(vm: SkillMarketContract) {
                 confirmUninstall = null
             },
             onDismiss = { confirmUninstall = null }
+        )
+    }
+
+    // 安装确认：包已下载、校验过 id，但**还没落盘**。
+    // 这一步存在的理由：`net_hosts` 只在包内的 skill.json 里，用户在别处看不到它；
+    // 若下载完直接装，「事先授权」就只是个实现细节，用户从未同意过那些域名。
+    pending?.let { preview ->
+        AkConfirmDialog(
+            title = "安装「${preview.name}」${preview.version}",
+            message = "已下载并校验通过。确认后才会解压到本机。",
+            confirmText = if (busyId != null) "安装中…" else "安装",
+            icon = Icons.Outlined.Security,
+            onConfirm = { if (busyId == null) vm.confirmMarketInstall() },
+            onDismiss = { if (busyId == null) vm.cancelMarketInstall() },
+            details = { MarketDeclarationDetails(preview) }
+        )
+    }
+}
+
+/**
+ * 安装确认框里的「声明」区：联网域名 + 声明工具 + 会失效的写法 + 装好之后的授权状态。
+ *
+ * 四段信息的顺序按「用户此刻最该知道什么」排：先它要连哪里，再它要调什么工具，
+ * 然后是那些**看起来声明了、实际不会生效**的写法（写错 `"*"` 的技能每次都联网失败，
+ * 而运行时错误只说「不在声明范围内」），最后才是「我还能不能收回」。
+ */
+@Composable
+private fun MarketDeclarationDetails(preview: MarketInstallPreview) {
+    val d = preview.declaration
+    Column(verticalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
+        Text(
+            text = preview.hostLine,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        if (d.hosts.isNotEmpty()) {
+            Text(
+                text = d.hosts.joinToString("\n"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (d.tools.isNotEmpty()) {
+            Text(
+                text = "声明工具：" + d.tools.joinToString("、"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        preview.warnings.forEach { w ->
+            Text(
+                text = w,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+        Text(
+            text = "装好后默认禁止执行脚本；要让它联网，需在技能中心单独授权。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

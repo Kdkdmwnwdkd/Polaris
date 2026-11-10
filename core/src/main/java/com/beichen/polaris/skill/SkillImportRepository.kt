@@ -197,17 +197,26 @@ class ImportedSkillRepository(private val context: Context) {
     }
 
     /**
-     * 只读探测 zip 内声明的技能 id（不落盘、不安装）。
+     * 只读探测 zip 内的完整 manifest（不落盘、不安装）。
      *
-     * W-48：市场安装前用它校验「市场条目 id == 包内 id」。没有这道校验时，一个把
-     * `skill.json` 写成别的 id 的包会**覆盖同名的已装技能**，而市场列表还以为装的是自己那条。
+     * ## 两个用途，同一份原文
      *
-     * @return 声明的 id；找不到 skill.json / 解析失败 / 超限时返回 null（调用方按失败处理）
+     * **W-48 的 id 校验**：市场安装前比对「市场条目 id == 包内 id」。没有这道校验时，
+     * 一个把 `skill.json` 写成别的 id 的包会**覆盖同名的已装技能**，而市场列表还以为
+     * 装的是自己那条。
+     *
+     * **安装确认的声明**：`net_hosts` / `entry` / `tools` 只存在于 zip 里的 `skill.json`。
+     * 市场索引里的 `permissions` 是市场方的**营销文案**（远端可控），不能当授权依据；
+     * 用户同意的是「这个包里写的域名」，所以必须读包内原文。
+     *
+     * 两件事读的是同一份 bytes、同一处解析——原先 `peekSkillId` 只返回 id，
+     * 确认框要展示声明时又得解析一遍，等于给「同一份原文」留了两个入口。
+     *
+     * @return manifest；找不到 skill.json / 解析失败 / 超限（256KB）时返回 null（调用方按失败处理）
      */
-    fun peekSkillId(zipBytes: ByteArray): String? = runCatching {
+    fun peekManifest(zipBytes: ByteArray): SkillManifest? = runCatching {
         readZipEntry(zipBytes) { it == "skill.json" || it.endsWith("/skill.json") }
-            ?.let { json.decodeFromString<SkillManifest>(it).id }
-            ?.takeIf { it.isNotBlank() }
+            ?.let { json.decodeFromString<SkillManifest>(it) }
     }.getOrNull()
 
     /** 把 zip 整体解压到 destDir，带 Zip Slip 与 zip bomb 防护。 */

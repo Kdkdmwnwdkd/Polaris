@@ -1,6 +1,7 @@
 package com.beichen.polaris.skill.market
 
 import com.beichen.polaris.core.UiItem
+import com.beichen.polaris.skill.SkillDeclaration
 import kotlinx.serialization.Serializable
 import java.net.URI
 
@@ -97,6 +98,33 @@ data class MarketUiItem(
     /** 本机已装版本；null = 没装。 */
     val installedVersion: String?,
     val state: MarketInstallState
+)
+
+/**
+ * 一次「已下载、待确认」的市场安装。
+ *
+ * ## 为什么要有这一步
+ *
+ * 下载完直接落盘，「事先授权」就只是个说法：用户点的是「安装」按钮，从没看过包里
+ * 声明了哪些域名。[declaration] 是**包内 skill.json 的原话**（不是索引里的
+ * [MarketPlugin.permissions]——那是市场方的营销文案，远端可控，不能当授权依据）。
+ *
+ * ## 为什么包体字节不在这里
+ *
+ * data class 的 `equals` / `hashCode` 会逐元素比较 `ByteArray`（引用比较，恒不等），
+ * 而 StateFlow 每次重放都会持有一份引用。包体留在 MarketFacade 的私有字段里，
+ * 与这个对象同生同灭：确认后立刻置空，取消也不留。
+ */
+data class MarketInstallPreview(
+    val id: String,
+    val name: String,
+    val version: String,
+    /** manifest 的声明（联网域名 / 是否脚本 / 工具）。 */
+    val declaration: SkillDeclaration,
+    /** 卡片上那一行（`SkillDeclarations.hostLine` 的结果，避免 UI 与 VM 各算一遍）。 */
+    val hostLine: String,
+    /** 安装前要强调的提示（可能为空）。 */
+    val warnings: List<String>
 )
 
 /**

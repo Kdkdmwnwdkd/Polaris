@@ -80,6 +80,11 @@
 # 其中 2 行是给 ScreenHost 加参数：那个函数才持有 ConsoleScreen 的调用点，
 # 第一次提交忘了这一层，CI 直接报 Unresolved reference——静态断言抓不到的作用域问题。
 #
+# 2026-11-10 第一次**下调**（ChatViewModel 3597 → 3588）：技能声明的展示需要一个
+#   `SkillDeclaration` 字段，而 `SkillToolInfo` / `SkillUiInfo` 本来就是纯数据
+#   （不碰任何 VM 状态），搬去 ui/SkillUi.kt 后 VM 净减 9 行。这正对上那条规矩：
+#   「能靠拆文件不抬的，就别抬」——这次连抬都不用，还往回挪了一格。
+#
 # 以后再抬必须先证明「功能确实需要」——「顺手写的」不算理由。
 #
 # 2026-11-09 第十次上调（ChatViewModel +11，3586 → 3597）：修一处只在慢设备复现的冷启动 NPE。
@@ -104,7 +109,7 @@
 # 判定口径没变：新增的是**排版分支**，没有新增业务判断；真要复核，看的是
 # "有没有新函数"而不是文件总行数——这轮新增的函数只有 Editorial.kt 里的
 # 六个排版原语（独立文件，398 行，见 app/src/main/java/com/beichen/polaris/ui/Editorial.kt）。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3597
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3588
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3159
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1499

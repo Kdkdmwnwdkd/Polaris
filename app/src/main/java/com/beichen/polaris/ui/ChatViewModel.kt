@@ -105,6 +105,7 @@ import com.beichen.polaris.skill.JsEngine
 import com.beichen.polaris.skill.ModelConfig
 import com.beichen.polaris.skill.RhinoJsEngine
 import com.beichen.polaris.skill.SkillExecutor
+import com.beichen.polaris.skill.SkillDeclarations
 import com.beichen.polaris.skill.SkillLoader
 import com.beichen.polaris.skill.ImportedSkillRepository
 import com.beichen.polaris.skill.SkillManifest
@@ -130,6 +131,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import com.beichen.polaris.skill.CapabilityRegistry
 import com.beichen.polaris.skill.policyFor
+import com.beichen.polaris.skill.market.MarketInstallPreview
 import com.beichen.polaris.skill.market.MarketSource
 import com.beichen.polaris.skill.market.MarketUiItem
 import com.beichen.polaris.skill.checkCapabilityGate
@@ -240,28 +242,7 @@ import java.io.File
 import java.net.URL
 import java.util.UUID
 
-/** 单个技能向 UI 暴露的「工具-能力」明细。 */
-data class SkillToolInfo(
-    val name: String,
-    val capability: String,
-    val allowed: Boolean
-)
-
-/** UI 用技能信息（含 L5 安全策略摘要）：技能中心卡片直接消费。 */
-data class SkillUiInfo(
-    val id: String,
-    val name: String,
-    val description: String,
-    val trust: String,
-    /** 是否来自「导入」来源（filesDir/skills/imported），决定能否授权/卸载。 */
-    val isImported: Boolean,
-    val isScript: Boolean,
-    val allowScript: Boolean,
-    val maxCapability: String,
-    val tools: List<SkillToolInfo>
-)
-
-
+/** `SkillUiInfo` / `SkillToolInfo` 已搬到 SkillUi.kt（纯数据，不必占这个冻结文件的行数）。 */
 
 /**
  * W-30：一条消息的翻译状态。
@@ -566,6 +547,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 面向用户的一行状态（成功/失败/源为空），UI 原样展示。 */
     override val marketStatus: StateFlow<String?> get() = market.marketStatus
 
+    /** 已下载、待确认的安装（非空即弹确认框，见 facade 里「为什么下载完不直接落盘」）。 */
+    override val marketPending: StateFlow<MarketInstallPreview?> get() = market.marketPending
+
     /** 刷新全部市场源（同一时刻只允许一次；多源串行拉取，见 facade）。 */
     override fun refreshMarket() = market.refreshMarket()
 
@@ -577,6 +561,12 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     /** 安装/更新一个插件（复用 SkillImportRepository，含 id 一致性校验）。 */
     override fun installMarketPlugin(id: String) = market.installMarketPlugin(id)
+
+    /** 确认安装（只有此时才解压落盘）。 */
+    override fun confirmMarketInstall() = market.confirmMarketInstall()
+
+    /** 取消待确认的安装。 */
+    override fun cancelMarketInstall() = market.cancelMarketInstall()
 
     /** 卸载一个已装插件（只删本地目录，市场列表保留该条目）。 */
     override fun uninstallMarketPlugin(id: String) = market.uninstallMarketPlugin(id)
@@ -599,7 +589,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     capability = CapabilityRegistry.cap(t).name,
                     allowed = checkCapabilityGate(t, sk.trust) == null
                 )
-            }
+            },
+            declaration = SkillDeclarations.of(sk.net_hosts, sk.entry, sk.tools)
         )
     }
 

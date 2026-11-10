@@ -1273,7 +1273,14 @@ fun AkConfirmDialog(
     visible: Boolean = true,
     danger: Boolean = false,
     dismissText: String = "取消",
-    icon: ImageVector? = null
+    icon: ImageVector? = null,
+    /**
+     * 正文与按钮之间的结构化补充（例：安装确认里的域名清单与警告）。
+     *
+     * 单向文字 `message` 只该放「一句话结论」；把清单拼进 message 会变成一坨换行文本，
+     * 既不能逐行强调，也没法给危险项单独上色。
+     */
+    details: (@Composable () -> Unit)? = null
 ) {
     val spec = if (visible) AkMotionDialog else AkMotionExit
     val scale by animateFloatAsState(if (visible) 1f else 0.96f, animationSpec = spec)
@@ -1333,6 +1340,10 @@ fun AkConfirmDialog(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (details != null) {
+                        Spacer(Modifier.height(AgentSpacing.space3))
+                        details()
+                    }
                     Spacer(Modifier.height(AgentSpacing.space6))
                     Row(horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
                         AkOutlinedButton(
