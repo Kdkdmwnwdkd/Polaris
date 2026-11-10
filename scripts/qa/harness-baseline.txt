@@ -238,4 +238,21 @@
 #   上限改成 4MB → 1 条变红；退出码均为 1。
 #   纯函数零依赖（只用 java.io），沙箱与 CI 都能真跑，不 SKIP。
 
-131
+# 2026-11-10：131 → 132（审计 F11「通知正文随每条消息自动外发」新增
+#   run-notification-body-leak-verification.sh）。
+#   AgentNotificationListener 修前调 DeviceContextStore.addNotification("$label - $body")，
+#   而 ChatViewModel 每条消息都拼 DeviceContextStore.snapshot().toPrompt()——通知正文
+#   自动、持续、不问一声地进模型请求。F9 刚给 device_notifications 加的审批被这条
+#   自动通道整个绕开：模型不用调工具，正文自己会到。
+#   修法是「不收集」而不是「收集后过滤」：DeviceContextStore 只收 NotificationSummary
+#   （来源 + 时间），类型上装不下正文。本 runner 验注入文本里没有任何正文片段、
+#   明确声明「没有正文」、聚合计数与排序、超限折叠、时间措辞（含时钟回拨）、
+#   以及 NotificationSummary 的字段里没有正文位。
+#   42 条行为断言 + 8 条接线断言（不再拼串、入参类型、队列元素类型、注入链路仍在、
+#   正文来源未被误删、UI 走聚合）。
+#   变异验证：给 NotificationSummary 加回 text 字段 → D1 变红；删掉「没有正文」的
+#   声明 → A4 变红；监听服务改回拼串 → W1/W2 变红；连正文来源一起删掉 → W1/W2/W7
+#   变红（过度修也能抓到）；退出码均为 1。
+#   纯函数零依赖（只用 stdlib），沙箱与 CI 都能真跑，不 SKIP。
+
+132

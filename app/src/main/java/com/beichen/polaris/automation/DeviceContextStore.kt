@@ -13,8 +13,10 @@ import kotlinx.coroutines.delay
  *  - [AgentNotificationListener]：收到新通知时写入最近通知摘要
  *
  * 设计原则（净室原创、最小权限）：
- *  - 只缓存轻量文本摘要，不保存通知正文之外的任何隐私内容；
- *  - 通知只保留最近 8 条，前台应用只保留最近一个；
+ *  - **通知只收来源与时间，不收正文**（审计 F11）——这一层的东西会被自动拼进每一次
+ *    模型请求，放正文进来等于开了条不问自取的通道。要正文走 `device_notifications`，
+ *    那条路有审批。
+ *  - 通知只保留最近 12 条元信息，前台应用只保留最近一个；
  *  - 所有写操作都在系统回调线程之外做轻量只读（PackageManager 转应用名），失败静默降级。
  */
 object DeviceContextStore {
@@ -32,8 +34,24 @@ object DeviceContextStore {
 
     @Volatile private var foregroundPackage: String = ""
     @Volatile private var foregroundLabel: String = ""
-    private val recentNotifs = ConcurrentLinkedQueue<String>()
-    private const val MAX_NOTIFS = 8
+    /**
+     * 最近通知的**元信息**（来源 + 时间），**不含正文**——审计 F11。
+     *
+     * 修前这里存的是「应用名 - 标题：正文」整串，而 [DeviceContext.toPrompt] 的结果
+     * 会在每条用户消息里自动拼进模型请求。于是「读通知要授权」是假的：模型根本不用
+     * 调 `device_notifications`，正文自己就来了，而且每条新通知推一次。
+     *
+     * 现在这一层从类型上就装不下正文（[NotificationSummary] 没有 content 字段）。
+     * 要正文走 `device_notifications`，走审批。
+     */
+    private val recentNotifs = ConcurrentLinkedQueue<NotificationSummary>()
+
+    /**
+     * 保留条数。取 12 而非 8：聚合后只剩「哪些应用在推」，8 条若来自同一个应用
+     * 就只能显示 1 个来源，信息量太低；12 条在典型的「三五个应用来回推」场景下
+     * 足够铺开，同时仍是一屏装得下的量级。
+     */
+    private const val MAX_NOTIFS = 12
 
     /** 无障碍服务在窗口切换时调用：记录当前前台应用。 */
     fun updateForeground(context: Context, packageName: String) {
@@ -45,9 +63,14 @@ object DeviceContextStore {
         } catch (_: Throwable) { packageName }
     }
 
-    /** 通知监听服务在收到通知时调用：追加一条摘要（已含应用名，调用方负责转换）。 */
-    fun addNotification(summary: String) {
-        if (summary.isBlank()) return
+    /**
+     * 通知监听服务在收到通知时调用：追加一条**元信息**。
+     *
+     * 入参刻意是 [NotificationSummary] 而不是 `String`：字符串可以是任何东西，
+     * 下一个改这个文件的人很容易顺手把正文塞进来（修前就是这么写的）。类型上装不下，
+     * 就没人能顺手塞进去——这是审计 F11 选择「不收集」而非「收集后过滤」的落点。
+     */
+    fun addNotification(summary: NotificationSummary) {
         recentNotifs.add(summary)
         while (recentNotifs.size > MAX_NOTIFS) recentNotifs.poll()
     }
@@ -126,35 +149,3 @@ object DeviceContextStore {
  */
 internal fun deviceContextEverUpdated(foregroundPackage: String): Boolean =
     foregroundPackage.isNotBlank()
-
-/**
- * 设备上下文快照（值对象）。[toPrompt] 输出可直接拼进 LLM 系统提示/用户输入的文本段落。
- */
-data class DeviceContext(
-    val foregroundPackage: String,
-    val foregroundLabel: String,
-    val recentNotifications: List<String>,
-    val updatedAt: Long
-) {
-    /** 尚无任何感知数据时返回 true，表示上下文为空、无需注入。 */
-    val isEmpty: Boolean
-        get() = foregroundPackage.isBlank() && recentNotifications.isEmpty()
-
-    /** 生成 "[当前设备上下文]" 段落；为空则返回空串，调用方据此决定是否注入。 */
-    fun toPrompt(): String {
-        if (isEmpty) return ""
-        val sb = StringBuilder("[当前设备上下文]\n")
-        if (foregroundPackage.isNotBlank()) {
-            if (foregroundLabel.isNotBlank() && foregroundLabel != foregroundPackage) {
-                sb.append("- 前台应用：$foregroundLabel ($foregroundPackage)\n")
-            } else {
-                sb.append("- 前台应用：$foregroundPackage\n")
-            }
-        }
-        if (recentNotifications.isNotEmpty()) {
-            sb.append("- 最近通知：\n")
-            recentNotifications.forEachIndexed { i, n -> sb.append("  ${i + 1}. $n\n") }
-        }
-        return sb.toString().trimEnd()
-    }
-}
