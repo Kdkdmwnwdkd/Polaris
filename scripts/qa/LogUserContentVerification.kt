@@ -201,6 +201,40 @@ fun testRedactUrl() {
     check(!mentions(r, "SECRET"), "E6c 不保留 query 里的值") { r }
 }
 
+/* ------------------------- F. 动态注册的工具（MCP） ------------------------- */
+
+fun testDynamicTools() {
+    println("[F] 动态注册的工具（MCP）")
+
+    // F1：静态表覆盖不到。MCP 工具在运行期才出现，ToolCatalog 里没有它们的条目——
+    // 这不是 bug，是事实。断言它是为了让「为什么需要 shouldRedact」有个可执行的证据，
+    // 而不是只写在注释里。
+    check(
+        !LogRedaction.isSensitiveTool("mcp_filesystem_read"),
+        "F1 静态名单覆盖不到 MCP 工具名"
+    )
+
+    // F2：**核心**。运行期声明是唯一的补救——外部服务器返回的内容、模型发给它的参数，
+    // 都是「外部服务能看到的全部」，一次都不能明文落盘。
+    check(
+        LogRedaction.shouldRedact("mcp_filesystem_read", needsApproval = true),
+        "F2 运行期声明需要审批 → 脱敏"
+    )
+
+    // F3：两者任一为真即可。静态表认识的老工具即使实例说 false 也要脱敏——
+    // 「表里有」这个事实本身已经说明它能触达用户环境。
+    check(
+        LogRedaction.shouldRedact("shell_run", needsApproval = false),
+        "F3 静态表命中即脱敏（不依赖实例自报）"
+    )
+
+    // F4：反方向。两者皆否 → 不脱敏，否则日志失去诊断价值。
+    check(
+        !LogRedaction.shouldRedact("calculator", needsApproval = false),
+        "F4 两者皆否 → 不脱敏"
+    )
+}
+
 /* ---------------------------------- 入口 ---------------------------------- */
 
 fun main() {
@@ -209,6 +243,7 @@ fun main() {
     testConsistency()
     testSanitizeStillWorks()
     testRedactUrl()
+    testDynamicTools()
     println("=== 行为断言 $passed 通过 / $failed 失败 ===")
     if (failed > 0) {
         println("FAIL 行为断言未通过（见上方 FAIL 行）")

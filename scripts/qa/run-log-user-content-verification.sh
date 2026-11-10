@@ -132,6 +132,28 @@ else
   w_bad "W7 诊断导出的 Key 替换没了 —— 日志里的 Key 会原样进诊断包"
 fi
 
+# W8/W9：执行器的日志调用必须带上**运行期**判据。只查静态表的话，MCP 工具
+# （运行期注册、ToolCatalog 里没有条目）会一路明文——而它们的内容正是「外部服务
+# 能看到的全部」。W9 单独列出来，是因为「入参脱敏了、结果没脱敏」是最典型的改一半。
+EXEC="$CORE/agent/ToolExecutor.kt"
+if grep -q 'LogRedaction.shouldRedact(' "$EXEC"; then
+  w_good "W8 ToolExecutor 用运行期判据算日志敏感度"
+else
+  w_bad "W8 ToolExecutor 只查静态名单 —— MCP 工具的入参与输出会明文落盘"
+fi
+
+if grep -q 'toolCall(call.name, call.arguments.toString().take(300), logSensitive)' "$EXEC"; then
+  w_good "W9a 工具入参日志带敏感标志"
+else
+  w_bad "W9a 工具入参日志没带敏感标志"
+fi
+
+if grep -q 'toolResult(call.name, !result.isError, cost, text.take(300), logSensitive)' "$EXEC"; then
+  w_good "W9b 工具结果日志复用同一个标志（不是只改了入参）"
+else
+  w_bad "W9b 工具结果日志没带敏感标志 —— 入参脱敏了、结果漏了"
+fi
+
 total_pass=$((jp + gp))
 total_fail=$((jf + gf))
 echo ""

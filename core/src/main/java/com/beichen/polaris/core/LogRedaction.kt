@@ -82,8 +82,24 @@ object LogRedaction {
         ToolCatalog.tools.filter { it.approval != null }.map { it.name }.toSet() +
             EXTRA_SENSITIVE
 
-    /** 该工具的入参与输出是否「只记长度、不记原文」。 */
+    /** 该工具的入参与输出是否「只记长度、不记原文」——**只查静态名单**。 */
     fun isSensitiveTool(name: String): Boolean = name in sensitiveTools
+
+    /**
+     * 判定**这一次调用**该不该脱敏（审计 F13）。
+     *
+     * [isSensitiveTool] 查的是 `ToolCatalog` 的静态表，而 MCP 工具是运行期注册的、
+     * 表里没有条目——于是查表恒为 false，外部服务器返回的内容与模型发给它的参数
+     * 全都明文进日志。而这两个方向恰恰是「外部服务能看到的全部」。
+     *
+     * 运行期信息只有调用方手里有（工具实例的 `needsApproval` / `needsApprovalFor(args)`），
+     * 所以判据拆成两半：静态表在 [LogRedaction]，动态声明由调用方传进来。
+     * 「或者」而不是「覆盖」——两者任一为真就脱敏，静态表保底，动态声明补盲。
+     *
+     * @param needsApproval 工具实例自报的审批需求（`AgentTool.needsApprovalFor(args)`）
+     */
+    fun shouldRedact(name: String, needsApproval: Boolean): Boolean =
+        needsApproval || isSensitiveTool(name)
 
     /**
      * 把 ApiKey / Bearer / api_key / token / password 等敏感片段替换为 [MASK]。
