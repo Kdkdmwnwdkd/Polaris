@@ -50,6 +50,11 @@ SRCS=(
   "$SRC_CORE/core/BackupModels.kt"
   "$SRC_CORE/core/BackupArchive.kt"
   "$SRC_CORE/core/llm/JsonSafe.kt"
+  # MarketInstallPreview 持有 SkillDeclaration（市场安装前的声明快照）。
+  # 后者只依赖两个纯函数文件，跟着编进来即可——不引 SkillProtocol（那个拖 Android Context）。
+  "$SRC_CORE/core/net/EndpointPolicy.kt"
+  "$SRC_CORE/core/net/HostAllowlist.kt"
+  "$SRC_CORE/skill/SkillDeclaration.kt"
   "$SRC_CORE/skill/market/MarketModels.kt"
   "$ROOT/scripts/qa/W47W48Verification.kt"
 )
