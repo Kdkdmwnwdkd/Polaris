@@ -152,8 +152,24 @@ jobs:
       - name: Install Vulkan shader toolchain (glslc + SPIRV-Headers + Vulkan-Hpp)
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends glslc spirv-headers libvulkan-dev
+
+          # 2026-11-11：runner 的 DNS 一度解析不到任何 apt 源（azure.archive.ubuntu.com /
+          # archive.ubuntu.com / security.ubuntu.com 同时报 Temporary failure resolving），
+          # 三次重跑都撞在这一步，而同一份代码当天早上的构建是绿的。这是 runner 侧的
+          # 网络故障，不是仓库问题——但出包链路不能靠"等它自己好"。
+          #
+          # 兜底：系统 DNS 解析不了就换公共 DNS 再装。装不上仍然红（不静默降级：
+          # 没有 glslc 就编不出 Vulkan backend，出一个"看着正常但本地推理慢一截"的包更糟）。
+          if ! getent hosts archive.ubuntu.com >/dev/null 2>&1; then
+            echo "DNS 解析不到 archive.ubuntu.com —— 改用 8.8.8.8 / 1.1.1.1" >&2
+            sudo rm -f /etc/resolv.conf
+            printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' | sudo tee /etc/resolv.conf >/dev/null
+          fi
+
+          sudo apt-get update -qq || true
+          # -o Acquire::Retries=3：单个 .deb 拉一半断掉时 apt 自己重试，不必整个 job 重来。
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
+            glslc spirv-headers libvulkan-dev
           GLSLC="$(command -v glslc)"
           SPIRV_DIR="$(dirname "$(dpkg -L spirv-headers | grep -E 'SPIRV-HeadersConfig\.cmake$' | head -1)")"
 
