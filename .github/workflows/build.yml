@@ -214,6 +214,43 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
+      # 指纹与包名守卫：构建出来的包必须由**这一把**钥匙签、必须叫**这一个**包名。
+      #
+      # 为什么要在 CI 里守：这两种错原来的暴露点都是用户点安装时系统弹一句
+      # 「应用未安装 / 签名不符」——那时包已经发出去几百次下载了。指纹和包名都是
+      # 公开信息，写进仓库没有风险；换来的是「钥匙被换错、Secrets 被覆盖、包名被改」
+      # 在构建阶段就拦下，而不是到手机上才发现。判据与 docs/ops/SIGNING.md 一致。
+      - name: Verify APK identity (包名 + 签名指纹)
+        run: |
+          set -euo pipefail
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -1)
+          if [ -z "${BT:-}" ]; then
+            echo "::error::找不到 build-tools，无法验签"
+            exit 1
+          fi
+
+          EXPECT="097f9cb0d27d585043a0174d58a24c27a5fabdb661c3cc6f003cac64e7de9439"
+          GOT=$("$BT/apksigner" verify --print-certs "$APK" \
+                | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 \
+                | tr -d ':' | tr 'A-F' 'a-f')
+          echo "apk       : $APK"
+          echo "sha256    : $GOT"
+          echo "expected  : $EXPECT"
+          if [ "$GOT" != "$EXPECT" ]; then
+            echo "::error::APK 签名指纹与 docs/ops/SIGNING.md 记录的不一致，拒绝发布"
+            exit 1
+          fi
+
+          BADGING=$("$BT/aapt2" dump badging "$APK" 2>/dev/null | head -1 || true)
+          if [ -n "$BADGING" ]; then
+            echo "$BADGING"
+            echo "$BADGING" | grep -q "package: name='com.beichen.polaris'" \
+              || { echo "::error::包名不是 com.beichen.polaris，老用户无法覆盖升级"; exit 1; }
+          else
+            echo "::warning::aapt2 dump badging 无输出，跳过包名校验"
+          fi
+
       # CI runner 没有预装 kotlinc 发行版，但 Gradle 已经下过 kotlin-compiler-embeddable。
       # 这里包一层同名命令，让只认 `$KOTLINC_HOME/bin/kotlinc` 的老 harness 也能跑。
       - name: Prepare kotlinc shim (老 harness 只认 kotlinc 命令)
