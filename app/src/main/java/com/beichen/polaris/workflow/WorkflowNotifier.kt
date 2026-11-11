@@ -37,11 +37,18 @@ object WorkflowNotifier {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        // 审计 F18：正文**不放任务描述**。
+        //
+        // 原来这里是 `workflow.prompt.take(80)` / `take(200)`——把用户写的自然语言任务
+        // 原样放进通知栏。锁屏默认展示通知内容（除非用户手动开「隐藏敏感内容」），
+        // 于是「把工行卡的余额截图发我」这类任务就挂在锁屏上。
+        //
+        // 通知的职责是「到点了，点一下执行」，识别任务靠标题里的名字；任务内容打开
+        // App 就能看到。少这一句不损失功能，多这一句多一处泄漏面。
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_popup_reminder)
             .setContentTitle("定时任务：${workflow.name}")
-            .setContentText(workflow.prompt.take(80))
-            .setStyle(NotificationCompat.BigTextStyle().bigText(workflow.prompt.take(200)))
+            .setContentText("点此开始执行")
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setContentIntent(pending)

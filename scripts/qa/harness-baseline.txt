@@ -329,4 +329,32 @@
 #     - 同一页触发全量 → 文案变成「该操作每次都会单独确认」，允许后返回 4 条。
 #       同一次会话、同一个 Store，指名 1 条 / 全量 4 条 —— F15 的过滤在真机上成立。
 
-135
+# 2026-11-11：135 → 136（审计 F18「自己发的通知被自己读回」新增
+#   run-notification-intake-verification.sh）。
+#
+#   真机实测（全量读通知，模拟器 API 30）返回四条，其中三条是 App 自己：
+#     {"package":"com.beichen.polaris","title":"Agent 正在执行","text":"notifyall"}
+#     {"package":"com.beichen.polaris","title":"Agent 正在执行","text":"notify"}
+#     {"package":"com.android.shell","title":"建行","text":"尾号1234账户支出500元"}
+#     {"package":"com.beichen.polaris","title":"Agent 正在执行","text":"notify"}
+#   回环本身不是外泄，但它占掉「最近通知」的 12 个名额，把真正的用户通知挤出去；
+#   而且那条通知的正文是定时任务的 prompt 原文——锁屏默认展示通知内容，于是
+#   「把工行卡余额截图发我」这类任务挂在锁屏上。
+#
+#   修法两处，都是「入口拒绝」而非「出口过滤」（F11 的原则）：
+#   1. NotificationIntake.shouldIngest：自己发的不入库（零依赖纯函数，6 条行为断言）；
+#   2. WorkflowNotifier 正文不再放任务描述，改成「点此开始执行」（含 BigTextStyle 那个
+#      容易漏的出口）。
+#
+#   5 条接线断言（监听器/通知构造拖 Android，只能静态核对接线；其中 W2 要求判据必须
+#   在 NotificationStore.add 之前——过滤发生在入库之后等于没拦）。
+#
+#   变异验证（4 次，退出码均为 1）：
+#     ① 判据恒收 → A1 红；
+#     ② 用 startsWith 判同包 → A4 红（com.beichen.polaris.debug 会被误杀）；
+#     ③ 监听器不调判据 → W1/W2 红；
+#     ④ 正文改回 prompt → W3/W4 红。
+#
+#   真机复验：同一操作（全量读），修前 4 条含 3 条自己的通知，修后只剩 1 条真实通知。
+
+136
