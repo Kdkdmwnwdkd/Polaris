@@ -3,7 +3,6 @@ package com.beichen.polaris.automation
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import java.util.concurrent.ConcurrentLinkedQueue
 
 /**
  * 通知监听服务（L3 感知层）：实时捕获系统通知，供 Agent “感知”手机正在发生的事。
@@ -15,6 +14,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
  * ## 两条下游，两种待遇（审计 F11）
  *
  *  - [NotificationStore]：存全文，只由 `device_notifications` 工具读取，**那个工具要审批**；
+ *    从审计 F15 起还要说清读哪几个应用，见 `NotificationScope`。
  *  - [DeviceContextStore]：只收来源与时间，会被自动拼进每条模型请求，**不收正文**。
  *
  * 修前两条都收全文，于是「读通知要授权」形同虚设——自动注入那条路根本不用授权。
@@ -22,29 +22,6 @@ import java.util.concurrent.ConcurrentLinkedQueue
  * 注：这是系统级服务而非普通权限，必须在
  *   “设置 → 通知 → 通知访问权限” 中手动授予本应用。
  */
-data class NotificationRecord(
-    val packageName: String,
-    val title: String,
-    val text: String,
-    val postTime: Long,
-    val key: String
-)
-
-/** 通知结构化落库：只缓存最近 N 条，供 device_notifications 工具读取。 */
-object NotificationStore {
-    private val queue = ConcurrentLinkedQueue<NotificationRecord>()
-    private const val MAX = 60
-
-    val all: List<NotificationRecord> get() = queue.toList()
-
-    fun add(r: NotificationRecord) {
-        queue.add(r)
-        while (queue.size > MAX) queue.poll()
-    }
-
-    fun clear() = queue.clear()
-}
-
 class AgentNotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {

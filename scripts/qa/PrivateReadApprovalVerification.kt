@@ -131,9 +131,11 @@ private fun testClipboardWrite() {
 
 private fun testNotifications() {
     check("C1 读取通知要问") {
+        // 审计 F15 起，不点名应用的读取键带 `*` 后缀且不可记忆——
+        // 这一档的完整语义（按应用集合记忆）见 NotificationScopeVerification。
         val g = notify()
-        eq(g.key, PRIVATE_KEY + "device_notifications", "键")
-        eq(g.memorizable, true, "可被记住")
+        eq(g.key, PRIVATE_KEY + "device_notifications:*", "键")
+        eq(g.memorizable, false, "读全部应用时不能「本次会话不再询问」")
     }
 }
 
@@ -166,8 +168,10 @@ private fun testLabels() {
         eq(g.memoLabel, "本次会话不再询问读取剪贴板", "勾选框文案")
     }
 
-    check("E2 通知读的勾选框写明「读通知」") {
-        eq(notify().memoLabel, "本次会话不再询问读取通知", "勾选框文案")
+    check("E2 全量读通知的勾选框不写「本次会话不再询问」") {
+        // 审计 F15：读全部应用的范围用户无法预判，勾了也不能记住——
+        // 文案必须说实情，否则就是「勾了照样问」的老毛病。
+        eq(notify().memoLabel, "该操作每次都会单独确认", "勾选框文案")
     }
 
     check("E3 归组有中文名，不会把裸键 private_read 露给用户") {

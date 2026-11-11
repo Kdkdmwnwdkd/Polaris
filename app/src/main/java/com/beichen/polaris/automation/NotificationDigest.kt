@@ -107,7 +107,7 @@ object NotificationDigest {
         sb.append(body.joinToString("、"))
         sb.append('\n')
         sb.append("  （这里只有来源与条数，没有正文。需要内容请调用 device_notifications，")
-        sb.append("会向用户申请授权。）")
+        sb.append("并用 packages 指明是哪个应用——不指明就是读全部应用，会向用户申请授权。）")
         return sb.toString()
     }
 

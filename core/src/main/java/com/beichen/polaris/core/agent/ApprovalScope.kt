@@ -85,7 +85,8 @@ object ApprovalScope {
      *  4. 不可逆命令 → 永不记忆；
      *  5. 首词安全但整体不可记忆（包装器 / 命令替换 / 重定向 / 解释器 / `cp`）→ 永不记忆；
      *  6. 读工作区外的受保护目录（`cat /sdcard/DCIM/…`）→ 按**目录**记忆，换目录重问；
-     *  7. 读用户私有数据（剪贴板 / 通知）→ 按**工具**记忆，换工具重问；
+     *  7. 读用户私有数据（剪贴板 / 通知）→ 剪贴板按**工具**记忆；
+     *     通知按**应用集合**记忆（审计 F15：不点名应用的全量读取永不可记忆）；
      *  8. 其余 → 可记忆（`npm install`、`gradle build`、`ls`…）。
      */
     fun of(toolName: String, args: JsonObject): ApprovalGrant {
@@ -115,6 +116,18 @@ object ApprovalScope {
         if (toolName in PRIVATE_READ_TOOLS) {
             val isRead = toolName != CLIPBOARD_TOOL || actionOf(args) != CLIPBOARD_SET
             if (isRead) {
+                // 审计 F15：通知还要再细一层——「读通知」不是一个范围，是几十个应用。
+                // 键编入本次要读的包名集合；不点名（读全部）的授权不可记忆。
+                // 判据与工具过滤共用 NotificationScope.parse：同一个 args 得到同一个范围，
+                // 从构造上排除「弹窗按 A 算、实际按 B 读」。
+                if (toolName == NOTIFICATIONS_TOOL) {
+                    val filter = NotificationScope.parse(args)
+                    return ApprovalGrant(
+                        key = NotificationScope.keyOf(filter),
+                        label = NotificationScope.labelOf(filter),
+                        memorizable = NotificationScope.memorizable(filter)
+                    )
+                }
                 return ApprovalGrant(
                     key = "${ApprovalGrouping.GROUP_PRIVATE_READ}:$toolName",
                     label = privateReadLabel(toolName),
