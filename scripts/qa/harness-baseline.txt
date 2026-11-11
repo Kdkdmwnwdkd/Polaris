@@ -357,4 +357,26 @@
 #
 #   真机复验：同一操作（全量读），修前 4 条含 3 条自己的通知，修后只剩 1 条真实通知。
 
-136
+# 2026-11-11：136 → 137（审计 F19「read_file 的 limit 只限返回、不限读取」新增
+#   run-text-file-slice-verification.sh）。
+#
+#   修前：`val full = file.readText()` 整份载入 → `full.substring(offset, end)` 切一页。
+#   工具描述写的是「避免一次性把大文件灌爆上下文」，对上下文成立，对**堆**不成立。
+#   对照实验（同一台机器、同一份 36MB 文件、-Xmx64m）：
+#     旧路径 readText() → THROWN OutOfMemoryError: Java heap space
+#     新路径 TextFileSlice.read(limit=32) → 返回 32 字符（harness B1 就在这个堆上限下跑）
+#
+#   顺带修掉分页劈开代理对：substring 落在 emoji 中间时，第一页以孤立高位代理结尾、
+#   第二页以孤立低位代理开头，两页都不再是合法文本，拼回去也不等于原文。
+#
+#   11 条行为断言（A1~A10 + B1 内存）+ 5 条接线断言（W3 要求续读提示用返回的 nextOffset，
+#   不是自己按 offset+limit 手算——页尾多带 1 个码元时手算会漏字）。
+#
+#   变异验证（5 次，退出码均为 1）：
+#     ① 页尾不并入低位代理 → A4/A5 红；
+#     ② hasMore 恒 false → A2/A3 红；
+#     ③ nextOffset 用 offset+limit 手算 → A4/A6 红；
+#     ④ 去掉起点对齐 → A6 红；
+#     ⑤ limit 不生效（一读到底）→ A2/A3/A8 红。
+
+137
