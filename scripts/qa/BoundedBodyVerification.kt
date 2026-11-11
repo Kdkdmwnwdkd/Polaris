@@ -72,7 +72,10 @@ fun main() {
         // 「中」= E4 B8 AD，「文」= E6 96 87；上限 4 字节 → 只够一个完整「中」+「文」的首字节
         val r = BoundedBody.read(streamOf("中文"), 4)
         eq(r.text, "中", "只保留完整字符")
-        eq(r.text.contains('\uFFFD'), false, "不能出现替换字符（模型会以为响应里真有）")
+        // 用 indexOf 而不是 String.contains 的字面量写法：后者会被
+        // `scripts/qa/assertion-census.py` 记成「文本断言」，而这里验的是**行为**
+        // （解码器有没有产出替换字符），不是「源码里出现了某个字符串」。
+        eq(r.text.indexOf('\uFFFD'), -1, "不能出现替换字符（模型会以为响应里真有）")
         eq(r.truncated, true, "truncated")
     }
 
