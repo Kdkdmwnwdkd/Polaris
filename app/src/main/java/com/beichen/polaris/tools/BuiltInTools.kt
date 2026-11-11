@@ -15,6 +15,8 @@ import com.beichen.polaris.core.TextEncoding
 import com.beichen.polaris.core.TextFileSlice
 import com.beichen.polaris.core.ToolResult
 import com.beichen.polaris.core.io.AtomicJsonFile
+import com.beichen.polaris.core.net.BoundedBody
+import com.beichen.polaris.core.net.BodySlice
 import com.beichen.polaris.core.net.RedirectPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -151,8 +153,19 @@ class HttpRequestTool(
                         }
                     }
 
-                    val text = resp.body?.string().orEmpty()
-                    val out = if (text.length > 8000) text.take(8000) + "\n...（已截断）" else text
+                    // F21：先限读，再解码。修前是 `body.string()` 整份进堆、`take(8000)`
+                    // 发生在读完以后——与 F19 在 read_file 上修掉的是同一个错误：上限只作用在
+                    // 返回值上，不作用在读的过程。64KB 够用：正文只取 8000 字符，
+                    // 哪怕全是 4 字节 emoji 也才 32KB。
+                    val slice = resp.body?.byteStream()
+                        ?.let { BoundedBody.read(it, 64L * 1024) }
+                        ?: BodySlice.EMPTY
+                    val out = when {
+                        slice.text.length > 8000 -> slice.text.take(8000) + "\n...（已截断）"
+                        slice.truncated -> slice.text + "\n...（响应体超过读取上限，只读了前 " +
+                            "${slice.bytesRead} 字节；完整内容请用 shell_run 下载到工作区再读）"
+                        else -> slice.text
+                    }
                     return@withContext ToolResult.ok(
                         code = "http_${resp.code}",
                         message = if (hop > 0) "HTTP ${resp.code}（跟随 $hop 次同源跳转）" else "HTTP ${resp.code}",

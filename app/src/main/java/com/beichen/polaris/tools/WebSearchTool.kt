@@ -5,6 +5,8 @@ import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.AgentTool
 import com.beichen.polaris.core.JsonSchema
 import com.beichen.polaris.core.ToolResult
+import com.beichen.polaris.core.net.BoundedBody
+import okhttp3.Response
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -131,7 +133,7 @@ class WebSearchTool(
             .build()
         client.newCall(request).execute().use { resp ->
             if (resp.code !in 200..299) throw IllegalStateException("HTTP ${resp.code}")
-            return WebSearchParsing.parseBing(resp.body?.string().orEmpty(), max)
+            return WebSearchParsing.parseBing(htmlOf(resp), max)
         }
     }
 
@@ -147,9 +149,19 @@ class WebSearchTool(
             .build()
         client.newCall(request).execute().use { resp ->
             if (resp.code !in 200..299) throw IllegalStateException("HTTP ${resp.code}")
-            return WebSearchParsing.parse(resp.body?.string().orEmpty(), max)
+            return WebSearchParsing.parse(htmlOf(resp), max)
         }
     }
+
+    /**
+     * F21：响应体限读。
+     *
+     * 搜索页 HTML 通常 100~500KB，但 `body.string()` 会**整份**进堆——遇到一个 50MB 的
+     * 错误页（网关返回的 HTML、被劫持的 DNS、故意喂大包的对端）就是一次 OOM。
+     * 上限的作用点必须在读的过程里，这是 F19 / F21 同一句话。
+     */
+    private fun htmlOf(resp: Response): String =
+        resp.body?.byteStream()?.let { BoundedBody.read(it) }?.text.orEmpty()
 
     private val ENGINES: List<Engine>
         get() = listOf(

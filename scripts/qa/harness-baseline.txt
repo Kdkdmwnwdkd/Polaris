@@ -379,4 +379,10 @@
 #     ④ 去掉起点对齐 → A6 红；
 #     ⑤ limit 不生效（一读到底）→ A2/A3/A8 红。
 
-137
+
+# 2026-11-11：137 → 138（审计 F21：HTTP 响应体限读）。
+#   新增 run-bounded-body-verification.sh——BoundedBody 边读边限，11 条行为断言
+#   （截断点不产出 U+FFFD、正好等于上限不误判成截断、读到一半 IO 失败交出已读部分，
+#   以及 -Xmx64m 下一个「永远读不完的流」只读到上限即停）+ 4 条接线断言
+#   （http_request 与 WebSearchTool 都不再 body.string()、BoundedBody 单点）。
+138
