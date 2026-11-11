@@ -25,7 +25,17 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # 固定 24.04，不用 ubuntu-latest。
+    #
+    # 2026-11-11：ubuntu-latest 迁到 26.04（resolute）后，runner 解析不到
+    # `security.ubuntu.com` / `archive.ubuntu.com`，`Install Vulkan shader toolchain`
+    # 里的 apt-get 连续三次红在 `Temporary failure resolving 'security.ubuntu.com'`，
+    # 而同一份代码在迁移前的镜像上是绿的。这不是代码问题，是镜像的源配置问题。
+    #
+    # 固定版本比"等它修好"可靠：出包链路不该依赖一个会自己变的标签。24.04 上
+    # glslc / spirv-headers / libvulkan-dev 都能正常装（脚本本来就走 dpkg -L 动态找路径，
+    # 不写死版本）。
+    runs-on: ubuntu-24.04
     # 发布 Release（gh release create/upload）需要写仓库内容的权限
     permissions:
       contents: write
