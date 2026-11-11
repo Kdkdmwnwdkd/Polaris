@@ -32,6 +32,9 @@ class AgentNotificationListener : NotificationListenerService() {
         val text = (extras.getCharSequence(Notification.EXTRA_TEXT) ?: "").toString()
         // 忽略无正文的系统占位通知，避免噪声
         if (title.isBlank() && text.isBlank()) return
+        // 审计 F18：自己发的不收。否则 Agent 发通知 → 自己监听 → 被 device_notifications
+        // 读回 → 进模型上下文，既是噪声又占掉「最近通知」的名额。
+        if (!NotificationIntake.shouldIngest(sbn.packageName, packageName)) return
         NotificationStore.add(
             NotificationRecord(
                 packageName = sbn.packageName,
