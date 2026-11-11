@@ -95,8 +95,20 @@
 **通过标准**
 - 分享面板里是**两个**文件：`agentkit-diagnostics-*.txt` 和 `agentkit-turns-*.ndjson`；
 - 回执文字是 `诊断包已生成（含回合事件）`；
-- ndjson 每行是一个 JSON 对象，含 `seq` / `at` / `turn` / `scope` / `type`；
-  `grep '"type":"settle"' | wc -l` 的数量与这一轮实际工具调用次数一致。
+- ndjson 每行是一个 JSON 对象，含 `ev` / `ts` / `turn` / `scope`（**字段名以此为准**）。
+
+> **2026-11-11 更正**：本节原来写的是 `seq` / `at` / `type`，并按
+> `grep '"type":"settle"'` 计数。实现早已改成 `ev` / `ts`，照旧判据 grep 恒为 0 条，
+> 会得出「P5 不通过」的假红。真机样本（模拟器 API 30，389 行）：
+>
+> ```json
+> {"ev":"llm.end","ts":1794039676119,"turn":"mw64v9n8","scope":"main","step":3,"dur":750,"ok":true,"calls":0}
+> {"ev":"turn.end","ts":1794039676144,"turn":"mw64v9n8","scope":"main","status":"completed","steps":4}
+> {"ev":"store.write","ts":1794039676899,"store":"conversations","bytes":19028,"dur":281,"coalesced":2}
+> ```
+>
+> 计数应改为 `grep '"ev":"settle"' | wc -l`。**落盘这一半已在真机验过**（`files/logs/turns-*.ndjson`
+> 存在且逐事件完整）；「诊断包导出的两个文件」这一半仍待验（需要点分享面板）。
 
 没有回合日志时（全新安装、还没聊过），应只分享一个 txt 且回执不说「含回合事件」。
 
