@@ -18,6 +18,7 @@
 import com.beichen.polaris.core.ToolCall
 import com.beichen.polaris.core.UiItem
 import com.beichen.polaris.core.uiKey
+import com.beichen.polaris.core.uiKeySeq
 import kotlinx.serialization.json.JsonObject
 
 /* ------------------------------ 迷你断言框架 ------------------------------ */
@@ -155,6 +156,41 @@ fun main() {
         val items = listOf(tool("", "a"), tool("", "b"), tool("", "c"))
         val ks = keys(items)
         eq(ks.toSet().size, 3, "空 id 工具卡撞了 key：$ks")
+    }
+
+    // ── D. 外部 id 复用（审计 F17） ─────────────────────────────────────
+    //
+    // [uiKey] 假设「工具调用 id 唯一」，可 id 是供应商给的。中转站/兼容层、本地
+    // llama.cpp、重试与分支复制都会让同一个 id 在一张表里出现多次。真机上
+    // Compose 直接抛 `Key "t:call_mock_1" was already used`，整个对话页崩掉。
+    // 这一段守的是「整表唯一」这条性质，不是单条 [uiKey] 的返回值。
+    println("\n[D] 外部 id 复用")
+    check("D1 同一 id 出现三次，整表 key 仍两两不同") {
+        val items = listOf(tool("call_mock_1"), tool("call_mock_1"), tool("call_mock_1"))
+        val ks = items.uiKeySeq()
+        eq(ks.size, 3, "用例规模")
+        eq(ks.toSet().size, 3, "同一个 call.id 复用后撞 key —— Compose 会直接抛异常：$ks")
+    }
+    check("D2 首次出现保持原样（稳定身份不能变）") {
+        val ks = listOf(tool("c1"), tool("c1")).uiKeySeq()
+        eq(ks[0], "t:c1", "第一次出现的 key 必须与 uiKey 一致，否则滚动位置/展开态全丢")
+        expect(ks[1] != ks[0]) { "第二次出现没有区分：${ks[1]}" }
+    }
+    check("D3 重复项不影响其它项的身份") {
+        val before = listOf(u0, tool("dup"), a0)
+        val after = listOf(u0, tool("dup"), tool("dup"), a0)
+        val bk = before.uiKeySeq()
+        val ak = after.uiKeySeq()
+        eq(ak[0], bk[0], "第 0 项（用户气泡）")
+        eq(ak[1], bk[1], "第 1 项（首次出现的工具卡）")
+        eq(ak[3], bk[2], "第 3 项（助手气泡）")
+    }
+    check("D4 空表不炸") {
+        eq(emptyList<UiItem>().uiKeySeq().size, 0, "空表")
+    }
+    check("D5 无重复时与 uiKey 逐项一致（不破坏 R-05）") {
+        val items = listOf(u0, tool("t-a"), a0)
+        eq(items.uiKeySeq(), keys(items), "整表 key")
     }
 
     // ── 汇总 ───────────────────────────────────────────────────────────

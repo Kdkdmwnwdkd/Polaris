@@ -296,4 +296,37 @@
 #     ⑤ 工具绕过 byPackages 直接读 all → W3 红（行为断言编不到工具，故留这条接线）。
 #   三个源文件零 Android 依赖（stdlib + kotlinx-json），沙箱与 CI 都能真跑，不 SKIP。
 
-134
+# 2026-11-11：134 → 135（审计 F16「审批弹窗挂在对话页里」新增
+#   run-approval-host-verification.sh；同轮 F17 的 5 条行为断言并入 R-05）。
+#
+#   F16：ApprovalDialog 的挂载点写在 ChatScreen 的组件树里，只有「对话」页被组合时才渲染。
+#   审批是异步到达的，用户那时可能在控制台/设置/模型页，或者（第一次用定时任务时最常见）
+#   被自动带到了权限引导页。真机日志（API 30 模拟器，device_notifications 带 packages）：
+#     07:29:28 tool.start  args={"packages":["com.android.shell"]}
+#     07:29:58 WARN [Approval] device_notifications 拒绝
+#     07:29:58 tool.end code=approval_denied dur=30079ms     ← 正好 30 秒超时
+#   同一时刻 uiautomator dump 只有权限引导页文字，没有任何弹窗。闸门在，但看不见的闸门
+#   等于被自动关上。修法：挂载点搬到 ApprovalHost，挂在 AgentKitApp 的 Scaffold 之外，
+#   与路由无关。6 条接线断言（Compose 编不进 JVM，只守结构事实）。
+#
+#   F17：同一轮真机暴露的第二个真问题——mock 端点每次回同一个 call_mock_1，
+#   三次工具调用撞 key，Compose 直接抛
+#   `IllegalArgumentException: Key "t:call_mock_1" was already used`，整个对话页崩掉。
+#   uiKey 的注释已经写了「空 id 退回下标」，但没覆盖「非空但重复」——而 id 是供应商给的，
+#   中转站/兼容层/本地 llama.cpp/重试与分支都会复用。修法：uiKeySeq() 在整表层保证唯一，
+#   首次出现保持原样（稳定身份不破），重复的追加 @dup<下标>。
+#   5 条行为断言（D1~D5）并入 R-05，R-05 的接线断言 G1 同时改为要求「整表唯一化的 key」。
+#
+#   变异验证（4 次，退出码均为 1）：
+#     ① uiKeySeq 退回 map{uiKey}（不唯一化）→ R-05 的 D1 红；
+#     ② 重复项也用原样 key（不追加后缀）→ D1 红；
+#     ③ 首次出现也加后缀 → D2/D5 红；
+#     ④ ApprovalHost 调用点删掉 → W1 红。
+#
+#   真机回归（模拟器 API 30，1.14 覆盖安装）：
+#     - 权限引导页触发 device_notifications（指名）→ 弹窗出现，文案
+#       「本次会话不再询问读取通知（com.android.shell）」，点「允许执行」→ 返回 1 条；
+#     - 同一页触发全量 → 文案变成「该操作每次都会单独确认」，允许后返回 4 条。
+#       同一次会话、同一个 Store，指名 1 条 / 全量 4 条 —— F15 的过滤在真机上成立。
+
+135

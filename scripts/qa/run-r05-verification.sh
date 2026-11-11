@@ -84,9 +84,11 @@ echo ""
 echo "[G] 接线"
 SCREEN=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
 
-# G1：itemsIndexed 必须真的传 key。函数写对了、调用点没传，等于没修。
-if grep -q 'itemsIndexed(messages, key = { index, item -> item.uiKey(index) })' "$SCREEN"; then
-  g_good "G1 消息列表的 itemsIndexed 传了 uiKey"
+# G1：itemsIndexed 必须真的传 key，且 key 必须是**整表算过唯一性**的那一份。
+# 审计 F17：只传 uiKey 不够——供应商复用 call.id 时会撞 key、整页崩。
+if grep -q 'itemsIndexed(messages, key = { index, _ -> messageKeys\[index\] })' "$SCREEN" \
+   && grep -q 'messages.uiKeySeq()' "$SCREEN"; then
+  g_good "G1 消息列表的 itemsIndexed 用的是整表唯一化后的 key"
 elif grep -qE 'itemsIndexed\(messages\) *\{' "$SCREEN"; then
   g_bad "G1 itemsIndexed 仍无 key —— Compose 用下标当身份，插入即整表重建"
 else
@@ -99,6 +101,14 @@ if [ "$n" = "1" ]; then
   g_good "G2 uiKey 单点定义"
 else
   g_bad "G2 uiKey 出现在 $n 个文件里"
+fi
+
+# G3：整表 key 的唯一化只有一处实现。两处各写一版，改一处忘另一处就是身份漂移。
+n=$(grep -rl 'fun List<UiItem>.uiKeySeq' app/src/main core/src/main --include=*.kt | wc -l | tr -d ' ')
+if [ "$n" = "1" ]; then
+  g_good "G3 uiKeySeq 单点定义"
+else
+  g_bad "G3 uiKeySeq 出现在 $n 个文件里"
 fi
 
 total_pass=$((jp + gp))
