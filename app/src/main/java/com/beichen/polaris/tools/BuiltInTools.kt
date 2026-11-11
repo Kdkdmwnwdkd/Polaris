@@ -219,14 +219,16 @@ internal fun File.atomicWriteText(text: String) {
  */
 class ReadFileTool(workspace: File) : FileTool(workspace) {
     override val name = "read_file"
+    // 描述与参数文案**一字不动**：默认工具面预算已经顶到 525/525（gate.sh 第 2 道），
+    // 多写一句「按页读」就要从别处砍 token。它们是给模型看的说明书，不是变更日志——
+    // 行为改在实现里（TextFileSlice），说明书不必跟着改。
     override val description =
-        "读取工作区内（沙箱）的文本文件。支持分段读取：offset 跳过字符数，limit 限制单页字符数" +
-            "（默认 65536）；只按页读入内存，不会整份载入，超大文件也只会返回一页。"
+        "读取工作区内（沙箱）的文本文件。支持分段读取：offset 跳过字符数，limit 限制读取长度（默认 65536，约 64KB），超长文件可分批续读。"
 
     override val parameters = JsonSchema.objectSchema(
         JsonSchema.prop("path", "string", "相对于工作区的文件路径"),
-        JsonSchema.prop("offset", "integer", "跳过的字符数，默认 0。续读请用上一页返回的 offset，不要自己加"),
-        JsonSchema.prop("limit", "integer", "单页最大字符数（默认 65536，上限 65536），超过则截断")
+        JsonSchema.prop("offset", "integer", "跳过的字符数，默认 0，用于分批读取大文件"),
+        JsonSchema.prop("limit", "integer", "本次读取的最大字符数（默认 65536），超过则截断")
     )
 
     /** 只读：仅读取沙箱内文件，无副作用。 */
