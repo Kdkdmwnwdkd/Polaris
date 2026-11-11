@@ -11,6 +11,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.beichen.polaris.core.AgentTool
 import com.beichen.polaris.core.JsonSchema
+import com.beichen.polaris.core.TextFileSlice
 import com.beichen.polaris.core.ToolResult
 import com.beichen.polaris.core.io.AtomicJsonFile
 import com.beichen.polaris.core.net.RedirectPolicy
@@ -218,6 +219,9 @@ internal fun File.atomicWriteText(text: String) {
  */
 class ReadFileTool(workspace: File) : FileTool(workspace) {
     override val name = "read_file"
+    // 描述与参数文案**一字不动**：默认工具面预算已经顶到 525/525（gate.sh 第 2 道），
+    // 多写一句「按页读」就要从别处砍 token。它们是给模型看的说明书，不是变更日志——
+    // 行为改在实现里（TextFileSlice），说明书不必跟着改。
     override val description =
         "读取工作区内（沙箱）的文本文件。支持分段读取：offset 跳过字符数，limit 限制读取长度（默认 65536，约 64KB），超长文件可分批续读。"
 
@@ -239,8 +243,8 @@ class ReadFileTool(workspace: File) : FileTool(workspace) {
                     hint = "read_file 必须提供 path（相对于工作区的文件路径），请补充后重试。"
                 )
             val offset = args["offset"]?.primOrNull()?.contentOrNull?.toIntOrNull()?.coerceAtLeast(0) ?: 0
-            val limit = (args["limit"]?.primOrNull()?.contentOrNull?.toIntOrNull() ?: 65536)
-                .coerceAtMost(65536).coerceAtLeast(1)
+            val limit = args["limit"]?.primOrNull()?.contentOrNull?.toIntOrNull()
+                ?: TextFileSlice.DEFAULT_LIMIT
 
             val file = resolve(path)
             if (!file.exists()) {
@@ -258,17 +262,18 @@ class ReadFileTool(workspace: File) : FileTool(workspace) {
                 )
             }
 
-            val full = file.readText()
-            val end = (offset + limit).coerceAtMost(full.length)
-            val snippet = if (offset < full.length) full.substring(offset, end) else ""
-            val remaining = full.length - end
-            val tail = if (remaining > 0) {
-                "\n…（已截断，文件共 ${full.length} 字符，剩余 $remaining，可用 offset=$end 续读）"
+            // F19：按页流式读，内存只与 limit 有关，与文件大小无关。
+            // 修前是先整份 readText() 再 substring——limit 对堆不生效。
+            val slice = TextFileSlice.read(file, offset, limit)
+            val tail = if (slice.hasMore) {
+                "\n…（已截断：本次 ${slice.text.length} 字符，文件 ${file.length()} 字节；" +
+                    "续读用 offset=${slice.nextOffset}）"
             } else ""
             ToolResult.ok(
                 code = "read_ok",
-                message = "已读取 $path（本次 ${snippet.length} 字符，文件共 ${full.length} 字符）",
-                data = snippet + tail
+                message = "已读取 $path（本次 ${slice.text.length} 字符" +
+                    if (slice.hasMore) "，未完）" else "）",
+                data = slice.text + tail
             )
         }.getOrElse {
             ToolResult.fail(
