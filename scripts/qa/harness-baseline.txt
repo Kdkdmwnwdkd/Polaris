@@ -284,7 +284,7 @@
 #   范围写坏（脏项/超限）直接报错，不静默截断也不静默放大。
 #   判据与过滤共用 NotificationScope.parse——同一个 args 得到同一个范围，
 #   从构造上排除「弹窗写微信、实际读全部」。
-#   35 条行为断言 + 8 条接线断言（工具类拖 org.json，只能静态核对接线）。
+#   35 条行为断言 + 9 条接线断言（工具类拖 org.json，只能静态核对接线）。
 #   注意：这 8 条用 w_good/w_bad 计数，不在 assertion-census 的量程内（与 F11 的
 #   run-notification-body-leak-verification.sh 同一约定）；它们守的是结构事实，
 #   行为侧由 [D] 组的同源对账覆盖。
