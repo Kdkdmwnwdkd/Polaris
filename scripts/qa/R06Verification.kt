@@ -88,20 +88,32 @@ private fun flushAndWait(store: ConversationStore, quiesceMs: Long = 100) {
  * 为什么不用固定 sleep：写盘是异步的，`persistCount` 稳定 ≠ 文件已落盘（见 A5 注释）。
  * 为什么不用更长的固定 sleep：那只是把窗口开大，负载更高时照样漏，而且每次都白等。
  * 轮询到条件成立即返回，既不掩盖慢、也不制造假红。
+ *
+ * [until] 是**必须**的：只等「记录存在」会漏掉「存在但还是旧状态」——
+ * settlePendingTools 之后文件里先有的是那条 running=true 的旧记录，20ms 后新记录才盖上，
+ * 只要轮询在中间那一刻命中，就会拿着旧值去断言终态，报出来的却是产品落盘坏了。
+ * 2026-11-11 CI #680 就是这样红的（同一份代码 #677/#679 全绿）。
+ * 超时返回**最后读到的**记录（可能不满足 [until]），让调用方能区分
+ * 「一次都没读到」和「读到了但一直不是终态」。
  */
 private fun awaitToolRecord(
     file: java.io.File,
     convId: String,
     callId: String,
-    timeoutMs: Long
+    timeoutMs: Long,
+    until: (com.beichen.polaris.core.MsgRecord) -> Boolean = { true }
 ): com.beichen.polaris.core.MsgRecord? {
     val deadline = System.currentTimeMillis() + timeoutMs
+    var last: com.beichen.polaris.core.MsgRecord? = null
     while (System.currentTimeMillis() < deadline) {
         val rec = runCatching { ConversationStore(file).load(convId)?.toolRecord(callId) }.getOrNull()
-        if (rec != null) return rec
+        if (rec != null) {
+            last = rec
+            if (until(rec)) return rec
+        }
         Thread.sleep(20)
     }
-    return null
+    return last
 }
 
 /** 等一个 Job 结束（harness 是普通 main，只能借 runBlocking 挂起）。 */
@@ -194,11 +206,12 @@ fun main() {
         // 报出来是「重开读不到记录」，看起来像产品的落盘坏了。
         // 2026-11-05 实测过一次：单独跑 24/24 全过，并行跑就红这一条。
         //
-        // 现在改成**轮询到记录出现**（3 秒上限）：本条要验的是「往返之后仍是终态」，
-        // 不是「写盘有多快」。真读不到才红，且红得有意义。
-        val rec = awaitToolRecord(lastStoreFile, conv, "call-1", timeoutMs = 3_000)
+        // 现在改成**轮询到终态**（3 秒上限）：本条要验的是「往返之后仍是终态」，
+        // 不是「写盘有多快」。只等「记录出现」不够——旧记录（running=true）先落盘、
+        // 新记录后覆盖，中间命中就会拿旧值断言终态（#680 的假红正是这条）。
+        val rec = awaitToolRecord(lastStoreFile, conv, "call-1", timeoutMs = 3_000) { !it.pending }
             ?: throw AssertionError("重开读不到记录（3 秒内文件里始终没有这条）")
-        eq(rec.pending, false, "重开后的 pending")
+        eq(rec.pending, false, "重开后的 pending（3 秒内未等到终态，最后读到的仍是 pending）")
         eq(rec.content, TOOL_INTERRUPTED_NOTE, "重开后的内容")
         // 反证：同一个轮询函数对一个**不存在**的记录必须返回 null。
         // 少了这一句，「轮询到出现」就有可能退化成「永远返回点什么」，A5 变成恒绿。
