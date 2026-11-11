@@ -217,12 +217,20 @@
    真机一装就崩。这条记在这里，是想说明：**「服务器上能验的一律在服务器验掉」不等于
    「服务器上验过就等于对」**——真机项攒起来不是形式主义，是有些缺陷只能在设备上出现。
 
-### 这台机器上**不能**做的事（省得下次再试）
+### 触摸与输入（2026-11-11 更正：旧结论已推翻）
 
-- **触摸设备被禁用**：`dumpsys input` 里每个输入源都是
-  `Touch Input Mapper (mode - disabled)`。所以 `adb shell input tap` **完全不生效**——
-  点不亮输入框、键盘不弹、消息发不出去。`input text` / `keyevent` 也无效（没有焦点窗口）。
-- **可行替代：用 workflow 通知入口触发回合**，不需要碰 UI：
+- ~~**触摸设备被禁用**：`dumpsys input` 里每个输入源都是
+  `Touch Input Mapper (mode - disabled)`，所以 `adb shell input tap` 完全不生效。~~
+
+  **这条不再成立。** 2026-11-11 在同一类机器（`-no-window -accel off -gpu
+  swiftshader_indirect`）上实测：点开导航抽屉、进控制台、点审批弹窗的「允许执行」
+  全部成功。旧结论的代价很大——它让过去几轮的所有验证都被迫绕开 UI，只能读日志
+  推断「弹窗大概弹了」，而 F16（审批弹窗挂在对话页里）正是这样漏掉的。
+
+  现做法：`adb shell uiautomator dump` 读界面文字与坐标 → `adb shell input tap x y`
+  点。坐标从 dump 里取，不要硬编（状态栏/崩溃横幅会把整页往下推）。
+
+- **仍然推荐：用 workflow 通知入口触发回合**（比点 UI 稳，且不受页面状态影响）：
 
   ```bash
   # 1. 往应用私有目录写一条 workflow（run-as 能写；目录要先 mkdir）
@@ -237,7 +245,17 @@
   ```
 
   判定「回合真的跑了」的标志：`[Workflow] 从通知进入，准备执行 <id>` →
-  `[Chat] 用户发送：…` → `[AgentLoop] 开始运行…` → `[Turn] … turn.end status=completed`。
+  `[Chat] 用户发送 <N> 字`（F12 起只记长度，不再记正文）→ `[AgentLoop] 开始运行…`
+  → `[Turn] … turn.end status=completed`。
+
+- **看「模型到底收到了什么」**：mock 端点侧把完整请求体落盘最直接。给
+  `mock_llm.py` 的 `do_POST` 加一段 `json.dump(req, ...)`，重启后每个请求一个
+  `.json`，想验「注入里有没有正文」直接读文件，不用猜。重启要用
+  `setsid -f python3 mock_llm.py 8899`——普通 `nohup ... &` 会随 SSH 会话一起被杀。
+
+- **审批弹窗的端到端验证**需要三个条件同时成立：mock 先回 `__use_tools`（渐进式
+  工具面下 `device` 组默认没开）、再回目标工具、用户 30 秒内点按钮。少任何一个，
+  看到的现象都是「任务失败」，而不是「弹窗没出现」。
 
 ---
 

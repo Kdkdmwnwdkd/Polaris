@@ -4,6 +4,7 @@ import com.beichen.polaris.core.PromptItem
 import com.beichen.polaris.core.UiItem
 import com.beichen.polaris.core.extractPromptVariables
 import com.beichen.polaris.core.uiKey
+import com.beichen.polaris.core.uiKeySeq
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -197,7 +198,6 @@ fun ChatScreen(
     var showPromptPicker by remember { mutableStateOf(false) }
     // W-RT4：待填变量的提示词（非 null 时弹填槽；null = 无流程）
     var fillPromptItem by remember { mutableStateOf<PromptItem?>(null) }
-    val pendingApproval by vm.pendingApproval.collectAsStateWithLifecycle()
     val config by vm.config.collectAsStateWithLifecycle()
     // 功能四（录屏反馈「存了多个模型却换不了、不知道在用哪个」）：常驻模型指示条 + 一键切换，不再深埋三层且切换有反馈。
     val profiles by vm.profiles.collectAsStateWithLifecycle()
@@ -389,7 +389,9 @@ fun ChatScreen(
                     .fillMaxWidth()
             )
         } else {
-            // W-33 顺手：包一层 Box，给「回到底部」按钮留悬浮位
+            // W-33 顺手：包一层 Box，给「回到底部」按钮留悬浮位。
+            // 审计 F17：key 的唯一性不能依赖外部 id（供应商会复用 tool_call id），整表算一遍。
+            val messageKeys = remember(messages) { messages.uiKeySeq() }
             Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 state = listState,
@@ -406,7 +408,7 @@ fun ChatScreen(
             ) {
                 // 同发送者 8dp、换手 24dp（W-96 从 16dp 提起）：3:1 的间距差就是分组的全部线索。
                 // R-05：key 用数据主键（工具卡 call.id、气泡轮次下标），免得插一张卡就整表重建。
-                itemsIndexed(messages, key = { index, item -> item.uiKey(index) }) { index, item ->
+                itemsIndexed(messages, key = { index, _ -> messageKeys[index] }) { index, item ->
                     val prev = messages.getOrNull(index - 1)
                     val gap = when {
                         prev == null -> 0.dp
@@ -710,25 +712,10 @@ fun ChatScreen(
         )
     }
 
-    // —— L10 审批弹窗（§6.4）：入场 fade+scale 200ms，退场 fade 150ms ——
-    // request 消失后本地多撑 150ms 承载退场动画，再卸载（Dialog 无内建退场钩子）
-    val request = pendingApproval
-    var approvalReq by remember { mutableStateOf<ApprovalRequest?>(null) }
-    var approvalVisible by remember { mutableStateOf(false) }
-    LaunchedEffect(request) {
-        if (request != null) {
-            approvalReq = request
-            approvalVisible = true
-        } else if (approvalVisible) {
-            approvalVisible = false
-            delay(150)
-            approvalReq = null
-        }
-    }
-    val currentApproval = approvalReq
-    if (currentApproval != null) {
-        ApprovalDialog(request = currentApproval, visible = approvalVisible, vm = vm)
-    }
+    // —— L10 审批弹窗：挂载点在 AgentKitApp（ApprovalHost），不在这里 ——
+    // 审计 F16：它原来挂在本页，只有「对话」被组合时才渲染。模型发起的审批是异步到达的，
+    // 用户那时可能停在控制台/设置/权限引导页 → 弹窗不出现 → 30 秒超时被自动拒绝
+    // （真机日志：tool.end code=approval_denied dur=30079ms）。搬到全局后与本页无关。
 
     // —— 功能五（P1-4）：附件类型选择（图片 / 文件） ——
     AkModalHost(target = if (showAttachMenu) true else null) { _, visible ->
@@ -2760,7 +2747,7 @@ private val APPROVAL_TIMEOUT_SEC: Int = (APPROVAL_TIMEOUT_MS / 1000).toInt()
  * @param visible 退场时置 false：fade 150ms（AkMotionExit）后由宿主卸载。
  */
 @Composable
-private fun ApprovalDialog(request: ApprovalRequest, visible: Boolean, vm: ChatScreenContract) {
+internal fun ApprovalDialog(request: ApprovalRequest, visible: Boolean, vm: ChatScreenContract) {
     val ak = LocalAkColors
     val view = LocalView.current
     var askNoMore by remember(request) { mutableStateOf(false) }

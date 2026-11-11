@@ -100,9 +100,40 @@ sealed interface UiItem {
  * @param index 在列表里的位置，**仅用于兜底**；有稳定主键时忽略。
  */
 fun UiItem.uiKey(index: Int): String = when (this) {
-    // 空 id 的老数据（手工编辑、早期版本）退回下标，否则多张卡会撞同一个 key —— 
+    // 空 id 的老数据（手工编辑、早期版本）退回下标，否则多张卡会撞同一个 key ——
     // Compose 遇到重复 key 直接抛异常，整个对话页白屏。
     is UiItem.Tool -> "t:" + call.id.ifEmpty { "@$index" }
     is UiItem.User -> if (turnIndex >= 0) "u:$turnIndex" else "u@$index"
     is UiItem.Assistant -> if (turnIndex >= 0) "a:$turnIndex" else "m@$index"
+}
+
+/**
+ * 给整表生成 key，保证**两两不同**（审计 F17）。
+ *
+ * [uiKey] 假设「工具调用 id 唯一」，可 id 不是本地产的——它从模型供应商回来。
+ * 中转站、兼容层、本地 llama.cpp 都会复用 id；重试与分支（reask）也会把同一条
+ * tool_call 复制成两份。一旦撞上，Compose 在 `LazyColumn` 里直接抛
+ * `IllegalArgumentException: Key "t:xxx" was already used`，**整个对话页崩掉**，
+ * 用户连历史会话都打不开。
+ *
+ * 真机复现（模拟器 API 30，mock 端点每次回同一个 `call_mock_1`）：
+ *
+ * ```
+ * 07:36:34.110 java.lang.IllegalArgumentException: Key "t:call_mock_1" was already used
+ *    at androidx.compose.foundation.lazy.LazyListMeasuredItemProvider.getAndMeasure(...)
+ * ```
+ *
+ * 修法要同时满足两件事：
+ *  - **首次出现保持原样**（`t:<id>`）——稳定身份不能变，否则滚动位置与展开态全丢；
+ *  - **重复出现必须唯一**——追加 `@dup<下标>`，下标在同一张表内唯一，兜底成立。
+ *
+ * 不改 [uiKey] 本身：它的语义（单条 → 一个 key）是对的，错的是「假设全局唯一」。
+ * 唯一性是**整表**性质，就该由整表来保证。
+ */
+fun List<UiItem>.uiKeySeq(): List<String> {
+    val seen = HashSet<String>(size)
+    return mapIndexed { index, item ->
+        val key = item.uiKey(index)
+        if (seen.add(key)) key else "$key@dup$index"
+    }
 }

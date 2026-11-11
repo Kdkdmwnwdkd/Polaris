@@ -18,6 +18,7 @@ import com.beichen.polaris.browser.BrowserHost
 import com.beichen.polaris.ui.AgentKitTheme
 import com.beichen.polaris.ui.AppearanceState
 import com.beichen.polaris.ui.AppScaffold
+import com.beichen.polaris.ui.ApprovalHost
 import com.beichen.polaris.ui.ChatViewModel
 import com.beichen.polaris.ui.ThemeMode
 import com.beichen.polaris.workflow.WorkflowNotifier
@@ -123,5 +124,8 @@ private fun AgentKitApp(
             dynamicColor = dynamicColor,
             onDynamicColorChange = { AppearanceState.setDynamicColor(ctx, it) }
         )
+        // 审计 F16：审批是全局模态，挂在 Scaffold 之外——路由停在权限引导/控制台/设置页
+        // 时它照样出现。修前挂在 ChatScreen 里，非对话页触发的审批只能等 30 秒超时被拒。
+        ApprovalHost(vm = vm)
     }
 }

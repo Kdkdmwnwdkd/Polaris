@@ -110,7 +110,7 @@
 # "有没有新函数"而不是文件总行数——这轮新增的函数只有 Editorial.kt 里的
 # 六个排版原语（独立文件，398 行，见 app/src/main/java/com/beichen/polaris/ui/Editorial.kt）。
 lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3588
-lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3159
+lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3146
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1499
 lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1535
