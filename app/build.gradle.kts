@@ -6,7 +6,11 @@ plugins {
 
 /**
  * 本地构建（无 GITHUB_RUN_NUMBER 环境变量）时的 versionCode 回退值。
- * 必须不小于项目历史最大 versionCode，防止本地包装机后因版本回退被系统拒绝覆盖安装。
+ *
+ * 它**不**保证能覆盖装机：线上版本号来自 CI run number，已经跑到 500 以上，这里的 14
+ * 早就追不上了。真正的兜底在 defaultConfig 里（`-PversionCode` / `polaris.versionCode`）。
+ * 保留这个常量只是为了让「完全没配置的本地构建」有一个确定、可复现的版本号，
+ * 而不是 0 或环境相关的值。
  */
 val LOCAL_FALLBACK_VERSION_CODE = 14
 
@@ -22,17 +26,52 @@ val LOCAL_FALLBACK_VERSION_CODE = 14
  * 现在私钥只存在两处：GitHub Actions Secrets（CI 构建时解到 runner 临时目录）
  * 和用户离线备份。仓库里只留「怎么用 secret 签名」的代码。
  *
- * 本地没有 secret 时回退标准 debug 证书（每台机器各生成一份，互不相同，无所谓
- * ——本地包不发布）。CI 上则要求必须有真签名：宁可红，也不要悄悄发一个
- * 「以后永远升不了级」的包（签名换了而用户不知道，是最难查的一类问题）。
+ * 取值优先级：环境变量 > local.properties（该文件在 .gitignore 里，永不入库）。
+ * 为什么还要承认 local.properties：`export` 的口令会留在 shell 历史里，也会挂在
+ * `ps e` 的环境块上；仓库外的属性文件只有本机 gradle 进程读得到，泄露面小得多。
+ *
+ * 三种状态必须分清——把它们混成「找不到就用 debug 证书」正是「静默发错包」的来源：
+ *   ① 一个都没配            → 回退 AGP 默认 debug 证书（本地调试，不报错）
+ *   ② 配了一部分 / 路径写错  → 立刻失败，不替用户猜
+ *   ③ 四个值齐全且文件可读   → 用发布证书签
  */
-val ksPath: String? = System.getenv("POLARIS_KEYSTORE")
-val ksStorePass: String? = System.getenv("POLARIS_STORE_PASSWORD")
-val ksAlias: String? = System.getenv("POLARIS_KEY_ALIAS")
-val ksKeyPass: String? = System.getenv("POLARIS_KEY_PASSWORD") ?: ksStorePass
-val releaseKeyFile = ksPath?.let { file(it) }
-val hasReleaseKey = releaseKeyFile?.isFile == true &&
+val localProps = java.util.Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.isFile) f.inputStream().use { load(it) }
+}
+
+fun signingValue(envKey: String, propKey: String): String? =
+    System.getenv(envKey)?.trim()?.takeIf { it.isNotEmpty() }
+        ?: localProps.getProperty(propKey)?.trim()?.takeIf { it.isNotEmpty() }
+
+// `~` 不归 Gradle 展开，只有 shell 展开；属性文件里写 ~/x 很常见，这里补上。
+val ksPath: String? = signingValue("POLARIS_KEYSTORE", "polaris.storeFile")?.let {
+    if (it.startsWith("~/")) System.getProperty("user.home") + it.substring(1) else it
+}
+val ksStorePass: String? = signingValue("POLARIS_STORE_PASSWORD", "polaris.storePassword")
+val ksAlias: String? = signingValue("POLARIS_KEY_ALIAS", "polaris.keyAlias")
+val ksKeyPass: String? = signingValue("POLARIS_KEY_PASSWORD", "polaris.keyPassword") ?: ksStorePass
+// 相对路径按**仓库根**解析：写 `polaris.storeFile=keys/x.jks` 的人不会去想 app/ 还是根目录。
+val releaseKeyFile = ksPath?.let { rootProject.file(it) }
+val configuredAny = !ksPath.isNullOrBlank() || !ksStorePass.isNullOrBlank() || !ksAlias.isNullOrBlank()
+val hasReleaseKey = !ksPath.isNullOrBlank() && releaseKeyFile?.isFile == true &&
     !ksStorePass.isNullOrBlank() && !ksAlias.isNullOrBlank()
+
+// ② 配了却不可用 → 红。静默回退会产出一个「能装、但装上去就再也升不了级」的包，
+// 这种包只有到用户下次点更新时才会暴露，代价是卸载重装 + 权限全丢。
+if (configuredAny && !hasReleaseKey) {
+    val missing = buildList {
+        if (ksPath.isNullOrBlank()) add("POLARIS_KEYSTORE / polaris.storeFile")
+        else if (releaseKeyFile?.isFile != true) add("keystore 文件不存在：${releaseKeyFile?.absolutePath}")
+        if (ksStorePass.isNullOrBlank()) add("POLARIS_STORE_PASSWORD / polaris.storePassword")
+        if (ksAlias.isNullOrBlank()) add("POLARIS_KEY_ALIAS / polaris.keyAlias")
+    }
+    throw GradleException(
+        "签名配置不完整，拒绝静默回退到 debug 证书：${missing.joinToString("；")}。\n" +
+            "要么四项都配（环境变量或仓库根 local.properties 的 polaris.* 键），" +
+            "要么四项都不配（本地调试包，不能覆盖升级已发布的包）。"
+    )
+}
 
 if (!hasReleaseKey && System.getenv("POLARIS_REQUIRE_RELEASE_KEY") == "1") {
     throw GradleException(
@@ -77,10 +116,16 @@ android {
         targetSdk = 28
         // 版本号每次构建自增：CI 上用 GITHUB_RUN_NUMBER（每次运行单调递增），
         // 本地构建回退到 LOCAL_FALLBACK_VERSION_CODE 常量。
-        // 取 coerceAtLeast 兜底，确保 versionCode 永不小于历史值，否则 Android 拒绝覆盖安装。
+        // 本地回退值（14）远小于 CI 已经发出去的版本（1.587 → 587），直接装会被系统
+        // 以「版本回退」拒绝。所以本地出包要自己抬一次：`-PversionCode=600`，或
+        // local.properties 里 `polaris.versionCode=600`。CI 上 run number 单调递增，
+        // 这两个入口只在本地生效，不会污染线上版本序列。
+        val localVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull()
+            ?: localProps.getProperty("polaris.versionCode")?.toIntOrNull()
         val ciVersionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: LOCAL_FALLBACK_VERSION_CODE
-        versionCode = ciVersionCode.coerceAtLeast(LOCAL_FALLBACK_VERSION_CODE)
-        versionName = "1.$ciVersionCode"
+        // maxOf 兜底，确保 versionCode 永不小于历史值，否则 Android 拒绝覆盖安装。
+        versionCode = maxOf(maxOf(ciVersionCode, LOCAL_FALLBACK_VERSION_CODE), localVersionCode ?: 0)
+        versionName = "1.$versionCode"
         // 本地 llama.cpp 推理只编 arm64-v8a：先覆盖全部真机，模拟器 x86_64 后续再补
         if (!skipNative) {
             ndk {
