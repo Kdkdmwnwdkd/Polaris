@@ -11,6 +11,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.beichen.polaris.core.AgentTool
 import com.beichen.polaris.core.JsonSchema
+import com.beichen.polaris.core.TextEncoding
 import com.beichen.polaris.core.TextFileSlice
 import com.beichen.polaris.core.ToolResult
 import com.beichen.polaris.core.io.AtomicJsonFile
@@ -265,6 +266,17 @@ class ReadFileTool(workspace: File) : FileTool(workspace) {
             // F19：按页流式读，内存只与 limit 有关，与文件大小无关。
             // 修前是先整份 readText() 再 substring——limit 对堆不生效。
             val slice = TextFileSlice.read(file, offset, limit)
+
+            // F20：非 UTF-8 文件读出来是一片 U+FFFD。不提前说，模型会把它当成真实内容，
+            // 再拿这段乱码去 edit_file（那条路已拒绝，见 EditFileTool）——但更常见的是
+            // 它基于乱码继续推理，最后给用户一个「这文件里写的是……」的错误结论。
+            // 只在第一页提示：续读时再说一遍纯属浪费上下文。
+            val encodingNote = if (offset == 0 && !TextEncoding.looksUtf8(file)) {
+                "⚠️ 这不是 UTF-8 文本（可能是 GBK / GB18030）：非 ASCII 字符会显示成 " +
+                    "U+FFFD 占位符，原文并未损坏，但你看不到真实内容。" +
+                    "要处理它请用 shell_run 走 iconv 转码；不要用 edit_file 修改" +
+                    "（它按字符匹配，会把文件写坏）。\n\n"
+            } else ""
             val tail = if (slice.hasMore) {
                 "\n…（已截断：本次 ${slice.text.length} 字符，文件 ${file.length()} 字节；" +
                     "续读用 offset=${slice.nextOffset}）"
@@ -273,7 +285,7 @@ class ReadFileTool(workspace: File) : FileTool(workspace) {
                 code = "read_ok",
                 message = "已读取 $path（本次 ${slice.text.length} 字符" +
                     if (slice.hasMore) "，未完）" else "）",
-                data = slice.text + tail
+                data = encodingNote + slice.text + tail
             )
         }.getOrElse {
             ToolResult.fail(
@@ -351,7 +363,29 @@ class EditFileTool(
                 )
             }
 
-            when (val plan = EditFileLogic.plan(file.readText(), oldString, newString, replaceAll)) {
+            // F20：改文件前先确认「读得回来」。这里不是防御性编程，是防数据损坏——
+            // readText() 对非 UTF-8 文件做的是「替换成 U+FFFD」而不是报错，替换完再写回，
+            // 原字节就没了。edit_file 必须看到全文才能做唯一性校验，所以它没法分页，
+            // 只能用「超限就明说」把 OOM 换成一句人话。
+            if (file.length() > TextEncoding.EDIT_MAX_BYTES) {
+                return@withContext ToolResult.fail(
+                    code = "file_too_large",
+                    message = "文件过大（${file.length() / 1024 / 1024} MB），edit_file 不整份载入",
+                    hint = "edit_file 要看到全文才能判断 old_string 是否唯一，超过 " +
+                        "${TextEncoding.EDIT_MAX_BYTES / 1024 / 1024} MB 不再支持。" +
+                        "大文件请用 shell_run（sed / perl -i）做替换，或用 write_file 整份重写。"
+                )
+            }
+            val source = TextEncoding.readStrictUtf8(file)
+                ?: return@withContext ToolResult.fail(
+                    code = "not_utf8",
+                    message = "文件不是 UTF-8 编码，edit_file 会把它改坏",
+                    hint = "按字符匹配要求先完整解码，非 UTF-8 文件解码时会丢字且不可逆。" +
+                        "先用 shell_run 转码（如 `iconv -f GB18030 -t UTF-8 原文件 > 新文件`），" +
+                        "或改用 write_file 整份重写。"
+                )
+
+            when (val plan = EditFileLogic.plan(source, oldString, newString, replaceAll)) {
                 is EditPlan.Reject -> return@withContext ToolResult.fail(
                     code = plan.code, message = plan.message, hint = plan.hint
                 )

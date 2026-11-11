@@ -6,6 +6,7 @@
 //
 // 运行：scripts/qa/run-text-file-slice-verification.sh
 
+import com.beichen.polaris.core.TextEncoding
 import com.beichen.polaris.core.TextFileSlice
 import java.io.File
 
@@ -161,6 +162,51 @@ fun main() {
         eq(s.text.length, 32, "本页字符数")
         eq(s.hasMore, true, "hasMore")
         eq(s.text, "中".repeat(32), "内容")
+    }
+
+    println("\n[C] 编码：非 UTF-8 文件不能被静默换成 U+FFFD")
+    check("C1 UTF-8 中文 / emoji 判为 UTF-8") {
+        eq(TextEncoding.looksUtf8(tmp("c1", "你好，世界 😀\r\n")), true, "判定")
+    }
+
+    check("C2 GBK 中文判为非 UTF-8（这类文件被 edit_file 写过就回不来了）") {
+        val f = File.createTempFile("f20-", "-gbk").apply { deleteOnExit() }
+        f.writeBytes(byteArrayOf(0xC4.toByte(), 0xE3.toByte(), 0xBA.toByte(), 0xC3.toByte())) // 「你好」
+        eq(TextEncoding.looksUtf8(f), false, "判定")
+    }
+
+    check("C3 探测窗口正好切在多字节字符中间：不能误判成非 UTF-8") {
+        // 8190 个 ASCII + 「中文」：第 8192 字节落在「中」(E4 B8 AD) 的第三个字节上
+        val f = File.createTempFile("f20-", "-cut").apply { deleteOnExit() }
+        f.writeBytes("a".repeat(8190).toByteArray() + "中文".toByteArray(Charsets.UTF_8))
+        eq(f.length(), 8196L, "前提：文件长度")
+        eq(TextEncoding.looksUtf8(f), true, "判定")
+    }
+
+    check("C4 readStrictUtf8：UTF-8 原样返回，GBK 返回 null") {
+        eq(TextEncoding.readStrictUtf8(tmp("c4", "第一行\n第二行 😀")), "第一行\n第二行 😀", "UTF-8 原文")
+        val gbk = File.createTempFile("f20-", "-gbk2").apply { deleteOnExit() }
+        gbk.writeBytes(byteArrayOf(0xC4.toByte(), 0xE3.toByte()))
+        eq(TextEncoding.readStrictUtf8(gbk), null, "GBK 必须拒绝")
+    }
+
+    check("C5 UTF-16 带 BOM：纯 ASCII 内容也判为非 UTF-8") {
+        // FF FE 不是合法 UTF-8；但 "a\u0000b\u0000" 去掉 BOM 后逐字节都是合法 UTF-8，
+        // 所以必须有 BOM 这一条显式判据，否则记事本存的「Unicode」文件会被放行。
+        val f = File.createTempFile("f20-", "-utf16").apply { deleteOnExit() }
+        f.writeBytes(byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "ab".toByteArray(Charsets.UTF_16LE))
+        eq(TextEncoding.looksUtf8(f), false, "判定")
+    }
+
+    check("C6 二进制文件（NUL 密集）判为非 UTF-8") {
+        val f = File.createTempFile("f20-", "-bin").apply { deleteOnExit() }
+        f.writeBytes(ByteArray(256) { i -> if (i % 3 == 0) 'A'.code.toByte() else 0.toByte() })
+        eq(TextEncoding.looksUtf8(f), false, "判定")
+    }
+
+    check("C7 空文件 / 纯 ASCII 判为 UTF-8（不能误伤）") {
+        eq(TextEncoding.looksUtf8(tmp("c7a", "")), true, "空文件")
+        eq(TextEncoding.looksUtf8(tmp("c7b", "plain ascii 123\n")), true, "ASCII")
     }
 
     println()

@@ -13,6 +13,7 @@ source "$ROOT/scripts/qa/lib/deps.sh"
 SRC_CORE=core/src/main/java/com/beichen/polaris/core
 TOOLS=app/src/main/java/com/beichen/polaris/tools/BuiltInTools.kt
 SLICE="$SRC_CORE/TextFileSlice.kt"
+ENCODING="$SRC_CORE/TextEncoding.kt"
 HARNESS=scripts/qa/TextFileSliceVerification.kt
 
 CACHE="$QA_GRADLE_CACHE"
@@ -36,7 +37,7 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 RUNTIME="$STDLIB"
 COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS"
 
-for f in "$SLICE" "$HARNESS"; do
+for f in "$SLICE" "$ENCODING" "$HARNESS"; do
   [ -f "$f" ] || { echo "FAIL 缺少源文件 $f（无法判定，视为失败）"; exit 1; }
 done
 
@@ -44,7 +45,7 @@ java -cp "$COMPILER_CP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -no-reflect \
   -cp "$RUNTIME" \
   -d "$OUT" -nowarn \
-  "$SLICE" "$HARNESS" 2>&1 | grep -v '^warning:' | head -30
+  "$SLICE" "$ENCODING" "$HARNESS" 2>&1 | grep -v '^warning:' | head -30
 if [ ! -d "$OUT/com" ]; then
   echo "FAIL 编译失败（上面是编译器输出）"
   exit 1
@@ -102,6 +103,30 @@ if grep -qF 'coerceAtMost(65536)' "$TOOLS"; then
   w_bad "W5 工具里仍硬顶 65536（上限应只在 TextFileSlice）"
 else
   w_good "W5 上限单点在 TextFileSlice"
+fi
+
+# W6：edit_file 不能再走 readText()。它对非 UTF-8 文件做的是「替换成 U+FFFD 再写回」——
+# 不报错、不抛异常，只是把用户的字节永久换掉。这条守的是「文件不会被写坏」，不是代码长相。
+EDITFILE_BODY=$(awk '/^class EditFileTool/{f=1;next} f && /^class /{exit} f{print}' "$TOOLS")
+if echo "$EDITFILE_BODY" | grep -q '\.readText()'; then
+  w_bad "W6 edit_file 仍用 readText() 整份载入（非 UTF-8 文件会被写坏）"
+else
+  w_good "W6 edit_file 不再用 readText()"
+fi
+
+# W7：真的走了严格解码。只把 readText 删掉、改成别的宽松读法同样会写坏。
+if grep -qF 'TextEncoding.readStrictUtf8(file)' "$TOOLS"; then
+  w_good "W7 edit_file 调用 TextEncoding.readStrictUtf8"
+else
+  w_bad "W7 edit_file 没有走严格解码"
+fi
+
+# W8：编码判据单点（两个工具各写一份 lenient/strict 判断，迟早分叉）。
+n=$(grep -rl 'object TextEncoding' app/src/main core/src/main --include=*.kt | wc -l | tr -d ' ')
+if [ "$n" = "1" ]; then
+  w_good "W8 TextEncoding 单点定义"
+else
+  w_bad "W8 TextEncoding 出现在 $n 个文件里"
 fi
 
 total_pass=$((jp + gp))
