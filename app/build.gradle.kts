@@ -1,3 +1,8 @@
+// 必须 import：脚本作用域里的 `java` 是 JavaPluginExtension（Gradle 的扩展属性），
+// 写全限定名 `java.util.Properties` 会被解析成 `JavaPluginExtension.util` → Unresolved。
+// 这个坑在 tree-sitter 或任何语法解析器上都看不出来，只有真编译才会暴露。
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -35,7 +40,7 @@ val LOCAL_FALLBACK_VERSION_CODE = 14
  *   ② 配了一部分 / 路径写错  → 立刻失败，不替用户猜
  *   ③ 四个值齐全且文件可读   → 用发布证书签
  */
-val localProps = java.util.Properties().apply {
+val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.isFile) f.inputStream().use { load(it) }
 }
