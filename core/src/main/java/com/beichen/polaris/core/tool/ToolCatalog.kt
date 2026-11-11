@@ -250,6 +250,10 @@ object ToolCatalog {
          *
          * 粒度按**工具**记（`private_read:clipboard` / `private_read:device_notifications`）：
          * 同意读剪贴板不等于同意读通知，两者的敏感度不在一个量级。
+         *
+         * 通知还要再细一层（审计 F15）：`device_notifications` 一次读的是**全部应用**最近
+         * 60 条，而「读通知」这四个字在用户心里指的是某一个应用。键因此带上包名集合
+         * （`private_read:device_notifications:<pkg,…>`），不点名应用的全量读取不可记忆。
          */
         const val PRIVATE_READ = "private_read"
     }

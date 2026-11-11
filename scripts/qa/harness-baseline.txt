@@ -274,4 +274,26 @@
 #   用户正文改回原文 → W2 红。退出码均为 1。
 #   纯函数零依赖（只用 stdlib），沙箱与 CI 都能真跑，不 SKIP。
 
-133
+# 2026-11-11：133 → 134（审计 F15「读通知的授权粒度停在『工具』这一层」新增
+#   run-notification-scope-verification.sh）。
+#   F9 给 device_notifications 加了审批，粒度却是「这个工具」：键固定
+#   private_read:device_notifications 且可记忆。用户为看一条微信点「本次会话不再询问」，
+#   换来的是「本会话内任意次读全部应用最近 60 条」——短信验证码、银行推送、私聊。
+#   与 R-08 的 shell 组键同病：键描述工具类别，用户同意的是本次范围。
+#   修法：工具加 packages 参数；授权键编入包名集合；不点名 = 全量 = **不可记忆**；
+#   范围写坏（脏项/超限）直接报错，不静默截断也不静默放大。
+#   判据与过滤共用 NotificationScope.parse——同一个 args 得到同一个范围，
+#   从构造上排除「弹窗写微信、实际读全部」。
+#   35 条行为断言 + 9 条接线断言（工具类拖 org.json，只能静态核对接线）。
+#   注意：这 8 条用 w_good/w_bad 计数，不在 assertion-census 的量程内（与 F11 的
+#   run-notification-body-leak-verification.sh 同一约定）；它们守的是结构事实，
+#   行为侧由 [D] 组的同源对账覆盖。
+#   变异验证（5 次，退出码均为 1）：
+#     ① 键丢掉包名集合 → B3/D1/D2/D5/D7/D8/D9 红；
+#     ② 只改键不改过滤（byPackages 返回全量）→ D1/D2/D3/D5 红；
+#     ③ 全量改成可记忆 → B4/B6/C4/E3 红；
+#     ④ 包名不折叠大小写 → A5/D2/D5 红；
+#     ⑤ 工具绕过 byPackages 直接读 all → W3 红（行为断言编不到工具，故留这条接线）。
+#   三个源文件零 Android 依赖（stdlib + kotlinx-json），沙箱与 CI 都能真跑，不 SKIP。
+
+134

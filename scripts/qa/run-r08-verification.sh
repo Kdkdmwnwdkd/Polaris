@@ -56,6 +56,7 @@ SOURCES=(
   "$SRC_CORE/core/tool/ToolCatalog.kt"
   "$SRC_CORE/core/agent/ApprovalGrouping.kt"
   "$SRC_CORE/core/agent/ApprovalScope.kt"
+  "$SRC_CORE/core/agent/NotificationScope.kt"
 )
 
 compile_and_run() {
