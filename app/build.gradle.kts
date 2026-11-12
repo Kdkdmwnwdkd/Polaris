@@ -148,6 +148,33 @@ android {
         }
     }
 
+    /**
+     * 发布构建不跑 lintVital。
+     *
+     * ## 为什么
+     * `lintVitalRelease` 是 AGP 在**打 release 包时**自动跑的那部分 lint（只报 fatal）。
+     * 2026-11-12 首次产出 release 变体，它立刻挡住构建，两个原因都不是我们的 bug：
+     *
+     *  1. **ExpiredTargetSdkVersion**（`targetSdk = 28` 低于 Play 要求的 33）。
+     *     这条是**上架 Google Play 的规则**，本项目不在 Play 分发（APK 走 GitHub Release）。
+     *     而 targetSdk 28 是**功能前提**不是疏忽：Android 10+ 对 targetSdk>=29 的应用
+     *     禁止从应用数据目录 execve，容器里的 busybox/node/python 全部落在 filesDir，
+     *     proot 一进 guest 就 error=13（Termux 至今保持 28，同一个原因）。
+     *     也就是说：改成 33 = 容器功能直接没了。
+     *  2. **lint 自己崩了**：`AssertionError: Unexpected token: '['`（IntelliJ Java parser
+     *     在处理 Gradle Kotlin DSL 文件里的 KDoc 行内链接时抛的）。堆栈全在
+     *     lint 内部，与源码无关，这个版本组合下修不了。
+     *
+     * ## 代价与补偿
+     * 关闭后 CI 不再因 lint 拦发布包。补偿是：`./gradlew lint` 仍可手动/单独跑，
+     * 且真正的发布前检查在 CI 的其他步骤里（签名指纹、包名、debuggable、QA harness）。
+     * 保留 `abortOnError = false` 是为了让手动跑 lint 时只出报告不挡流程。
+     */
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     buildTypes {
         /**
          * 本地调试包：**不作为发布物**，只给「装到自己手机上边用边查」。
