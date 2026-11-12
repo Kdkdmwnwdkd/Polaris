@@ -6,7 +6,8 @@
 ## 一次验收怎么走（约 20 分钟）
 
 1. arm64 手机连 adb（x86 模拟器能到 P4、P5，以及 P1 的「租约登记」半步——见文末 2026-11-12 记录）。
-2. 装包：`./gradlew :app:assembleDebug`（**不要**带 `-PnoNative`）→ `adb install -r`。
+2. 装包：`./gradlew :app:assembleRelease`（**不要**带 `-PnoNative`）→ `adb install -r`。
+   要跑 harness 或想留调试器接口时才用 `assembleDebug`——**P7 必须用 release 包验**。
 3. 按 P1 → P3 顺序点，P4/P5 任何设备都能做。
 4. 入口位置：**「容器」已不在侧栏**（2026-11 起侧栏只留 5 项），改到 **设置 → 工具 → 容器**。
 4. **任何一步不对，不要截图**：日志页 →「诊断包」→ 发我。R10 起这个包里带
@@ -137,11 +138,78 @@
 
 ---
 
+## P7 发布包不是 debuggable（任何设备都能做）
+
+| | |
+|---|---|
+| 阻塞原因 | 要看 manifest，得装 release 变体的包 |
+| 代码 | `app/build.gradle.kts` 的 `release` buildType；CI 的 `Verify APK identity` 步骤 |
+
+**背景一句话**：2026-11-12 之前仓库只产 debug 变体，CI 直接把它发 Release。签名是发布证书
+（这点没错），但 `android:debuggable="true"` 意味着同机任意应用能 `run-as` 进私有目录——
+包括**明文存的 API Key**。装得上、跑得动，只有看 manifest 才看得见。
+
+**步骤**：装 CI 的 `app-release.apk`（或本地 `./gradlew :app:assembleRelease`），然后
+
+```bash
+adb shell run-as com.beichen.polaris ls
+```
+
+**通过标准**：报 `Package 'com.beichen.polaris' is not debuggable`（或 `unknown package`）。
+若命令**成功列出目录**，说明装的是 debug 包——那不是回归，是变体不同；换 release 包再看。
+
+---
+
+## P8 长命令不再第 30 秒被杀（任何设备都能做）
+
+| | |
+|---|---|
+| 阻塞原因 | 要真跑一条超过 30 秒的命令 |
+| 代码 | `ShellTool.commandTimeoutMs` → `TerminalSessionPool.run(..., timeoutMs=)` |
+
+**步骤**：对话里让它执行
+
+```bash
+for i in $(seq 1 90); do sleep 1; done; echo done
+```
+
+（或直接 `shell_run` 跑 `sleep 90 && echo done`）
+
+**通过标准**：约 90 秒后返回 `done`、退出码 0。
+修前的表现是**第 30 秒**返回「命令在 30000ms 内未完成」，并且该会话被标脏
+（下一个命令报 `session_desynced`，要求 `shell_close` 重开）。
+`shell_run` 声明了 20 分钟预算，修前那个值从未传到会话池。
+
+注意：这条同时也是「回合预算」的反向验证——回合还剩不到 90 秒时，它会按剩余时间收手
+并报 `turn_budget_exhausted`（**不是** `tool_timeout`），那是正确行为。
+
+---
+
+## P9 技能脚本拿不到宿主类（可选，服务器侧已有断言）
+
+| | |
+|---|---|
+| 阻塞原因 | 要有一个能改脚本的技能包 |
+| 代码 | `RhinoJsEngine.eval`（ClassShutter 恒 false + `initSafeStandardObjects`） |
+
+**步骤**：导入一个含 `main.js` 的技能，正文写
+
+```js
+(input, agent) => { return typeof Packages + '/' + typeof java }
+```
+
+**通过标准**：返回 `undefined/undefined`。修前返回 `object/object`——那意味着
+`Packages.<任意未列包>.<类>.<静态方法>()` 可以执行（已用同版本 Rhino 复现）。
+
+没有可改脚本的技能时跳过：`R7Verification` 的 R9-1 / R9-2 在服务器侧直接断言了这一条。
+
+---
+
 ## 观察到再说（不阻塞，先记着）
 
 | # | 项 | 观察什么 | 判据 |
 |---|---|---|---|
-| O1 | 工具预算上限 | `shell_run` 跑超 10 分钟的命令（如 `gradle build`） | 是否在 600 秒被掐断。掐断属预期行为，但要确认提示里说了「改用 shell_background」 |
+| O1 | ~~工具预算上限~~ **已由 P8 覆盖**（2026-11-12：`shell_run` 的 20 分钟预算此前从未生效，现按命令传达到会话池） | — | — |
 | O2 | 资源租约采样开销 | 设置页停留 5 分钟，其间操作终端 | 页面是否卡顿。`snapshot()` 每 2 秒在 IO 线程采一次，理论上不碰主线程 |
 | O3 | 容器空闲策略 | 容器与终端同时开着，各自闲置 | 容器是否比终端先被回收（当前两者都是 30 分钟，无独立策略） |
 | O4 | 聚合商换上游重试（R10） | 用 OpenRouter / 硅基流动连续请求，撞到 429 或 402 | 日志应有 `第 N 次调用失败，准备重试`，且 N 最多到 4（官方直连只到 3）。若 402 一次就失败，说明档位没生效 |
