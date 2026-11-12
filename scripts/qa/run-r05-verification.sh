@@ -86,7 +86,10 @@ SCREEN=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
 
 # G1：itemsIndexed 必须真的传 key，且 key 必须是**整表算过唯一性**的那一份。
 # 审计 F17：只传 uiKey 不够——供应商复用 call.id 时会撞 key、整页崩。
-if grep -q 'itemsIndexed(messages, key = { index, _ -> messageKeys\[index\] })' "$SCREEN" \
+# 不锁死 key lambda 的具体写法：`messageKeys[index]` 在工具卡插入的那一帧会越界
+# （keys 与 items 跨帧，实测 IndexOutOfBounds 整页崩），现在带 getOrNull 回落。
+# 断言要的是「key 取自 messageKeys」，不是「某个字符序列必须一字不差」。
+if grep -qE 'itemsIndexed\(messages, key = .*messageKeys' "$SCREEN" \
    && grep -q 'messages.uiKeySeq()' "$SCREEN"; then
   g_good "G1 消息列表的 itemsIndexed 用的是整表唯一化后的 key"
 elif grep -qE 'itemsIndexed\(messages\) *\{' "$SCREEN"; then
