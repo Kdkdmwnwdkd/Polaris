@@ -4,15 +4,15 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.llm.runCancellable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.IOException
-import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
 
 /** 下载完成的安装包。 */
@@ -58,15 +58,14 @@ object ApkDownloader {
     /** 小于这个体积的「APK」一定不是完整包。 */
     private const val MIN_APK_BYTES = 1L * 1024 * 1024
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        // 不设 callTimeout：37MB 在慢网下可能要十几分钟，总超时会把「慢」误判成「断」。
-        // 真正的卡死由 readTimeout 兜（两次读到数据之间超过 30s 才算失败）。
-        .callTimeout(0, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
+    /**
+     * 统一走 `LlmHttp.download`（connect 30s / read 120s / 无总超时）。
+     *
+     * 不自己 new 一个客户端：R-13 把全仓 14 处各自构造收口到 `LlmHttp`，
+     * 就是为了不再出现「每个功能一套超时」——新增下载器顺手 new 一个客户端，
+     * 正是这条约束要挡的回归。`download` 预设本来就是给大文件传输留的。
+     */
+    private val client get() = LlmHttp.download
 
     /**
      * 加速前缀，按顺序尝试；末尾空串 = 直连。
@@ -154,10 +153,11 @@ object ApkDownloader {
         expectedSize: Long,
         onProgress: (Long, Long) -> Unit
     ) {
-        val call = client.newCall(
+        // runCancellable：用户点取消时同步 call.cancel()，否则线程会卡在 read() 上，
+        // 直到下一次数据到达才发现协程已取消（大文件下可能几秒到几十秒）。
+        client.runCancellable(
             Request.Builder().url(url).header("User-Agent", "Polaris").build()
-        )
-        call.execute().use { resp ->
+        ) { resp ->
             if (!resp.isSuccessful) throw ApkDownloadException("HTTP ${resp.code}")
             val body = resp.body ?: throw ApkDownloadException("响应为空")
             val total = if (body.contentLength() > 0) body.contentLength() else expectedSize
@@ -169,7 +169,7 @@ object ApkDownloader {
                     while (true) {
                         val n = input.read(buf)
                         if (n < 0) break
-                        // 取消要立刻生效：用户点了「取消」还在后台写 37MB 是明显的 bug。
+                        // 双保险：cancel() 已经能打断读，这里拦住「刚好读完一块」的窗口。
                         coroutineContext.ensureActive()
                         out.write(buf, 0, n)
                         written += n
