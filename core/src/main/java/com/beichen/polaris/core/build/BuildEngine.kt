@@ -59,6 +59,17 @@ object BuildEngine {
     fun isRunning(): Boolean = running?.isActive == true
 
     /**
+     * 清场（`AppGraph.resetAll` 与诊断用）：取消正在跑的构建并丢掉句柄。
+     *
+     * 不写 SharedPreferences，也不删 builds.json 或已下载的 APK——那些是用户数据，
+     * 该由卸载或用户在构建历史里自己处理。取消本身会走正常收尾（写 CANCELLED）。
+     */
+    fun reset() {
+        running?.cancel()
+        running = null
+    }
+
+    /**
      * 后台启动一次构建。
      *
      * @return false = 已有构建在进行，本次未启动（调用方提示即可）

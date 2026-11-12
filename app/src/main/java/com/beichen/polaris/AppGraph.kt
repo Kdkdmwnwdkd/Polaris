@@ -11,6 +11,7 @@ import com.beichen.polaris.core.CompletionNotifier
 import com.beichen.polaris.core.CrashLogger
 import com.beichen.polaris.core.agent.AskUserBroker
 import com.beichen.polaris.core.agent.PlanBroker
+import com.beichen.polaris.core.build.BuildEngine
 import com.beichen.polaris.core.llm.local.AndroidDeviceProbe
 import com.beichen.polaris.core.llm.local.LlamaJni
 import com.beichen.polaris.core.llm.local.LocalLlamaEngine
@@ -29,7 +30,7 @@ import com.beichen.polaris.ui.container.ContainerInstallController
  *
  * ## 为什么存在
  *
- * 这个应用里有 23 个带可变状态的 `object`：它们是跨层通信的真实通道
+ * 这个应用里有 24 个带可变状态的 `object`：它们是跨层通信的真实通道
  * （ViewModel ↔ 无障碍服务 ↔ 前台服务 ↔ 推理引擎），但依赖关系不写在任何构造参数里。
  * 后果是三条：
  *
@@ -296,6 +297,15 @@ object AppGraph {
                 packageName = "com.beichen.polaris.ui.container",
                 link = "容器运行时安装任务 ↔ 跨页面的进度/结果卡片",
                 reset = { ContainerInstallController.reset() }
+            )
+        )
+        add(
+            Global(
+                name = "BuildEngine",
+                packageName = "com.beichen.polaris.core.build",
+                link = "构建页 ↔ 进程级构建协程（切页面不中断，同一时间只允许一个构建）；" +
+                    "harness 里不取消就会带着上一轮的网络请求进入下一个用例",
+                reset = { BuildEngine.reset() }
             )
         )
 
