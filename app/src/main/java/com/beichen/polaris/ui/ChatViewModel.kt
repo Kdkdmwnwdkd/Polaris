@@ -1,19 +1,16 @@
 package com.beichen.polaris.ui
 
 import com.beichen.polaris.core.llm.LlmHttp
-import com.beichen.polaris.core.net.BoundedBody
 import com.beichen.polaris.core.llm.ModelPricing
 import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 // R-14：窄接口都定义在 ui.contract 包，实现类要认全 30 个契约；
 // 逐个显式 import 会占掉近 20 行（本项目对 >1500 行文件有行数冻结），故用通配符。
 import com.beichen.polaris.ui.contract.*
 import java.io.ByteArrayOutputStream
-import java.util.zip.ZipInputStream
 import android.content.Intent
 import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
@@ -2364,12 +2361,12 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         runCatching {
             // 审计 F27：待发图片此前无数量上限。每张 base64 约 200~400KB，
             // 连选 30 张就是 10MB 常驻 StateFlow，且整个拼进请求体——供应商多半直接拒。
-            if (_pendingImages.value.size >= MAX_PENDING_IMAGES) return@runCatching false
+            if (_pendingImages.value.size >= AttachmentIo.MAX_PENDING_IMAGES) return@runCatching false
             // 审计 F26：修前是 decodeStream 直接解原图。一张 108MP 的照片是
             // 12000×9000×4B ≈ 432MB 的位图，decode 当场 OOM——scaleDown 根本没机会执行
             // （它注释里写的「两阶段解码在调用方已完成」其实并不存在）。
-            val bitmap = decodeSampled(uri, MAX_EDGE) ?: return@runCatching false
-            val scaled = scaleDown(bitmap)
+            val bitmap = AttachmentIo.decodeSampled(app.contentResolver, uri, MAX_EDGE) ?: return@runCatching false
+            val scaled = AttachmentIo.scaleDown(bitmap, MAX_EDGE)
             val bytes = try {
                 ByteArrayOutputStream().use { out ->
                     scaled.compress(Bitmap.CompressFormat.JPEG, 80, out)
@@ -2385,40 +2382,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         }.getOrDefault(false)
     }
 
-    /**
-     * 两阶段采样解码（审计 F26）。
-     *
-     * 第一次只读尺寸（`inJustDecodeBounds`，不分配像素内存），据此算出 `inSampleSize`
-     * ——只要结果不小于 [maxEdge] 就继续翻倍降采样，内存占用按 1/4 递减。第二次才真解码。
-     *
-     * 为什么开两遍流：`ContentResolver` 给的是不可 seek 的 InputStream，读完没法回头。
-     * 开两遍的代价是一次 URI 解析，远小于解一张 400MB 位图。
-     */
-    private fun decodeSampled(uri: Uri, maxEdge: Int): Bitmap? {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        app.contentResolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, bounds)
-        }
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        var sample = 1
-        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxEdge) sample *= 2
-        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-        return app.contentResolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, opts)
-        }
-    }
 
     /** 功能四（P0-2）：附件图片长边上限——兼顾视觉模型识别效果与请求体积。 */
     private companion object {
         const val MAX_EDGE = 1024
-
-        /**
-         * 单条消息最多挂几张图（审计 F27）。
-         *
-         * 8 张 ≈ 3MB base64，是「够用」与「请求体不炸」的交点：主流多模态接口对单请求
-         * 图片数多在 10~20 张，但像素总量普遍有上限；再叠加 PDF 一次 5 页，8 张留了余量。
-         */
-        const val MAX_PENDING_IMAGES = 8
 
         /**
          * W-46：喂给模型的历史最多回看多少轮。
@@ -2446,18 +2413,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         )
     }
 
-    /** 功能四（P0-2）：长边超过 [MAX_EDGE] 等比缩小（两阶段解码在调用方已完成）。 */
-    private fun scaleDown(bitmap: Bitmap): Bitmap {
-        val max = maxOf(bitmap.width, bitmap.height)
-        if (max <= MAX_EDGE) return bitmap
-        val ratio = MAX_EDGE.toFloat() / max
-        return Bitmap.createScaledBitmap(
-            bitmap,
-            (bitmap.width * ratio).toInt(),
-            (bitmap.height * ratio).toInt(),
-            true
-        )
-    }
 
     /** 功能四（P0-2）：移除待发图片。 */
     override fun removePendingImage(url: String) {
@@ -2487,11 +2442,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 ext == "pdf" -> {
                     // 审计 F27：PDF 一次产出最多 5 张，必须与已有待发图共用同一个额度，
                     // 否则「先选 8 张图，再发一个 5 页 PDF」就能绕过上限。
-                    val room = (MAX_PENDING_IMAGES - _pendingImages.value.size).coerceAtLeast(0)
+                    val room = (AttachmentIo.MAX_PENDING_IMAGES - _pendingImages.value.size).coerceAtLeast(0)
                     if (room == 0) {
-                        FileAttachResult.Failed("最多同时发 $MAX_PENDING_IMAGES 张图片，请先移除几张")
+                        FileAttachResult.Failed("最多同时发 $AttachmentIo.MAX_PENDING_IMAGES 张图片，请先移除几张")
                     } else {
-                        val images = renderPdfToImages(uri, minOf(MAX_PDF_PAGES, room))
+                        val images = AttachmentIo.renderPdf(app.contentResolver, uri, minOf(MAX_PDF_PAGES, room), MAX_EDGE)
                         if (images.isEmpty()) {
                             FileAttachResult.Failed("PDF 打开失败或没有可渲染页面")
                         } else {
@@ -2503,7 +2458,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
                 // ③ DOCX：解包抽文本
                 ext == "docx" -> {
-                    val text = extractDocxText(uri)
+                    val text = AttachmentIo.readDocx(app.contentResolver, uri)
                     if (text.isBlank()) {
                         FileAttachResult.Failed("DOCX 里没有提取到文字（可能是纯图片文档）")
                     } else {
@@ -2514,7 +2469,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
                 // ① 文本类：直读
                 ext in TEXT_EXTENSIONS -> {
-                    val text = readTextFile(uri)?.take(MAX_FILE_CHARS)
+                    val text = AttachmentIo.readText(app.contentResolver, uri)?.take(MAX_FILE_CHARS)
                     if (text.isNullOrBlank()) {
                         FileAttachResult.Failed("文件为空或无法读取")
                     } else {
@@ -2545,99 +2500,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         }
     }.getOrNull()
 
-    /**
-     * 读文本附件（审计 F23）。
-     *
-     * 修前是 `input.readBytes().toString(UTF_8)`：整份进堆，`MAX_FILE_CHARS` 的 `take`
-     * 发生在读完以后——对 500MB 的 log 完全不设防，进程先 OOM，`take` 一次都没机会执行。
-     * 这与 `read_file`（F19）、`http_request`（F21）是同一类错误，附件路径此前漏了。
-     *
-     * 改用 [BoundedBody]：边读边计数，8MB 即停；截断点落在字符中间时丢半字符而不是
-     * 产出 U+FFFD（模型会把替换符当成真实内容）。字符级上限仍由调用方 `take` 兜底。
-     */
-    private fun readTextFile(uri: Uri): String? = runCatching {
-        app.contentResolver.openInputStream(uri)?.use { input ->
-            BoundedBody.read(input, BoundedBody.MAX_READ_BYTES).text
-        }
-    }.getOrNull()
 
-    /**
-     * PDF → 图片 data URL（前 [maxPages] 页，长边 ≤1024 与图片附件同一规格）。
-     * 渲染前铺白底：PDF 页面本身透明，不铺白会得到黑底图（视觉模型也读不清）。
-     */
-    private fun renderPdfToImages(uri: Uri, maxPages: Int): List<String> {
-        val images = mutableListOf<String>()
-        runCatching {
-            val fd = app.contentResolver.openFileDescriptor(uri, "r") ?: return emptyList()
-            fd.use { parcel ->
-                android.graphics.pdf.PdfRenderer(parcel).use { renderer ->
-                    val pages = minOf(renderer.pageCount, maxPages)
-                    for (i in 0 until pages) {
-                        renderer.openPage(i).use { page ->
-                            val scale = MAX_EDGE.toFloat() / maxOf(page.width, page.height)
-                            val w = (page.width * scale).toInt().coerceIn(1, MAX_EDGE)
-                            val h = (page.height * scale).toInt().coerceIn(1, MAX_EDGE)
-                            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                            // 审计 F25：原实现从不 recycle。5 页 × 1024² × 4B ≈ 20MB 常驻到
-                            // GC 才释放，低内存机在渲染阶段就可能 OOM。位图生命周期在这里
-                            // 完全封闭（compress 完即无用），显式回收最省事也最确定。
-                            val bytes = try {
-                                bmp.eraseColor(0xFFFFFFFF.toInt())
-                                page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                                ByteArrayOutputStream().use { out ->
-                                    bmp.compress(Bitmap.CompressFormat.JPEG, 80, out)
-                                    out.toByteArray()
-                                }
-                            } finally {
-                                bmp.recycle()
-                            }
-                            images += "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
-                        }
-                    }
-                }
-            }
-        }
-        return images
-    }
 
-    /**
-     * DOCX → 文本：`word/document.xml` 里逐个 `<w:t>` 取文字，`</w:p>` 视为换行，
-     * 最后解 XML 实体（&amp; 等）。纯系统 `ZipInputStream` + 正则，不引第三方库。
-     */
-    private fun extractDocxText(uri: Uri): String {
-        val sb = StringBuilder()
-        runCatching {
-            app.contentResolver.openInputStream(uri)?.use { input ->
-                ZipInputStream(input).use { zip ->
-                    var entry = zip.nextEntry
-                    while (entry != null) {
-                        if (entry.name == "word/document.xml") {
-                            // 审计 F24：entry 是压缩包内的一段，可以被做成 zip 炸弹
-                            // （解压后几 GB）。限读 8MB，超出部分丢弃——比让 OOM killer
-                            // 决定强。BoundedBody 不关闭流，由外层 use 负责。
-                            val xml = BoundedBody.read(zip, BoundedBody.MAX_READ_BYTES).text
-                            val normalized = xml.replace("</w:p>", "\n")
-                            Regex("<w:t[^>]*>(.*?)</w:t>", RegexOption.DOT_MATCHES_ALL)
-                                .findAll(normalized)
-                                .forEach { sb.append(decodeXmlEntities(it.groupValues[1])) }
-                            break
-                        }
-                        zip.closeEntry()
-                        entry = zip.nextEntry
-                    }
-                }
-            }
-        }
-        return sb.toString()
-    }
 
-    /** 最小 XML 实体解码（DOCX 文本里常见五种）。 */
-    private fun decodeXmlEntities(raw: String): String = raw
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
 
     /**
      * W-46：把已发生的轮次摊平成「本回合之前的历史」，交给 AgentLoop 一起发。
