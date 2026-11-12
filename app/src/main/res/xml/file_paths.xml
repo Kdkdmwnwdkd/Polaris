@@ -10,6 +10,8 @@
     <cache-path name="exports" path="exports/" />
     <!-- W-13：内置 Shizuku APK 解出到 cacheDir/shizuku/，经同一 FileProvider 交给系统安装器 -->
     <cache-path name="shizuku" path="shizuku/" />
+    <!-- 应用内更新：下载的安装包落 cacheDir/updates/，经同一 FileProvider 交给系统安装器 -->
+    <cache-path name="updates" path="updates/" />
     <!-- W-24：工作区里的 APK 直接交给系统安装器（app_install），不复制一份 -->
     <files-path name="agent_workspace" path="agent_workspace/" />
 </paths>

@@ -385,4 +385,10 @@
 #   （截断点不产出 U+FFFD、正好等于上限不误判成截断、读到一半 IO 失败交出已读部分，
 #   以及 -Xmx64m 下一个「永远读不完的流」只读到上限即停）+ 4 条接线断言
 #   （http_request 与 WebSearchTool 都不再 body.string()、BoundedBody 单点）。
-138
+# 2026-11-12：138 → 139（关于页应用内更新）。
+#   新增 run-update-inapp-verification.sh——下载链路 23 条断言：
+#   资产名必须跟随 Release 接口（曾经写死 app-debug.apk，CI 改名后 404）、
+#   主路径不得跳浏览器（兜底只允许出现在失败分支）、
+#   三层校验（Content-Length / ZIP 魔数 / 包名+versionCode）、多源回退与取消、
+#   FileProvider 目录与安装器 MIME。
+139

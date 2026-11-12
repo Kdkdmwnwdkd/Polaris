@@ -18,10 +18,12 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Style
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -29,15 +31,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import com.beichen.polaris.core.update.ApkDownloader
+import com.beichen.polaris.core.update.DownloadedApk
 import com.beichen.polaris.core.update.UpdateChecker
+import com.beichen.polaris.update.UpdateInstaller
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
@@ -181,26 +191,40 @@ fun AboutScreen(onOpenPermissionGuide: () -> Unit = {}) {
 }
 
 
-/** 检查更新的三种终态 + 进行中。 */
+/** 更新流程的各个阶段。 */
 private sealed interface UpdateState {
     data object Idle : UpdateState
     data object Checking : UpdateState
     data object Latest : UpdateState
-    data class HasUpdate(val latest: Int) : UpdateState
+    data class HasUpdate(val latest: Int, val size: Long, val assetName: String) : UpdateState
+    data class Downloading(val done: Long, val total: Long) : UpdateState
+    data class Ready(val apk: DownloadedApk) : UpdateState
+    data class NeedPermission(val apk: DownloadedApk) : UpdateState
     data class Failed(val reason: String) : UpdateState
 }
 
 /**
- * 版本行 + 检查更新。
+ * 版本行 + 检查更新 + 应用内下载。
  *
- * 失败不弹窗、不重试：`api.github.com` 在国内不一定通，硬转圈只会让人以为卡死。
- * 失败时直接把加速下载链接给出来——用户要的是新包，不是「检查成功」这个状态。
+ * 下载在应用内完成（[ApkDownloader] → cacheDir/updates/），完成后直接把
+ * `content://` 交给系统安装器——不再跳浏览器。跳浏览器等于把「点一下装好」
+ * 变成「找浏览器、等下载、回文件管理器、点安装」，四步里有三步会掉人。
+ *
+ * 浏览器入口只在失败时作为兜底保留：`api.github.com` 与加速通道都可能不通，
+ * 那时总得让用户有条路。
  */
 @Composable
 private fun UpdateRow() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
+    var job by remember { mutableStateOf<Job?>(null) }
+    // 下载进度回调在 IO 线程，统一 post 回主线程再改 state，避免跨线程写快照状态。
+    val main = remember { Handler(Looper.getMainLooper()) }
+    // 速度做指数滑动平均：瞬时值在缓冲抖动下会从 3MB/s 跳到 200KB/s，看着像坏了。
+    var speed by remember { mutableStateOf(0L) }
+    val meter = remember { longArrayOf(0L, 0L) } // [上次字节数, 上次时间戳]
+
     val currentCode = remember(ctx) {
         runCatching {
             val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
@@ -219,7 +243,11 @@ private fun UpdateRow() {
         scope.launch {
             UpdateChecker.check(currentCode).fold(
                 onSuccess = { info ->
-                    state = if (info.hasUpdate) UpdateState.HasUpdate(info.latestCode) else UpdateState.Latest
+                    state = if (info.hasUpdate) {
+                        UpdateState.HasUpdate(info.latestCode, info.assetSize, info.assetName)
+                    } else {
+                        UpdateState.Latest
+                    }
                 },
                 onFailure = { e ->
                     state = UpdateState.Failed(e.message?.take(60) ?: "网络错误")
@@ -228,46 +256,177 @@ private fun UpdateRow() {
         }
     }
 
-    Column(Modifier.fillMaxWidth()) {
+    fun startDownload(latest: Int, size: Long, assetName: String) {
+        if (state is UpdateState.Downloading) return
+        state = UpdateState.Downloading(0L, size)
+        speed = 0L
+        meter[0] = 0L
+        meter[1] = 0L
+        job = scope.launch {
+            try {
+                val apk = ApkDownloader.download(
+                    context = ctx,
+                    officialUrl = UpdateChecker.officialUrl(assetName),
+                    expectedVersionCode = latest,
+                    expectedSize = size
+                ) { done, total ->
+                    main.post {
+                        // 取消/失败之后可能还有一两个进度回调在路上；不拦的话会把状态
+                        // 从「已取消」又推回「下载中」，用户以为取消没生效。
+                        if (state !is UpdateState.Downloading) return@post
+                        val now = System.currentTimeMillis()
+                        if (meter[1] > 0 && now > meter[1]) {
+                            val instant = (done - meter[0]) * 1000L / (now - meter[1])
+                            speed = if (speed == 0L) instant else (speed * 3 + instant) / 4
+                        }
+                        meter[0] = done
+                        meter[1] = now
+                        state = UpdateState.Downloading(done, total)
+                    }
+                }
+                state = when (UpdateInstaller.install(ctx, apk.file)) {
+                    UpdateInstaller.Result.LAUNCHED -> UpdateState.Ready(apk)
+                    UpdateInstaller.Result.NEED_PERMISSION -> UpdateState.NeedPermission(apk)
+                    UpdateInstaller.Result.FAILED -> UpdateState.Failed("安装器没能打开，点「安装」重试")
+                }
+            } catch (ce: CancellationException) {
+                state = UpdateState.HasUpdate(latest, size, assetName)
+                throw ce
+            } catch (t: Throwable) {
+                state = UpdateState.Failed(t.message ?: "下载失败")
+            } finally {
+                job = null
+            }
+        }
+    }
+
+    // 离开关于页就停掉下载：让用户在别的页面等一个看不见的进度条没有意义。
+    // 下次回来点「更新」会复用已下好的包（ApkDownloader 有校验 + 复用）。
+    DisposableEffect(Unit) { onDispose { job?.cancel() } }
+
+    val s = state
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(AgentSpacing.space2)
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = when (val s = state) {
+                text = when (s) {
                     UpdateState.Idle -> "当前构建号 $currentCode"
                     UpdateState.Checking -> "正在检查…"
                     UpdateState.Latest -> "已是最新版（构建 $currentCode）"
                     is UpdateState.HasUpdate -> "有新版本：构建 ${s.latest}（当前 $currentCode）"
-                    is UpdateState.Failed -> "检查失败：${s.reason}"
+                    is UpdateState.Downloading -> "正在下载更新包…"
+                    is UpdateState.Ready -> "更新包已就绪（构建 ${s.apk.versionCode}）"
+                    is UpdateState.NeedPermission -> "更新包已下载，还差安装授权"
+                    is UpdateState.Failed -> "出错了：${s.reason}"
                 },
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodySmall,
-                color = if (state is UpdateState.HasUpdate) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+                color = when (s) {
+                    is UpdateState.HasUpdate, is UpdateState.Ready -> MaterialTheme.colorScheme.primary
+                    is UpdateState.Failed -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
                 }
             )
-            when (state) {
-                is UpdateState.HasUpdate -> AkTextButton(
-                    text = "去下载",
-                    onClick = { openUrl(ctx, UpdateChecker.DOWNLOAD_URL) }
-                )
+            when (s) {
+                UpdateState.Idle -> AkTextButton(text = "检查更新", onClick = { startCheck() })
                 UpdateState.Checking -> Unit
-                else -> AkTextButton(text = "检查更新", onClick = { startCheck() })
+                UpdateState.Latest -> AkTextButton(text = "重新检查", onClick = { startCheck() })
+                is UpdateState.HasUpdate -> AkTextButton(
+                    text = "立即更新",
+                    onClick = { startDownload(s.latest, s.size, s.assetName) }
+                )
+                is UpdateState.Downloading -> AkTextButton(
+                    text = "取消",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    onClick = { job?.cancel() }
+                )
+                is UpdateState.Ready -> AkTextButton(
+                    text = "重新安装",
+                    onClick = {
+                        state = when (UpdateInstaller.install(ctx, s.apk.file)) {
+                            UpdateInstaller.Result.LAUNCHED -> UpdateState.Ready(s.apk)
+                            UpdateInstaller.Result.NEED_PERMISSION -> UpdateState.NeedPermission(s.apk)
+                            UpdateInstaller.Result.FAILED -> UpdateState.Failed("安装器没能打开这个包")
+                        }
+                    }
+                )
+                is UpdateState.NeedPermission -> AkTextButton(
+                    text = "继续安装",
+                    onClick = {
+                        // 授权页回来后直接再走一次：没授权会再跳设置，授权了就把安装器拉起来。
+                        // 只给「去授权」的话，用户开完开关回来会发现没有按钮可点，只能重查一遍。
+                        state = when (UpdateInstaller.install(ctx, s.apk.file)) {
+                            UpdateInstaller.Result.LAUNCHED -> UpdateState.Ready(s.apk)
+                            UpdateInstaller.Result.NEED_PERMISSION -> UpdateState.NeedPermission(s.apk)
+                            UpdateInstaller.Result.FAILED -> UpdateState.Failed("安装器没能打开这个包")
+                        }
+                    }
+                )
+                is UpdateState.Failed -> AkTextButton(text = "重试", onClick = { startCheck() })
             }
         }
-        // 检查失败时也给下载入口：多半是接口不通，但包本身是能下的
-        if (state is UpdateState.Failed) {
-            AkTextButton(
-                text = "直接下载最新包",
-                onClick = { openUrl(ctx, UpdateChecker.DOWNLOAD_URL) }
+
+        if (s is UpdateState.Downloading) {
+            val frac = if (s.total > 0) (s.done.toFloat() / s.total).coerceIn(0f, 1f) else 0f
+            if (s.total > 0) {
+                LinearProgressIndicator(
+                    progress = { frac },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                )
+            } else {
+                // 服务端没给 Content-Length（chunked）时用不确定态，不假装知道进度
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                )
+            }
+            Text(
+                text = buildString {
+                    append(mbText(s.done))
+                    if (s.total > 0) append(" / ${mbText(s.total)} MB · ${(frac * 100).toInt()}%")
+                    else append(" MB")
+                    if (speed > 0) append(" · ${mbText(speed)} MB/s")
+                },
+                style = machineSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            AkTextButton(
-                text = "打开 Release 页",
-                onClick = { openUrl(ctx, UpdateChecker.RELEASE_PAGE) }
+        }
+
+        // 签名不一致只提示、不阻断：本地自测包装的更新包是 CI 签名，本来就对不上，
+        // 拦下来会让这条链路完全没法自测。真正的拒绝由系统安装器给。
+        if (s is UpdateState.Ready && !s.apk.signatureMatches) {
+            Text(
+                text = "这个包的签名和本机装的不一致，系统会拒绝覆盖安装；先卸载本应用再装即可。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
             )
+        }
+
+        // 失败才给浏览器兜底：正常路径不该离开应用
+        if (s is UpdateState.Failed) {
+            Row(horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)) {
+                AkTextButton(
+                    text = "浏览器下载",
+                    onClick = { openUrl(ctx, UpdateChecker.DOWNLOAD_URL) }
+                )
+                AkTextButton(
+                    text = "打开 Release 页",
+                    onClick = { openUrl(ctx, UpdateChecker.RELEASE_PAGE) }
+                )
+            }
         }
     }
 }
+
+private fun mbText(bytes: Long): String =
+    String.format(Locale.CHINA, "%.1f", bytes / 1024.0 / 1024.0)
 
 private fun openUrl(ctx: android.content.Context, url: String) {
     runCatching {
