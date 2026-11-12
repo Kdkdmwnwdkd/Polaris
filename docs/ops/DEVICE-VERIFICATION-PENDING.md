@@ -3,11 +3,27 @@
 > 规则：**服务器上能验的一律在服务器验掉**（源码断言 / JVM harness / 编译产物反验 / 静态扫描）。
 > 只把「必须真实进程、真实生命周期」的项攒到这里，最后一次性验完，不逐项催。
 
+## 当前还剩什么（2026-11-12 晚更新）
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| **P7** 发布包不可调试 | ✅ **已在模拟器验完** | `run-as` 报 `not debuggable`，`flags` 无 `DEBUGGABLE`；CI 包 `aapt2` 也确认未声明该属性 |
+| **P8** 长命令不被 30 秒掐断 | ✅ **已在模拟器验完** | 90 秒命令退出码 0、`DONE_MARKER_90S`，整轮 126 秒 `completed`，无 `session_desynced` |
+| P9 技能沙箱 | 可不验 | 沙箱 fail-closed，最坏是脚本跑不起来；CI 的 R9-1/R9-2 已断言 |
+| **P1–P3** 容器租约 | ❗需要 arm64 真机 | proot 在 x86 模拟器上无法让 musl 程序 `execve`，只能到「租约就绪」半步 |
+| **P4–P6** | 任何设备都能做 | 失败路径 / 诊断包 / 截断提示，不需要 arm64 |
+
+也就是说：**真机上真正剩下的只有 P1–P3（容器三条）+ P4–P6 的界面确认**，约 20 分钟。
+P7/P8 这两条原本最需要真机的（一个要看 manifest、一个要跑 90 秒），已经在服务器侧用
+模拟器 + mock 端点验掉了。
+
+---
+
 ## 一次验收怎么走（约 20 分钟）
 
 1. arm64 手机连 adb（x86 模拟器能到 P4、P5，以及 P1 的「租约登记」半步——见文末 2026-11-12 记录）。
 2. 装包：`./gradlew :app:assembleRelease`（**不要**带 `-PnoNative`）→ `adb install -r`。
-   要跑 harness 或想留调试器接口时才用 `assembleDebug`——**P7 必须用 release 包验**。
+   要跑 harness 或想留调试器接口时才用 `assembleDebug`——P7 要看 manifest，只能用 release 包。
 3. 按 P1 → P3 顺序点，P4/P5 任何设备都能做。
 4. 入口位置：**「容器」已不在侧栏**（2026-11 起侧栏只留 5 项），改到 **设置 → 工具 → 容器**。
 4. **任何一步不对，不要截图**：日志页 →「诊断包」→ 发我。R10 起这个包里带
@@ -138,12 +154,31 @@
 
 ---
 
-## P7 发布包不是 debuggable（任何设备都能做）
+## P7 发布包不是 debuggable ✅ **已在模拟器验证（2026-11-12）**
 
 | | |
 |---|---|
-| 阻塞原因 | 要看 manifest，得装 release 变体的包 |
+| 状态 | **已验证，不需要真机再验** |
+| 验证环境 | Android 11 x86_64 模拟器（API 30，userdebug）；CI 发布包 run 704 |
 | 代码 | `app/build.gradle.kts` 的 `release` buildType；CI 的 `Verify APK identity` 步骤 |
+
+**实测记录**
+
+```
+$ aapt2 dump xmltree --file AndroidManifest.xml app-release.apk | grep -c debuggable
+0                                  # release 包未声明该属性 → Android 默认 false
+
+$ adb install app-release.apk && adb shell dumpsys package com.beichen.polaris | grep flags
+flags=[ HAS_CODE ALLOW_CLEAR_USER_DATA ]        # 无 DEBUGGABLE
+
+$ adb shell run-as com.beichen.polaris ls
+run-as: package not debuggable: com.beichen.polaris
+```
+
+对照修前（同一台模拟器、旧包）：`flags=[ DEBUGGABLE ... ]`，`run-as` 能直接列出
+`shared_prefs/`，里面 `api_key` 与 `profiles_json` 都是明文 XML——同机任意应用可读走。
+
+下面是原来的手动步骤，留作**回归用**（换签名、换变体、改构建脚本后跑一遍）。
 
 **背景一句话**：2026-11-12 之前仓库只产 debug 变体，CI 直接把它发 Release。签名是发布证书
 （这点没错），但 `android:debuggable="true"` 意味着同机任意应用能 `run-as` 进私有目录——
@@ -160,12 +195,33 @@ adb shell run-as com.beichen.polaris ls
 
 ---
 
-## P8 长命令不再第 30 秒被杀（任何设备都能做）
+## P8 长命令不再第 30 秒被杀 ✅ **已在模拟器验证（2026-11-12）**
 
 | | |
 |---|---|
-| 阻塞原因 | 要真跑一条超过 30 秒的命令 |
+| 状态 | **已验证，不需要真机再验** |
+| 验证方式 | 服务器上起一个 OpenAI 兼容的 mock 端点，让 Agent 真跑一次 `shell_run` |
 | 代码 | `ShellTool.commandTimeoutMs` → `TerminalSessionPool.run(..., timeoutMs=)` |
+
+**实测记录**（模拟器 API 30，mock 端点两跳：先 `__use_tools(groups=shell)`，再 `shell_run`）
+
+```
+03:14:27.267 WARN [Approval] shell_run 允许
+03:14:27.504 INFO [ProcessBackend] 本机 user 后端已启动：/system/bin/sh
+03:14:27.513 INFO [TerminalSessionPool] 会话已开辟 handle=d452 identity=user pool=user
+...（90 秒内没有任何 timeout / session_desynced）
+03:16:14.425 INFO [Turn] TURN ... 126972ms turn.end status=completed steps=3
+
+工具返回：
+[ok] code=shell_ok
+message: 会话 d452（身份 App 身份，池 user） 退出码 0，已开辟新会话
+data: DONE_MARKER_90S
+```
+
+修前同一条命令会在**第 30 秒**返回「命令在 30000ms 内未完成」，并把会话标脏
+（下一条命令报 `session_desynced`）。修后整轮 126 秒（含 17 秒等人点审批）正常收尾。
+
+下面是原来的手动步骤，留作回归用。
 
 **步骤**：对话里让它执行
 
@@ -201,7 +257,10 @@ for i in $(seq 1 90); do sleep 1; done; echo done
 **通过标准**：返回 `undefined/undefined`。修前返回 `object/object`——那意味着
 `Packages.<任意未列包>.<类>.<静态方法>()` 可以执行（已用同版本 Rhino 复现）。
 
-没有可改脚本的技能时跳过：`R7Verification` 的 R9-1 / R9-2 在服务器侧直接断言了这一条。
+没有可改脚本的技能时跳过：`R7Verification` 的 R9-1 / R9-2 在服务器侧直接断言了这一条
+（2026-11-12 CI run 已通过：`typeof Packages` 与 `typeof java` 均为 `undefined`，
+`Packages.kotlin.Unit` 被拒）。这条不具备「不验就会出事」的性质——沙箱是 fail-closed，
+最坏情况是脚本跑不起来，不会静默放行。
 
 ---
 
