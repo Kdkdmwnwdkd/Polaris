@@ -17,6 +17,12 @@
 # 改用包管理器的 launcher 意图后已全部删除——记录留着，说明豁免可以有，但必须还。
 # （剩下的那处 core → AgentKitApplication 在 CompletionNotifier，靠注入探针解除。）
 
+# 2026-11-12 上调（ChatScreen +2）：F17 的 key 兜底。
+# messageKeys 由 remember(messages) 算、key lambda 在测量阶段才调用，工具卡插入的那一帧
+# 两者数量会对不上，直接 messageKeys[index] 抛 IndexOutOfBounds，整个对话页崩掉。
+# 改法只有一处：key lambda 里 getOrNull 回落 + 两行说明。再省就只能不写说明，
+# 而这段正是最容易被后人「简化」回直接索引的地方——省不得。
+#
 # 2026-11-12 上调（RealAgentLoop +4）：A-2 修「回合预算只挡步边界」。
 # 只加三样：executeBatch 一个参数、一次实参（loopStart + turnBudgetMs）、
 # 执行器侧一行 turnRemainingMs 注入。注释压到行尾，能省的都省了。
@@ -117,7 +123,7 @@
 # "有没有新函数"而不是文件总行数——这轮新增的函数只有 Editorial.kt 里的
 # 六个排版原语（独立文件，398 行，见 app/src/main/java/com/beichen/polaris/ui/Editorial.kt）。
 lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3588
-lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3146
+lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3148
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1503
 lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1535

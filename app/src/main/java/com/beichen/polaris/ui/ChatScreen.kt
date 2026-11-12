@@ -408,11 +408,8 @@ fun ChatScreen(
             ) {
                 // 同发送者 8dp、换手 24dp（W-96 从 16dp 提起）：3:1 的间距差就是分组的全部线索。
                 // R-05：key 用数据主键（工具卡 call.id、气泡轮次下标），免得插一张卡就整表重建。
-                // F17 兜底：messageKeys 是 remember(messages) 算的，而 LazyList 的 key
-                // lambda 在测量阶段调用——此时 messages 可能已经是下一帧的（多了一条工具卡），
-                // messageKeys 却还是上一帧的。直接 messageKeys[index] 会 IndexOutOfBounds
-                // （模拟器实测：Index: 1, Size: 1，整个对话页崩掉）。
-                // 回落 key 用下标，表内必然唯一，不会触发 "Key was already used"。
+                // F17 兜底：messageKeys 由 remember(messages) 算，key lambda 却在测量阶段调用，
+                // 此时 messages 可能已是下一帧的（刚插入工具卡）——直接索引会越界崩页（模拟器实测）。
                 itemsIndexed(messages, key = { index, _ -> messageKeys.getOrNull(index) ?: "fallback-$index" }) { index, item ->
                     val prev = messages.getOrNull(index - 1)
                     val gap = when {
