@@ -125,6 +125,33 @@ object BuildStore {
     fun apkDir(context: Context): File =
         File(context.filesDir, "builds/apk").apply { mkdirs() }
 
+    /**
+     * 清掉不再被历史引用的 APK。
+     *
+     * 一次构建的包 45 MB 上下，而 [upsert] 只在历史超过 [MAX_HISTORY] 时才丢记录——
+     * 也就是说构建 20 次就有 **900 MB** 谁也不会再打开的 APK 躺在私有目录里，
+     * 用户唯一的感知是「手机空间又少了」，还查不到是谁占的。
+     *
+     * 保留最近 [keep] 个成功记录指向的包（够回滚装上一版），其余删除。
+     * 只在**新包落档后**调用：下载进度回调每秒可能触发多次，不能挂在那条路径上。
+     */
+    fun pruneApks(context: Context, keep: Int = 3) {
+        val referenced = list(context)
+            .asSequence()
+            .filter { it.stage == BuildStage.SUCCEEDED && it.apkPath != null }
+            .take(keep)
+            .mapNotNull { it.apkPath }
+            .toSet()
+        val files = apkDir(context).listFiles { f -> f.isFile && f.name.endsWith(".apk") }
+            ?: return
+        files.filter { it.absolutePath !in referenced }.forEach { old ->
+            val size = old.length()
+            if (runCatching { old.delete() }.getOrDefault(false)) {
+                AgentLogger.d("BuildStore", "清理旧 APK ${old.name}（$size B）")
+            }
+        }
+    }
+
     private fun writeAll(context: Context, tasks: List<BuildTask>) {
         val f = file(context)
         f.parentFile?.mkdirs()

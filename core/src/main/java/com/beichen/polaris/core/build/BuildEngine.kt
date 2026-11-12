@@ -356,6 +356,9 @@ object BuildEngine {
         )
         BuildStore.upsert(context, done)
         onStage(done)
+        // 新包已落档，顺手清掉没人再装的旧包（45 MB 一个，不清会一直涨）
+        runCatching { BuildStore.pruneApks(context) }
+            .onFailure { AgentLogger.w(TAG, "清理旧 APK 失败：${it.message}") }
         AgentLogger.d(
             TAG,
             "构建 #${first.number} 成功：${downloaded.name}（${downloaded.length()}B, sha256 ${digest.take(12)}…）"
