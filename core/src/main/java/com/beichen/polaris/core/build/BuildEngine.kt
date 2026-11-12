@@ -81,10 +81,18 @@ object BuildEngine {
     /**
      * 后台启动一次构建。
      *
-     * @return false = 已有构建在进行，本次未启动（调用方提示即可）
+     * @return null = 已启动；非 null = 没启动的原因（可直接显示给用户）
      */
-    fun startInBackground(context: Context): Boolean {
-        if (isRunning()) return false
+    fun startInBackground(context: Context): String? {
+        if (isRunning()) return "已有构建在进行，请等它跑完或点「停止跟踪」"
+        // 内存里没有 job，不等于没有构建：进程被杀过之后 [running] 是 null，
+        // 而磁盘上可能还留着一条非终态记录（CI 正在云端跑）。不查这一下，
+        // 用户连点两次就是两个 commit、两个 run、两个包，而旧那条永远没人收尾。
+        // builds.json 最多 50 条、十几 KB，和页面初始化时读一次的开销同量级。
+        val unfinished = runCatching { BuildStore.list(context).any { !it.isTerminal } }
+            .getOrDefault(false)
+        if (unfinished) return "上一个构建还没收尾，请稍候（或先点「停止跟踪」）"
+
         val job = scope.launch {
             try {
                 startBuild(context)
@@ -97,7 +105,7 @@ object BuildEngine {
         }
         running = job
         job.invokeOnCompletion { if (running === job) running = null }
-        return true
+        return null
     }
 
     /**

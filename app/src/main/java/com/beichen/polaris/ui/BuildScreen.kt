@@ -117,8 +117,9 @@ fun BuildScreen() {
             return
         }
         // 不走页面 scope：切走 tab 会把整条 40 分钟的流程一起取消
-        if (!BuildEngine.startInBackground(context)) {
-            Toast.makeText(context, "已有构建在进行", Toast.LENGTH_SHORT).show()
+        val blocked = BuildEngine.startInBackground(context)
+        if (blocked != null) {
+            Toast.makeText(context, blocked, Toast.LENGTH_SHORT).show()
             return
         }
         running = true
@@ -281,6 +282,13 @@ fun BuildScreen() {
                     )
                 } else {
                     tasks.forEach { task ->
+                        // 组合期不直接 stat：remember 按 (apkPath, stage) 缓存，
+                        // 同一任务重组时不再每帧一次系统调用。文件真被删了也不怕——
+                        // installApk 自己会检查并提示，这里只决定按钮显不显示。
+                        val apkReady = remember(task.apkPath, task.stage) {
+                            task.stage == BuildStage.SUCCEEDED && task.apkPath != null &&
+                                File(task.apkPath).exists()
+                        }
                         Row(
                             Modifier
                                 .fillMaxWidth()
@@ -294,19 +302,12 @@ fun BuildScreen() {
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    detailLine(task),
+                                    detailLine(task, apkReady),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (task.stage == BuildStage.FAILED)
                                         MaterialTheme.colorScheme.error
                                     else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                            }
-                            // 组合期不直接 stat：remember 按 (apkPath, stage) 缓存，
-                            // 同一任务重组时不再每帧一次系统调用。文件真被删了也不怕——
-                            // installApk 自己会检查并提示，这里只决定按钮显不显示。
-                            val apkReady = remember(task.apkPath, task.stage) {
-                                task.stage == BuildStage.SUCCEEDED && task.apkPath != null &&
-                                    File(task.apkPath).exists()
                             }
                             if (apkReady) {
                                 // apkPath 在 apkReady 里已判非空，但那个判断跨了 lambda，
@@ -353,10 +354,16 @@ private fun buildHeadline(task: BuildTask): String {
     return "$head · $status"
 }
 
-private fun detailLine(task: BuildTask): String {
+private fun detailLine(task: BuildTask, apkReady: Boolean): String {
     val time = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(task.createdAt))
     val sha = task.commitSha?.take(8) ?: "?"
-    val size = task.sizeBytes?.let { " · ${formatBytes(it)}" } ?: ""
+    // 包被 pruneApks 清掉之后就别再报大小了：写着「43.9 MB」却没有安装按钮，
+    // 看着像按钮坏了，其实文件已经不在了。直接把原因写在原来的位置。
+    val size = if (task.stage == BuildStage.SUCCEEDED && !apkReady) {
+        " · 包已清理"
+    } else {
+        task.sizeBytes?.let { " · ${formatBytes(it)}" } ?: ""
+    }
     val err = if (task.stage == BuildStage.FAILED || task.stage == BuildStage.CANCELLED) {
         " · ${task.error}"
     } else ""

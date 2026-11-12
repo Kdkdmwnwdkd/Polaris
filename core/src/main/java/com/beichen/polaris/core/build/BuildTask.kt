@@ -104,14 +104,24 @@ object BuildStore {
         File(File(context.filesDir, "builds"), "builds.json")
 
     fun list(context: Context): List<BuildTask> = synchronized(lock) {
-        val f = file(context)
-        if (!f.exists()) return emptyList()
-        runCatching {
+        val primary = readFile(file(context))
+        val tasks = primary ?: readFile(bakFile(context))?.also {
+            // 主文件坏了（写到一半被杀 / 手改坏了）：回退上一次的备份，别让历史归零。
+            // 归零的后果不止「看不见记录」——下一次 upsert 会把整份历史覆盖成一条。
+            AgentLogger.w("BuildStore", "builds.json 损坏，已回退 .bak（${it.size} 条）")
+        } ?: emptyList()
+        tasks.sortedByDescending { it.createdAt }
+    }
+
+    /** 读一份构建历史；文件不存在或解析失败返回 null（由调用方决定回退还是按空处理）。 */
+    private fun readFile(f: File): List<BuildTask>? {
+        if (!f.exists()) return null
+        return runCatching {
             json.decodeFromString(ListSerializer(BuildTask.serializer()), f.readText())
         }.getOrElse { e ->
-            AgentLogger.e("BuildStore", "builds.json 解析失败，按空处理：${e.message}")
-            emptyList()
-        }.sortedByDescending { it.createdAt }
+            AgentLogger.e("BuildStore", "${f.name} 解析失败：${e.message}")
+            null
+        }
     }
 
     fun upsert(context: Context, task: BuildTask) = synchronized(lock) {
@@ -152,10 +162,35 @@ object BuildStore {
         }
     }
 
+    private fun bakFile(context: Context): File =
+        File(File(context.filesDir, "builds"), "builds.json.bak")
+
+    /**
+     * 原子写：先落 `.tmp`，再把旧的挪成 `.bak`，最后 rename 覆盖。
+     *
+     * 直接 `writeText` 是「截断 + 写入」两步，进程在这中间被杀（本模块存在的理由就是
+     * 后台构建会被系统杀掉）就留下半截 JSON；下一次 [list] 解析失败按空处理，
+     * 再 `upsert` 一次，整份构建历史就变成一条。
+     */
     private fun writeAll(context: Context, tasks: List<BuildTask>) {
         val f = file(context)
         f.parentFile?.mkdirs()
-        runCatching { f.writeText(json.encodeToString(ListSerializer(BuildTask.serializer()), tasks)) }
-            .onFailure { AgentLogger.e("BuildStore", "写 builds.json 失败：${it.message}") }
+        val text = json.encodeToString(ListSerializer(BuildTask.serializer()), tasks)
+        runCatching {
+            val tmp = File(f.parentFile, "${f.name}.tmp")
+            tmp.writeText(text)
+            // 备份也用 rename，不 copy：copy 途中被杀会得到半截 .bak，
+            // 而 rename 要么是旧文件要么不存在，不会是坏文件。
+            if (f.exists()) {
+                val bak = bakFile(context)
+                bak.delete()
+                f.renameTo(bak)
+            }
+            // 同目录 rename 在 POSIX 上是原子的，且能覆盖已存在的目标
+            if (!tmp.renameTo(f)) {
+                f.delete()
+                if (!tmp.renameTo(f)) error("rename 失败")
+            }
+        }.onFailure { AgentLogger.e("BuildStore", "写 builds.json 失败：${it.message}") }
     }
 }
