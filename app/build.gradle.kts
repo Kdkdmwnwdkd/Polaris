@@ -108,6 +108,10 @@ android {
     // 产出的 APK 没有 .so，本地推理与内置终端不可用（两处都是懒加载 + try/catch 降级），
     // 其余界面/流程与正式包一致——用来在 x86_64 模拟器上跑 UI 验证，CI 与正式包不受影响。
     val skipNative = (project.findProperty("noNative") as String?)?.toBoolean() == true
+    // 仅 x86_64 模拟器验容器用：noNative 会把所有 .so 排掉，终端 JNI 一起没了，
+    // 容器页点下去必然 "libagentkit-termux.so 不可用"。这个开关在 noNative 前提下
+    // 只额外编终端 JNI（llama 仍然不编——x86 上编不了，验容器也不需要）。
+    val termuxX86 = skipNative && project.hasProperty("x86Rootfs")
 
     defaultConfig {
         applicationId = "com.beichen.polaris"
@@ -135,6 +139,11 @@ android {
         if (!skipNative) {
             ndk {
                 abiFilters += "arm64-v8a"
+            }
+        } else if (termuxX86) {
+            // 只带 x86_64 一个 ABI，APK 才能装进 x86_64 模拟器
+            ndk {
+                abiFilters += "x86_64"
             }
         }
     }
@@ -187,15 +196,26 @@ android {
             // → zipalign → 重签」才装进去的，这套动作本来就该由构建脚本负责。
             //
             // 排掉之后 APK 没有 lib/ 目录，任何 ABI 都能装，这正是 noNative 的唯一用途。
-            if (skipNative) excludes += "**/*.so"
+            if (skipNative) {
+                // termuxX86 时要保留 CMake 产出的 lib/x86_64/libagentkit-termux.so，
+                // 只排掉仓库里预置的 arm64 成品（libproot.so）——它在 x86 上纯属死重量，
+                // 而且会让 APK 声明 arm64，x86_64 模拟器直接装不上。
+                if (termuxX86) excludes += "**/arm64-v8a/**" else excludes += "**/*.so"
+            }
         }
     }
 
     // 本地 llama.cpp 推理：只出 arm64-v8a（市面手机全覆盖，先做扎实再扩 x86_64 模拟器）
-    if (!skipNative) {
+    if (!skipNative || termuxX86) {
         externalNativeBuild {
             cmake {
-                path = file("src/main/cpp/CMakeLists.txt")
+                // termuxX86 走独立的最小脚本：主脚本的第一件正事就是
+                // add_subdirectory(llama.cpp)，而 llama 源码不进 git、也只支持 arm64，
+                // 在 x86 模拟器上配都配不起来。
+                path = file(
+                    if (termuxX86) "src/main/cpp/termux-only/CMakeLists.txt"
+                    else "src/main/cpp/CMakeLists.txt"
+                )
                 version = "3.22.1"
                 // 注意：这里**不能**写 arguments —— 顶层 android.externalNativeBuild
                 // 的 Cmake DSL 在 AGP 8.5 里没有暴露这个属性（编译报 Unresolved reference）。

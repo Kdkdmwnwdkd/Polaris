@@ -26,9 +26,18 @@ DEST=app/src/debugX86/assets
 MIRROR="${ALPINE_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/alpine}"
 ALPINE_VER=3.20.3
 TERMUX=https://packages.termux.dev/apt/termux-main
-PROOT_DEB=pool/main/p/proot/proot_5.1.107.100_x86_64.deb
+
+# proot 的包名带版本号，上游一升级旧名就 404——2026-11 就踩过（.100 → .102），
+# 表现是脚本第一行 curl 失败、`set -e` 直接退出，看起来像网络问题。
+# 改成先列目录取最新；列不出来再回退到一个已知可用的版本。
+PROOT_VER="${PROOT_VER:-$(curl -fsSL --max-time 30 "$TERMUX/pool/main/p/proot/" 2>/dev/null \
+  | grep -oE 'proot_[0-9.]+_x86_64\.deb' | sed 's/^proot_//; s/_x86_64\.deb$//' \
+  | sort -V | tail -1)}"
+PROOT_VER="${PROOT_VER:-5.1.107.102}"
+PROOT_DEB="pool/main/p/proot/proot_${PROOT_VER}_x86_64.deb"
 TALLOC_DEB=pool/main/libt/libtalloc/libtalloc_2.5.0_x86_64.deb
 SHMEM_DEB=pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_x86_64.deb
+echo "proot 版本：$PROOT_VER"
 
 mkdir -p "$DEST/containers" "$DEST/bin/x86_64"
 

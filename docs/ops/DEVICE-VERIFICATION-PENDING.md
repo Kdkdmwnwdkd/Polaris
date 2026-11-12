@@ -5,9 +5,10 @@
 
 ## 一次验收怎么走（约 20 分钟）
 
-1. arm64 手机连 adb（x86 模拟器只能做 P4、P5）。
+1. arm64 手机连 adb（x86 模拟器能到 P4、P5，以及 P1 的「租约登记」半步——见文末 2026-11-12 记录）。
 2. 装包：`./gradlew :app:assembleDebug`（**不要**带 `-PnoNative`）→ `adb install -r`。
 3. 按 P1 → P3 顺序点，P4/P5 任何设备都能做。
+4. 入口位置：**「容器」已不在侧栏**（2026-11 起侧栏只留 5 项），改到 **设置 → 工具 → 容器**。
 4. **任何一步不对，不要截图**：日志页 →「诊断包」→ 发我。R10 起这个包里带
    `turns.ndjson`（一行一个事件对象），比截图和 logcat 片段都好定位。
 
@@ -19,10 +20,10 @@
 
 | | |
 |---|---|
-| 阻塞原因 | 需要 arm64（assets 只有 arm64 版 proot，rootfs 里的 busybox 也是 aarch64） |
+| 阻塞原因 | 跑通 `sh` 需要 arm64。x86_64 模拟器能走到「租约就绪 + proot 原始报错」这一步，但 proot 无法让 musl 程序 execve（见文末 2026-11-12 记录） |
 | 代码 | `ContainerScreen.ContainerSessionHolder.acquire` / `ContainerLease.borrow` |
 
-**步骤**：侧栏 →「容器」→ 等 rootfs 解压完成、出现 shell 提示符。
+**步骤**：设置 → 工具 → 容器 → 点发行版（等 rootfs 解压完成、出现 shell 提示符）。
 
 **通过标准**
 - `adb logcat -d \| grep 容器租约` 出现 `容器租约就绪：container:alpine`；
@@ -1164,3 +1165,54 @@ bash scripts/qa/run-all.sh
 
 `itemsIndexed(..., key = ...)` 的 lambda 类型与 `uiKey` 的可见性（core 顶层 public 函数）在
 沙箱里编不了，靠 G1 的静态断言 + 类型链人工核对；构建机跑一次编译即可确认。
+
+---
+
+## 2026-11-12 云端 x86_64 模拟器（API 30）实测
+
+背景：两台可 SSH 的云端 Debian 机器，其中一台带完整 Android SDK（build-tools 34 /
+platform-34 / NDK 26.1 / cmake 3.22.1）和一台常驻的 Android 11 x86_64 模拟器（KVM 可用）。
+用它把「只能在真机做」的项往前推了一格。
+
+### 验到的
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| 装包 / 冷启动 | 通过 | `-PnoNative=true` 产出可装；无崩溃、无 ANR。`am start -W` 报 `Status: timeout`，但首帧最终落在 `Displayed +22s191ms`——模拟器无硬件 GPU（`Skipped 775 frames`），不是应用卡死；启动分段日志只有 `ViewModel 初始化 1517ms` + `工具装配 56 项 266ms` |
+| 能力清单零偏差（O10） | 通过 | 日志里没有任何 `能力清单有 N 处不同步`；`工具装配 56 项` |
+| 启动顺序（O14 判据） | 通过 | 首帧 `16:25:24.520` 早于 `[BrowserHost] 开始创建后台 WebView` `16:25:26.927`——WebView 确实排在首帧之后，修的东西还在 |
+| P4 失败路径不借租约 | **通过** | 三件套缺失时日志只有 `ERROR [ProotRunner] assets/bin/x86_64 三件套不齐…`，**没有** `容器租约就绪`；重资源页不出现 `容器会话` 行 |
+| P1 租约就绪（半步） | **通过** | 补上 x86 rootfs 与终端 JNI 后点启动，出现 `[ContainerLeases] 容器租约就绪：container:alpine-x86_64`，重资源页出现 `容器会话 · alpine-x86_64` |
+| P2 退出归还（半步） | **通过** | 会话退出（`终端会话结束，退出码=1`）后再看重资源页，`容器会话` 行消失、只剩 `本地模型`；`ps -A \| grep -c proot` = 0 |
+
+### 没验到的，以及为什么
+
+- **容器跑命令**：proot 报 `execve("/bin/sh"): No such file or directory`。rootfs 是完整的
+  （`lib/ld-musl-x86_64.so.1` 649KB 在、`bin/sh -> busybox` 在、busybox 是 x86-64 ELF），
+  所以不是解压问题，是 Termux 版 proot 在 x86_64 模拟器内核上的已知边界
+  （`fetch-x86-testkit.sh` 开头就写了「仍可能 execve 失败」）。**P1/P2/P3 的「真跑命令」
+  那一半仍需 arm64 真机。**
+  UI 侧行为是对的：proot 的原始报错直接显示在终端里 + `[进程已退出，退出码 1]`，
+  没有假绿成「已启动」。
+- **P5 诊断包**：要真实跑一轮对话才有 `turns.ndjson`，模拟器上没有 API Key。
+- **P6 截断提示**：同上，需要真实模型真的撞到 `finish_reason=length`。
+
+### 顺带修掉的两个真问题
+
+1. `scripts/fetch-x86-testkit.sh` 把 proot 包名写死成 `proot_5.1.107.100_x86_64.deb`，
+   上游升到 `.102` 后该 URL 404，脚本第一行 curl 就退出（`set -e`），
+   表现得很像「网络不通」。改成先列目录取最新、取不到再回退 `.102`。
+2. `-PnoNative` 会把所有 `.so` 排掉，终端 JNI 一起没了，于是容器页必然停在
+   `libagentkit-termux.so 不可用`，「租约就绪」这一步在 x86 上永远到不了。
+   新增 `app/src/main/cpp/termux-only/CMakeLists.txt` 与 gradle 的 `termuxX86` 分支：
+   `-PnoNative=true -Px86Rootfs=true` 时只编终端 JNI（只出 x86_64 一个 ABI），llama 仍不编。
+   默认路径与 CI 完全不变（`termuxX86` 要求同时给两个属性才为真）。
+
+### 命令行照抄
+
+```bash
+bash scripts/fetch-x86-testkit.sh          # 拉 x86 rootfs + proot 三件套（不进 git）
+./gradlew :app:assembleDebug -PnoNative=true -Px86Rootfs=true
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+# 设置 → 工具 → 容器 → Alpine Linux（x86_64 调试）
+```
