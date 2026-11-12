@@ -93,6 +93,9 @@ fun BuildScreen() {
     var tasks by remember { mutableStateOf(BuildStore.list(context)) }
     var current by remember { mutableStateOf<BuildTask?>(null) }
     var running by remember { mutableStateOf(BuildEngine.isRunning()) }
+    // 「已等待 N 分钟」需要一个走得动的时钟：进度条只在 DOWNLOADING 出现，
+    // 而编译阶段要等二十多分钟，静止的文案会让人以为卡死了。
+    var nowTick by remember { mutableStateOf(System.currentTimeMillis()) }
     val workspaceCount = remember { WorkspaceStore.list(context).size }
 
     // 构建跑在 BuildEngine 自己的作用域里，页面只读结果：
@@ -107,6 +110,7 @@ fun BuildScreen() {
             tasks = list
             current = list.firstOrNull()
             running = BuildEngine.isRunning()
+            nowTick = System.currentTimeMillis()
             delay(1_200)
         }
     }
@@ -188,7 +192,9 @@ fun BuildScreen() {
             AkSectionCard(
                 title = "构建",
                 icon = Icons.Outlined.Build,
-                description = "工作区 $workspaceCount 个文件将随本次构建提交到 polaris-workspace/，CI 编译后自动拉回 APK。"
+                description = "工作区 $workspaceCount 个文件将随本次构建提交到 polaris-workspace/，" +
+                    "CI 编译后自动拉回 APK。整条流水线约 20–30 分钟（含 138 项 QA harness），" +
+                    "期间可以离开此页，回来进度还在。"
             ) {
                 AkPrimaryButton(
                     text = when {
@@ -224,7 +230,7 @@ fun BuildScreen() {
                 if (cur != null) {
                     Spacer(Modifier.height(AgentSpacing.space3))
                     Text(
-                        stageText(cur),
+                        stageText(cur, nowTick),
                         style = MaterialTheme.typography.bodyMedium,
                         color = when (cur.stage) {
                             BuildStage.FAILED -> MaterialTheme.colorScheme.error
@@ -325,12 +331,14 @@ fun BuildScreen() {
     }
 }
 
-private fun stageText(task: BuildTask): String = when (task.stage) {
+private fun stageText(task: BuildTask, nowMs: Long): String = when (task.stage) {
     BuildStage.PUSHING -> "正在提交工作区…"
-    BuildStage.QUEUED -> "云端排队中…（已触发 CI）"
-    BuildStage.BUILDING ->
-        if (task.runNumber != null) "CI 编译中…（run #${task.runNumber}，通常 3-6 分钟）"
-        else "CI 编译中…"
+    BuildStage.QUEUED -> "云端排队中…（已触发 CI）${waitedSuffix(task, nowMs)}"
+    BuildStage.BUILDING -> {
+        val n = task.runNumber
+        val head = if (n != null) "CI 编译中…（run #$n）" else "CI 编译中…"
+        head + waitedSuffix(task, nowMs)
+    }
 
     BuildStage.DOWNLOADING -> {
         val p = task.downloadProgress
@@ -340,6 +348,20 @@ private fun stageText(task: BuildTask): String = when (task.stage) {
     BuildStage.SUCCEEDED -> "构建成功"
     BuildStage.FAILED -> "构建失败：${task.error ?: "未知原因"}"
     BuildStage.CANCELLED -> "已停止跟踪：${task.error ?: "CI 可能仍在运行"}"
+}
+
+/**
+ * 「· 已等待 N 分钟」。
+ *
+ * 原本这里写的是「通常 3-6 分钟」——那是纯编译时间。实测一次 run 从 dispatch 到
+ * 出包是 **20-30 分钟**（CI 要跑 QA harness：138 个 runner + 六条门禁）。
+ * 按 3-6 分钟预期去等 25 分钟，用户会认定卡死然后点停止。
+ *
+ * 改成显示真实已等待时长：数字一直涨，就说明它没卡。
+ */
+private fun waitedSuffix(task: BuildTask, nowMs: Long): String {
+    val minutes = (nowMs - task.updatedAt) / 60_000L
+    return if (minutes >= 1) " · 已等待 $minutes 分钟" else ""
 }
 
 private fun buildHeadline(task: BuildTask): String {
