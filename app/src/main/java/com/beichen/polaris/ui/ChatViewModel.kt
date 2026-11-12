@@ -1,6 +1,7 @@
 package com.beichen.polaris.ui
 
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.net.BoundedBody
 import com.beichen.polaris.core.llm.ModelPricing
 import android.app.Application
 import android.content.Context
@@ -2361,13 +2362,22 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      */
     override suspend fun attachImageFromUri(uri: Uri): Boolean = withContext(Dispatchers.IO) {
         runCatching {
-            val bitmap = app.contentResolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream)
-            } ?: return@runCatching false
+            // 审计 F27：待发图片此前无数量上限。每张 base64 约 200~400KB，
+            // 连选 30 张就是 10MB 常驻 StateFlow，且整个拼进请求体——供应商多半直接拒。
+            if (_pendingImages.value.size >= MAX_PENDING_IMAGES) return@runCatching false
+            // 审计 F26：修前是 decodeStream 直接解原图。一张 108MP 的照片是
+            // 12000×9000×4B ≈ 432MB 的位图，decode 当场 OOM——scaleDown 根本没机会执行
+            // （它注释里写的「两阶段解码在调用方已完成」其实并不存在）。
+            val bitmap = decodeSampled(uri, MAX_EDGE) ?: return@runCatching false
             val scaled = scaleDown(bitmap)
-            val bytes = ByteArrayOutputStream().use { out ->
-                scaled.compress(Bitmap.CompressFormat.JPEG, 80, out)
-                out.toByteArray()
+            val bytes = try {
+                ByteArrayOutputStream().use { out ->
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                    out.toByteArray()
+                }
+            } finally {
+                if (scaled !== bitmap) scaled.recycle()
+                bitmap.recycle()
             }
             val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
             _pendingImages.value = _pendingImages.value + "data:image/jpeg;base64,$encoded"
@@ -2375,9 +2385,40 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         }.getOrDefault(false)
     }
 
+    /**
+     * 两阶段采样解码（审计 F26）。
+     *
+     * 第一次只读尺寸（`inJustDecodeBounds`，不分配像素内存），据此算出 `inSampleSize`
+     * ——只要结果不小于 [maxEdge] 就继续翻倍降采样，内存占用按 1/4 递减。第二次才真解码。
+     *
+     * 为什么开两遍流：`ContentResolver` 给的是不可 seek 的 InputStream，读完没法回头。
+     * 开两遍的代价是一次 URI 解析，远小于解一张 400MB 位图。
+     */
+    private fun decodeSampled(uri: Uri, maxEdge: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        app.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, bounds)
+        }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxEdge) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        return app.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, opts)
+        }
+    }
+
     /** 功能四（P0-2）：附件图片长边上限——兼顾视觉模型识别效果与请求体积。 */
     private companion object {
         const val MAX_EDGE = 1024
+
+        /**
+         * 单条消息最多挂几张图（审计 F27）。
+         *
+         * 8 张 ≈ 3MB base64，是「够用」与「请求体不炸」的交点：主流多模态接口对单请求
+         * 图片数多在 10~20 张，但像素总量普遍有上限；再叠加 PDF 一次 5 页，8 张留了余量。
+         */
+        const val MAX_PENDING_IMAGES = 8
 
         /**
          * W-46：喂给模型的历史最多回看多少轮。
@@ -2444,12 +2485,19 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             when {
                 // ② PDF：渲染成图片走多模态（视觉模型读页面）
                 ext == "pdf" -> {
-                    val images = renderPdfToImages(uri, MAX_PDF_PAGES)
-                    if (images.isEmpty()) {
-                        FileAttachResult.Failed("PDF 打开失败或没有可渲染页面")
+                    // 审计 F27：PDF 一次产出最多 5 张，必须与已有待发图共用同一个额度，
+                    // 否则「先选 8 张图，再发一个 5 页 PDF」就能绕过上限。
+                    val room = (MAX_PENDING_IMAGES - _pendingImages.value.size).coerceAtLeast(0)
+                    if (room == 0) {
+                        FileAttachResult.Failed("最多同时发 $MAX_PENDING_IMAGES 张图片，请先移除几张")
                     } else {
-                        _pendingImages.value = _pendingImages.value + images
-                        FileAttachResult.Images(name, images.size)
+                        val images = renderPdfToImages(uri, minOf(MAX_PDF_PAGES, room))
+                        if (images.isEmpty()) {
+                            FileAttachResult.Failed("PDF 打开失败或没有可渲染页面")
+                        } else {
+                            _pendingImages.value = _pendingImages.value + images
+                            FileAttachResult.Images(name, images.size)
+                        }
                     }
                 }
 
@@ -2497,9 +2545,20 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         }
     }.getOrNull()
 
-    /** 读文本文件（UTF-8；二进制误判为文本时由上层长度/空白判定兜底）。 */
+    /**
+     * 读文本附件（审计 F23）。
+     *
+     * 修前是 `input.readBytes().toString(UTF_8)`：整份进堆，`MAX_FILE_CHARS` 的 `take`
+     * 发生在读完以后——对 500MB 的 log 完全不设防，进程先 OOM，`take` 一次都没机会执行。
+     * 这与 `read_file`（F19）、`http_request`（F21）是同一类错误，附件路径此前漏了。
+     *
+     * 改用 [BoundedBody]：边读边计数，8MB 即停；截断点落在字符中间时丢半字符而不是
+     * 产出 U+FFFD（模型会把替换符当成真实内容）。字符级上限仍由调用方 `take` 兜底。
+     */
     private fun readTextFile(uri: Uri): String? = runCatching {
-        app.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+        app.contentResolver.openInputStream(uri)?.use { input ->
+            BoundedBody.read(input, BoundedBody.MAX_READ_BYTES).text
+        }
     }.getOrNull()
 
     /**
@@ -2519,11 +2578,18 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                             val w = (page.width * scale).toInt().coerceIn(1, MAX_EDGE)
                             val h = (page.height * scale).toInt().coerceIn(1, MAX_EDGE)
                             val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                            bmp.eraseColor(0xFFFFFFFF.toInt())
-                            page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                            val bytes = ByteArrayOutputStream().use { out ->
-                                bmp.compress(Bitmap.CompressFormat.JPEG, 80, out)
-                                out.toByteArray()
+                            // 审计 F25：原实现从不 recycle。5 页 × 1024² × 4B ≈ 20MB 常驻到
+                            // GC 才释放，低内存机在渲染阶段就可能 OOM。位图生命周期在这里
+                            // 完全封闭（compress 完即无用），显式回收最省事也最确定。
+                            val bytes = try {
+                                bmp.eraseColor(0xFFFFFFFF.toInt())
+                                page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                ByteArrayOutputStream().use { out ->
+                                    bmp.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                                    out.toByteArray()
+                                }
+                            } finally {
+                                bmp.recycle()
                             }
                             images += "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
                         }
@@ -2546,7 +2612,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     var entry = zip.nextEntry
                     while (entry != null) {
                         if (entry.name == "word/document.xml") {
-                            val xml = zip.readBytes().toString(Charsets.UTF_8)
+                            // 审计 F24：entry 是压缩包内的一段，可以被做成 zip 炸弹
+                            // （解压后几 GB）。限读 8MB，超出部分丢弃——比让 OOM killer
+                            // 决定强。BoundedBody 不关闭流，由外层 use 负责。
+                            val xml = BoundedBody.read(zip, BoundedBody.MAX_READ_BYTES).text
                             val normalized = xml.replace("</w:p>", "\n")
                             Regex("<w:t[^>]*>(.*?)</w:t>", RegexOption.DOT_MATCHES_ALL)
                                 .findAll(normalized)

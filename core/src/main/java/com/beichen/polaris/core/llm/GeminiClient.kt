@@ -16,6 +16,7 @@ import com.beichen.polaris.core.ToolMessage
 import com.beichen.polaris.core.UserMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -142,7 +143,7 @@ class GeminiClient(
         }
         val request = buildRequest(requestJson, stream = true)
         AgentLogger.apiTrace(endpointUrl(true), effectiveModel(), effectiveApiKey())
-        http.newCall(request).execute().use { resp ->
+        http.runCancellable(request) { resp ->
             if (!resp.isSuccessful) {
                 val errBody = runCatching { resp.body?.string() }.getOrDefault("") ?: ""
                 val safeBody = AgentLogger.sanitize(errBody)
@@ -195,7 +196,7 @@ class GeminiClient(
                     ?.content?.takeIf { it.isNotBlank() }?.let { emit(it) }
             }
         }
-    }
+    }.flowOn(Dispatchers.IO)
 
     /** hotfix35：非 SSE 降级收集上限（防超大 body 占内存）。 */
     private val PLAIN_BODY_MAX = 2 * 1024 * 1024

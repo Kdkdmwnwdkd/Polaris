@@ -11,6 +11,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.llm.runCancellable
 import com.beichen.polaris.core.llm.ChatStreamEvent
 import com.beichen.polaris.core.llm.parseOpenAiReasoning
 import com.beichen.polaris.core.llm.parseOpenAiUsage
@@ -565,8 +566,12 @@ class OpenAIClient(
         AgentLogger.apiTrace(endpointUrl(), effectiveModel(), effectiveApiKey())
         // Round1 Blocker 修复：网络段强制 IO 调度（streamText/streamChat 共用本方法，
         // 一处修两通道）。onData 里的 send 经 channelFlow 通道序列化回收集方，上下文安全。
+        // 审计 F22：改用 runCancellable —— 额外把 Call 挂到协程完成回调上。否则用户点
+        // 「停止」只会取消协程，阻塞在 readUtf8Line 的线程仍会把整条流读完（最多 180s），
+        // token 继续计费。runCancellable 不切调度器（切了会打断 flow 上下文），
+        // 所以网络段仍由外层 withContext 负责。
         return withContext(Dispatchers.IO) {
-            http.newCall(request).execute().use { resp ->
+            http.runCancellable(request) { resp ->
                 if (!resp.isSuccessful) {
                     // hotfix10：流式通道原来抛裸 IOException("LLM 流式请求失败 429")，
                     // 丢了 HTTP 结构与 Retry-After——上层认不出 429、退避只能用通用
@@ -603,7 +608,7 @@ class OpenAIClient(
                     val obj = runCatching { json.parseToJsonElement(data).objOrNull() }.getOrNull() ?: continue
                     onData(obj)
                 }
-                return@use if (sawData) SseReadOutcome.Sse else SseReadOutcome.PlainBody(rawFallback.toString())
+                if (sawData) SseReadOutcome.Sse else SseReadOutcome.PlainBody(rawFallback.toString())
             }
         }
     }

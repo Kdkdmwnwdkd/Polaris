@@ -1,6 +1,14 @@
 package com.beichen.polaris.core.llm
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -66,4 +74,59 @@ object LlmHttp {
             .callTimeout(call, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
+}
+
+/**
+ * 可取消的阻塞请求（审计 F22）。
+ *
+ * ## 修的是什么
+ *
+ * 全项目 32 处 `newCall(request).execute()` 都是**阻塞**调用。上面 [LlmHttp] 的注释写着
+ * 「真正的失控由协程取消（用户点停止 / ViewModel 回收）兜底」——但这句话在此之前是假的：
+ * `execute()` 阻塞在 socket 读上时，`Job.cancel()` 只是把协程标记成取消，**线程照样停在
+ * `readUtf8Line()` 里**，要等对端发完或 readTimeout（llm 预设 180s）才返回。
+ *
+ * 用户看到的现象：点「停止」后界面立刻恢复，但请求还在跑——流式 token 继续被服务端推送、
+ * 继续计费，连接与线程也一直被占着。停止按钮只停了「显示」，没停「请求」。
+ *
+ * ## 做法
+ *
+ * 把 `Call` 挂到当前协程的完成回调上：协程被取消时同步 `call.cancel()`，OkHttp 会立刻
+ * 中断 socket 读并让 `execute()` 抛 `IOException("Canceled")`。再把那个 IOException
+ * 还原成 [CancellationException]——否则上层会把它当网络故障，触发重试与「网络异常」提示，
+ * 用户明明是自己点的停止。
+ *
+ * ## 为什么不是 `suspendCancellableCoroutine` + `enqueue`
+ *
+ * 本项目的流式读取是「拿到 Response 后在自己的循环里逐行读」，enqueue 只能异步拿到响应头，
+ * 后续仍是阻塞读，等于没解决。改动面最小、语义最直白的还是「阻塞 + 取消时 cancel call」。
+ *
+ * 回调在线程池上执行，`dispose()` 防止正常结束后残留引用。
+ */
+suspend fun <T> OkHttpClient.runCancellable(
+    request: Request,
+    block: suspend (Response) -> T,
+): T {
+    val call = newCall(request)
+    val job = currentCoroutineContext()[Job]
+    val watchdog = job?.invokeOnCompletion { cause ->
+        // 正常完成时 cause 为 null，不能误伤已成功的请求
+        if (cause is CancellationException) runCatching { call.cancel() }
+    }
+    try {
+        val resp = call.execute()
+        try {
+            return block(resp)
+        } finally {
+            resp.close()
+        }
+    } catch (e: IOException) {
+        // call.cancel() 的表现是 IOException("Canceled")；协程确实被取消时不能当网络错误
+        if (job?.isCancelled == true) {
+            throw CancellationException("请求已随协程取消").apply { initCause(e) }
+        }
+        throw e
+    } finally {
+        watchdog?.dispose()
+    }
 }

@@ -16,6 +16,7 @@ import com.beichen.polaris.core.ToolMessage
 import com.beichen.polaris.core.UserMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -135,14 +136,14 @@ class ClaudeClient(
             val cache = promptCacheEnabled()
             val request = buildRequest(bodyJson(resolved, tools, stream = true, cache = cache))
             AgentLogger.apiTrace(endpointUrl(), effectiveModel(), effectiveApiKey())
-            http.newCall(request).execute().use { resp ->
+            http.runCancellable(request) { resp ->
                 if (!resp.isSuccessful) {
                     val errBody = runCatching { resp.body?.string() }.getOrDefault("") ?: ""
                     val safeBody = AgentLogger.sanitize(errBody)
                     AgentLogger.httpError(resp.code, safeBody)
                     if (resp.code == 400 && cache && looksLikeCacheRejection(safeBody)) {
                         retryWithoutCache = true
-                        return@use
+                        return@runCancellable
                     }
                     // hotfix10：同 OpenAIClient——抛结构化 LlmHttpException（带 code 与
                     // Retry-After），让上层认得出 429 并走限流专用退避序列。
@@ -206,7 +207,7 @@ class ClaudeClient(
             if (!retryWithoutCache) return@flow
             disablePromptCache("流式请求被拒")
         }
-    }
+    }.flowOn(Dispatchers.IO)
 
     /** hotfix35：非 SSE 降级收集上限（防超大 body 占内存）。 */
     private val PLAIN_BODY_MAX = 2 * 1024 * 1024
