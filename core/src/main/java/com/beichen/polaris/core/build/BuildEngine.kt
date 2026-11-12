@@ -2,11 +2,16 @@ package com.beichen.polaris.core.build
 
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.AppScope
 import com.beichen.polaris.core.ConfigStore
 import com.beichen.polaris.core.time.Monotonic
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
@@ -38,6 +43,62 @@ object BuildEngine {
 
     /** run 超时：40 分钟（排队 + 完整 Android 构建 + NDK 拉取都算正当时间）。 */
     private const val RUN_TIMEOUT_MS = 40 * 60 * 1000L
+
+    /**
+     * 构建自己的作用域：**不跟页面走**。
+     *
+     * 之前 UI 用 `rememberCoroutineScope` 启动，切个 tab 就把协程取消了——一次 40 分钟的
+     * 构建被逼成「不能离开此页」。页面现在只负责读 [BuildStore]。
+     */
+    private val scope = CoroutineScope(SupervisorJob() + AppScope.io)
+
+    @Volatile
+    private var running: Job? = null
+
+    /** 是否已有构建在跑（防重复点击；进程重启后自然为 false）。 */
+    fun isRunning(): Boolean = running?.isActive == true
+
+    /**
+     * 后台启动一次构建。
+     *
+     * @return false = 已有构建在进行，本次未启动（调用方提示即可）
+     */
+    fun startInBackground(context: Context): Boolean {
+        if (isRunning()) return false
+        running = scope.launch {
+            try {
+                startBuild(context)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Throwable) {
+                // AppScope.io 自带异常出口，但这里补一条带阶段信息的日志
+                AgentLogger.e(TAG, "构建异常退出：${e.message}")
+            }
+        }
+        return true
+    }
+
+    /**
+     * 清理僵尸任务：进程重启后没有任何 job 在跑，非终态记录都是上次被系统杀掉的。
+     *
+     * 不做这一步，构建页会永远挂着一条「构建中」——进度条不走、按钮点不动、
+     * 也没法判断到底还要不要等。同进程内正在跑的任务不碰（页面重建/旋转会重入）。
+     */
+    suspend fun reconcileStale(context: Context) = withContext(Dispatchers.IO) {
+        if (isRunning()) return@withContext
+        val stale = BuildStore.list(context).filter { !it.isTerminal }
+        if (stale.isEmpty()) return@withContext
+        stale.forEach {
+            BuildStore.upsert(
+                context,
+                it.copy(
+                    stage = BuildStage.CANCELLED,
+                    error = "应用重启，已停止跟踪（CI 可能仍在运行，可在 GitHub 查看 run）"
+                )
+            )
+        }
+        AgentLogger.w(TAG, "清理 ${stale.size} 个中断的构建任务")
+    }
 
     /**
      * 启动一次构建。返回最终任务记录（SUCCEEDED 时 apkPath 可安装）。

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,7 +53,10 @@ import com.beichen.polaris.core.build.BuildTask
 import com.beichen.polaris.core.build.GitHubBuildService
 import com.beichen.polaris.core.build.GitHubConfig
 import com.beichen.polaris.core.workspace.WorkspaceStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -88,31 +92,36 @@ fun BuildScreen() {
     // 任务态
     var tasks by remember { mutableStateOf(BuildStore.list(context)) }
     var current by remember { mutableStateOf<BuildTask?>(null) }
-    var running by remember { mutableStateOf(false) }
+    var running by remember { mutableStateOf(BuildEngine.isRunning()) }
     val workspaceCount = remember { WorkspaceStore.list(context).size }
+
+    // 构建跑在 BuildEngine 自己的作用域里，页面只读结果：
+    // 1.2s 轮询 builds.json，既能看进度，也能接上「离开一会儿再回来」的构建。
+    LaunchedEffect(Unit) {
+        // 进程重启后把上次中断的任务收成「已停止跟踪」，避免永远挂着「构建中」
+        BuildEngine.reconcileStale(context)
+        while (true) {
+            // 读盘放 IO：builds.json 几十 KB，但每 1.2s 在主线程解析一次没有道理
+            val list = withContext(Dispatchers.IO) { BuildStore.list(context) }
+            tasks = list
+            current = list.firstOrNull()
+            running = BuildEngine.isRunning()
+            delay(1_200)
+        }
+    }
 
     fun startBuild() {
         if (!cfgReady) {
             Toast.makeText(context, "请先填写并保存 GitHub 配置", Toast.LENGTH_SHORT).show()
             return
         }
-        running = true
-        scope.launch {
-            val finalTask = BuildEngine.startBuild(context) { t ->
-                current = t
-                tasks = BuildStore.list(context)
-            }
-            current = finalTask
-            tasks = BuildStore.list(context)
-            running = false
-            val msg = if (finalTask.stage == BuildStage.SUCCEEDED) {
-                val n = finalTask.runNumber
-                if (n != null) "构建 #$n 成功，点「安装」" else "构建成功，点「安装」"
-            } else {
-                "构建失败：${finalTask.error ?: "未知原因"}"
-            }
-            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+        // 不走页面 scope：切走 tab 会把整条 40 分钟的流程一起取消
+        if (!BuildEngine.startInBackground(context)) {
+            Toast.makeText(context, "已有构建在进行", Toast.LENGTH_SHORT).show()
+            return
         }
+        running = true
+        Toast.makeText(context, "构建已开始，可离开此页", Toast.LENGTH_SHORT).show()
     }
 
     Column(Modifier.fillMaxSize()) {
