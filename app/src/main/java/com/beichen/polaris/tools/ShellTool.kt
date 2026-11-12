@@ -35,6 +35,25 @@ import kotlinx.serialization.json.jsonPrimitive
 private const val SHELL_RUN_DEFAULT_PREFER_PROOT = true
 
 /**
+ * shell_run 单条命令的完成等待上限（毫秒）：20 分钟。
+ *
+ * 这是**命令**的上限，不是回合的上限——编译/打包这类命令在慢机器上确实要十几分钟。
+ * 关键点是它必须一路传到 [TerminalSessionPool.run]：池层的默认值只有 30 秒，
+ * 修前正是这个默认值在起作用，于是「声明 20 分钟」只是给执行器看的，
+ * `gradle build` 到第 30 秒就被池判超时、会话标脏，模型收到的是「命令超时」。
+ */
+const val SHELL_COMMAND_TIMEOUT_MS: Long = 20 * 60_000L
+
+/**
+ * 执行器预算相对池层超时的宽限（毫秒）。
+ *
+ * 让池层先到点：这样超时由**会话池**判（它有 `session_desynced` 与 Ctrl-C 中断的
+ * 精确语义），而不是被执行器的 `withTimeoutOrNull` 抢先取消。反过来的话，
+ * 模型只会拿到一句「工具超时，状态未知」，还得再开一次会话才知道 shell 已经脏了。
+ */
+private const val SHELL_EXECUTOR_GRACE_MS: Long = 15_000L
+
+/**
  * 提权通道的执行结果（W-13 B 方案：Shizuku / uid 2000）。
  *
  * 与 [com.beichen.polaris.core.terminal.TerminalSessionPool] 的结果解耦：提权通道是**一次性**
@@ -83,7 +102,14 @@ class ShellRunTool(
      *
      * 用函数注入而不是直接 import Shizuku：本文件保持零 Android 依赖，可离线 harness 断言路由。
      */
-    private val privilegedExec: (suspend (String) -> PrivilegedShellOut?)? = null
+    private val privilegedExec: (suspend (String) -> PrivilegedShellOut?)? = null,
+    /**
+     * 单条命令在会话池里的完成等待上限（毫秒），默认 [SHELL_COMMAND_TIMEOUT_MS]。
+     *
+     * 做成构造参数是为了让 harness 能注入小值（如 200ms）直接断言「池层超时语义」，
+     * 不必真的等 20 分钟；生产接线不传，即用默认的 20 分钟。
+     */
+    private val commandTimeoutMs: Long = SHELL_COMMAND_TIMEOUT_MS
 ) : AgentTool {
 
     override val name = "shell_run"
@@ -150,8 +176,13 @@ class ShellRunTool(
      * 写预算默认 600s 对多数命令够用，但编译/打包类命令在慢机器上会超；
      * 超时对写操作意味着「状态未知」（可能已经改了东西），模型不敢重试。
      * 这里给到 20 分钟，仍不够就说明该用 `shell_background`（独立作业通道，不占回合预算）。
+     *
+     * ★ 与池层超时的关系：本值必须**大于** [commandTimeoutMs]，让池层先到点、
+     * 由它给出 `timeout` + 会话已标脏的准确结论（见 [SHELL_EXECUTOR_GRACE_MS]）。
+     * 修前这里声明 20 分钟，而池层写死 30 秒——声明值根本没有生效过。
      */
-    override val timeoutBudgetMs: Long = 20 * 60_000L
+    override val timeoutBudgetMs: Long
+        get() = commandTimeoutMs + SHELL_EXECUTOR_GRACE_MS
 
     /**
      * W-79：审批细化到命令内容。
@@ -361,7 +392,16 @@ class ShellRunTool(
             // W-RT5：ssh 会话的身份固化为 User，这里**不能再把 ssh 当下限传进去**——
             // 池的判定是「会话实际身份须满足本次下限」，User 满足不了 Ssh，会在
             // identity_conflict 上把一条刚开好的远端会话判死。远端语义由 backendKey 承载。
-            pool.run(handle, command, identity = declaredIdentity.takeIf { it != TerminalIdentity.Ssh })
+            //
+            // 超时必须显式传：池层默认 30 秒，对 `gradle build` 这类命令远远不够。
+            // 不传的后果不是「慢一点」，而是每一条超过 30 秒的命令都被判超时、
+            // 会话被标脏、模型拿到「命令超时」后不敢重试——声明了 20 分钟却从未生效。
+            pool.run(
+                handle,
+                command,
+                identity = declaredIdentity.takeIf { it != TerminalIdentity.Ssh },
+                timeoutMs = commandTimeoutMs
+            )
         } finally {
             leaseHandle?.close()
         }

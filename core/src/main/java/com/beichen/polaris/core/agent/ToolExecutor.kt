@@ -240,7 +240,22 @@ class RegistryToolExecutor(
      *
      * 超过它的自声明预算毫无意义——回合早就在步边界收尾了。
      */
-    private val maxDeclaredBudgetMs: Long = ToolBudget.MAX_DECLARED_BUDGET_MS
+    private val maxDeclaredBudgetMs: Long = ToolBudget.MAX_DECLARED_BUDGET_MS,
+    /**
+     * A-2：**回合剩余的毫秒数**（每次调用前现算；null / 返回 null = 不做回合级限制）。
+     *
+     * ## 为什么必须是函数而不是一个 Long
+     * 含写操作的批次是**串行**的：第一个工具跑掉 8 分钟后，第二个拿到的剩余时间
+     * 已经不是批开始时那个数了。传固定值等于让整批共用一份快照，后面的调用
+     * 仍会按「批开始时还剩 25 分钟」去跑——正是要修的那个洞。
+     *
+     * ## 为什么由外部注入
+     * 「回合还剩多久」只有 loop 知道（它持有 `loopStart` 与 `turnBudgetMs`）。
+     * executor 自己算会引入第二份定义，两边漂移时超时行为就不可解释了。
+     *
+     * 默认 null = 不限制，测试替身与技能路径行为与改造前逐字节相同。
+     */
+    private val turnRemainingMs: (() -> Long?)? = null
 ) : BatchToolExecutor {
 
     /** 基础契约入口：duplicateInBatch 缺省 false（单发调用无同批前驱）。 */
@@ -423,15 +438,32 @@ class RegistryToolExecutor(
             ToolBudget.declaredBudgetOf(tool)?.let { declared ->
                 ToolBudget.warnIfClamped(tool.name, declared, budget)
             }
+            // ★ A-2：回合预算必须参与**单次调用**的裁剪，不能只在步边界判。
+            //
+            // 修前：`send()` 只在每步开头检查「回合是否超时」。于是一个 29 分钟时开始的
+            // 写工具仍按自己的 10 分钟预算跑——回合在 39 分钟才收尾，而不是 30 分钟。
+            // 5 个写工具串行时最坏能拖到 79 分钟，而用户对「30 分钟上限」的预期是硬承诺。
+            //
+            // 这里的做法是把剩余时间当作**预算的上界**：`min(工具预算, 回合剩余)`。
+            // 不选 `withTimeout` 硬杀，是因为超时的语义（可能已生效）在这里同样成立；
+            // 选「剩余 <= 0 就不进入执行」才是干净的——那时什么都没发生，模型可以放心重试。
+            val remaining = turnRemainingMs?.invoke()
+            if (remaining != null && remaining <= 0L) {
+                return turnExhaustedOutcome(call, tool.name)
+            }
             // 等用户的工具不加预算：`ask_user` / `plan_propose` 标了 readOnly（确实无副作用），
             // 但它们挂起时是在等人思考，不是卡死。用 90 秒把用户的问题掐掉是纯回归。
             // 这两类工具自己有等待上限（180s / 300s），超时文案也更准确。
+            // 但它们仍然受上面的「回合已耗尽」检查约束——回合都没时间了，就不该再开新问询。
             val result = if (ToolBudget.awaitsUserOf(tool)) {
                 tool.execute(call.arguments)
             } else {
-                withTimeoutOrNull(budget) { tool.execute(call.arguments) }
+                // 回合剩余 > 0 时，实际等待不得超过它：否则工具跑过回合截止才返回，
+                // 用户看到的是「说好 30 分钟，结果 41 分钟才停」。
+                val effectiveBudget = if (remaining != null) minOf(budget, remaining) else budget
+                withTimeoutOrNull(effectiveBudget) { tool.execute(call.arguments) }
                     ?: return timeoutOutcome(
-                        call, tool.name, ToolBudget.readOnlyOf(tool), fingerprint, budget,
+                        call, tool.name, ToolBudget.readOnlyOf(tool), fingerprint, effectiveBudget,
                         System.currentTimeMillis() - start
                     )
             }
@@ -516,6 +548,31 @@ class RegistryToolExecutor(
             )
         }
         AgentLogger.toolResult(toolName, false, costMs, result.message)
+        return ToolCallOutcome.Completed(
+            toolMessageOf(call, result), emptyList(), code = result.code, result = result
+        )
+    }
+
+    /**
+     * A-2：回合预算已耗尽，本次调用**根本没有进入执行**。
+     *
+     * 与 [timeoutOutcome] 的区别必须说清，两者对模型的动作要求相反：
+     *  - [timeoutOutcome]：跑了但没等到结果，**写操作可能已生效** → 先核对，别重做；
+     *  - 本方法：连执行边界都没越过，**什么都没发生** → 重试是安全的，但本回合不会放行。
+     *
+     * 不加失败计数：没执行就没有失败，把它记进熔断会让新一轮的同一条命令被
+     * 「requires_changed_call」无故挡住——那是把预算问题变成了永久故障。
+     */
+    private fun turnExhaustedOutcome(call: ToolCall, toolName: String): ToolCallOutcome.Completed {
+        AgentLogger.w("Tool", "回合预算耗尽，跳过执行 $toolName（未越过执行边界，无副作用）")
+        val result = ToolResult.fail(
+            code = "turn_budget_exhausted",
+            message = "本回合的时间预算已用完，工具「$toolName」没有执行（未产生任何副作用）。",
+            hint = "不要在本回合重试（不会放行）。已完成的工作都已保存，" +
+                "请把当前进度告诉用户并结束本轮；用户回复「继续」后会开新回合，届时可以接着做，" +
+                "特别是耗时的工作建议拆小或用 shell_background。"
+        )
+        AgentLogger.toolResult(toolName, false, 0L, result.message)
         return ToolCallOutcome.Completed(
             toolMessageOf(call, result), emptyList(), code = result.code, result = result
         )

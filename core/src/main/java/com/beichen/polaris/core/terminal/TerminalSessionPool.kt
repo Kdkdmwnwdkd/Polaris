@@ -148,8 +148,11 @@ data class SessionSnapshot(
  * - 多行命令（含换行）以**整体一次写入**下发，哨兵只反映最后一条语句的退出码；
  * - PTY 回显：容器（proot）走伪终端会回显命令与 `echo` 行，本池做**尽力清洗**（见
  *   [cleanOutput]），无 PTY 的本机 user 后端输出天然干净；
- * - [commandTimeoutMs] 超时后本次命令判失败，但**不杀后端**（命令可能仍在跑，由调用方决定
- *   是否 [close] 会话）。
+ * - **超时上限按调用覆盖**：[run] 的 `timeoutMs` 优先于 [commandTimeoutMs]。
+ *   池默认值只是「没有更好信息时」的兜底，不是命令种类的判据——同一个 30 秒对
+ *   `ls` 太长、对 `gradle build` 太短，只有调用方（shell 工具）知道自己在跑什么。
+ * - 超时后本次命令判失败，但**不杀后端**（命令可能仍在跑，由调用方决定
+ *   是否 [close] 会话）；会话同时被标记不可复用（见 `session_desynced`）。
  *
  * @param source 后端来源（每次 [open] 向其取**新实例**：一后端 = 一条独立 shell 进程）
  * @param truncator 输出截断器；默认口径与工具结果一致（24000）
@@ -176,6 +179,15 @@ class TerminalSessionPool(
 
     /** 会话表互斥锁（仅保护上面两张表的读写，临界区极短）。 */
     private val lock = Any()
+
+    /**
+     * 槽位门锁：（backendKey, alias）→ 开辟互斥。
+     *
+     * 与 [lock] 的分工是「临界区长度」：本表只在 [open] 的整档流程（含后端启动，
+     * 最长 [BACKEND_START_TIMEOUT_MS]）里持有，而 [lock] 只包住几行 HashMap 读写。
+     * 混成一把锁的后果是——启动一个卡死的后端时，连 `lookup` / `list` 都跟着卡住。
+     */
+    private val openGates = HashMap<String, Mutex>()
 
     /**
      * 开辟（或复用）一条会话。
@@ -265,78 +277,29 @@ class TerminalSessionPool(
         // 改动前这里是「obtain 选一个 → start，失败就报 start_failed」：一旦首选后端
         // 因环境变化起不来（rootfs 被删、配对失效、adbd 回收），用户看到的是失败，
         // 而不是回落到仍然可用的本机 shell。
+        //
+        // ★ 槽位门锁（A-10）：同一 (backendKey, alias) 的「查 → 启 → 登记」必须整体互斥。
+        //
+        // 修前只有 `synchronized(lock)` 保护**读表**，后端启动发生在锁外，登记又在另一段
+        // 临界区里。于是两个协程同时 open 同一别名时：两边都读到 null → 都 start 出一个
+        // 后端 → 先后登记，后登记的**覆盖**了 byAlias 里前一条。前一个后端就此失去句柄，
+        // 变成没人能关掉的孤儿 shell（进程泄漏，且它的输出收集协程还在跑）。
+        // 这在「模型一批并发调两个 shell_run」时就会发生。
+        //
+        // 门锁按槽位划分而不是全局一把：不同别名/不同后端之间仍可并发开辟，
+        // 一把全局锁会让一个卡死的 proot 启动拖住整台设备上所有会话。
         val tried = ArrayList<String>(candidates.size)
         for (candidate in candidates) {
             val backendKey = candidate.backendKey
-            val effectiveAlias = normalizeAlias(alias ?: TerminalBackendFactory.defaultAliasFor(backendKey))
-            val poolKey = poolKey(backendKey, effectiveAlias)
-
-            val existing = synchronized(lock) { byAlias[poolKey] }
-            if (existing != null) {
-                if (existing.alive) {
-                    // R-12：判据从「身份相等」改成「会话实际身份能否满足本次请求的下限」。
-                    // 相等太严：`identity=user` 撞上 uid 2000 的会话会报冲突，而那个会话
-                    // 完全够用（权限更高）——用户被迫关掉重开，cwd 也丢了。
-                    // 相等也太松（反向）：请求 su 撞上 user 会话时，相等判定会放行，
-                    // 于是「用户以为提权了，命令其实仍以旧身份跑」——正是注释里要防的那件事。
-                    if (!existing.identity.satisfies(identity)) {
-                        // 权限不足：绝不静默复用
-                        runCatching { candidate.close() }
-                        return OpenResult.failure(
-                            code = "identity_conflict",
-                            message = "别名「$effectiveAlias」上已有会话以「${existing.identity.describe()}」执行，" +
-                                "满足不了本次请求的下限「${identity.describe()}」（identity=${identity.wire}）。",
-                            hint = "改用不高于「${existing.identity.wire}」的身份，或先 " +
-                                "shell_close(handle=${existing.handle}) 关闭旧会话再以新身份开辟。"
-                        )
-                    }
-                    // 复用：丢弃刚建的多余后端，返回既有句柄
-                    runCatching { candidate.close() }
-                    return OpenResult.ok(
-                        existing.handle, existing.identity, existing.backendKey, existing.alias, reused = true
-                    )
-                }
-                // 僵尸：释放别名 + 回收资源
-                releaseEntry(existing)
-                runCatching { existing.backend.close() }
-            }
-
-            // W-59：start 加超时。原本是裸调 `runCatching { candidate.start() }`——
-            // Shizuku 的 `newProcess` 走 binder，binder 卡住时**不会**抛异常也不会返回，
-            // 整条工具调用就挂在那里（用户看到的是「点了没反应」，而不是「启动失败」）。
-            // 超时后照常 close + 回落下一档，语义与「启动失败」一致。
-            var startTimedOut = false
-            val started = withTimeoutOrNull(BACKEND_START_TIMEOUT_MS) {
-                runCatching { candidate.start() }.getOrDefault(false)
-            } ?: run {
-                startTimedOut = true
-                false
-            }
-            if (!started) {
-                tried += backendKey
-                runCatching { candidate.close() }
-                AgentLogger.w(
-                    TAG,
-                    (if (startTimedOut) "后端启动超时（>${BACKEND_START_TIMEOUT_MS}ms），" else "后端启动失败，") +
-                        "回落到下一档：$backendKey（identity=${identity.wire}）"
-                )
-                continue
-            }
-
-            val handle = allocateHandle()
-            // R-12：固化后端的**实际**身份，不是请求值。请求只是下限，
-            // 记请求值会让后续所有报告与冲突判定都建立在假话上。
-            val entry = Entry(handle, candidate.identity, backendKey, effectiveAlias, candidate)
-            synchronized(lock) {
-                byHandle[handle] = entry
-                byAlias[poolKey] = entry
-            }
-            AgentLogger.i(
-                TAG,
-                "会话已开辟 handle=$handle identity=${entry.identity.wire}（请求 ${identity.wire}）" +
-                    " pool=$backendKey alias=$effectiveAlias"
+            val effectiveAlias = normalizeAlias(
+                alias ?: TerminalBackendFactory.defaultAliasFor(backendKey)
             )
-            return OpenResult.ok(handle, entry.identity, backendKey, effectiveAlias, reused = false)
+            val gate = openGate(poolKey(backendKey, effectiveAlias))
+            // 返回 null = 这一档起不来（已 close 并记日志），继续试下一档；
+            // 非 null = 最终结论（复用 / 冲突 / 成功），直接返回。
+            val outcome = gate.withLock { tryCandidate(candidate, identity, effectiveAlias) }
+            if (outcome != null) return outcome
+            tried += backendKey
         }
 
         // 全部候选都起不来：列出试过哪些，不笼统说「失败」
@@ -355,12 +318,16 @@ class TerminalSessionPool(
      * @param command 命令原文（会 trim 掉结尾换行后单行写入；含内部换行则整体一次下发）
      * @param identity 可选的**权限下限**；非 null 时会话实际身份满足不了它 → 显式报错
      *   （R-12：判据是 [TerminalIdentity.satisfies]，不是相等——见下面的分支注释）
+     * @param timeoutMs 本次命令的完成等待上限（毫秒）；null = 用池的
+     *   [commandTimeoutMs]。**必须允许调用方按命令覆盖**——`ls` 和 `gradle build`
+     *   共用一个 30 秒上限，等于后者永远跑不完（见下面的 KDoc「已知取舍」）。
      * @return [ExecResult]（输出已截断）
      */
     suspend fun run(
         handle: String,
         command: String,
-        identity: TerminalIdentity? = null
+        identity: TerminalIdentity? = null,
+        timeoutMs: Long? = null
     ): ExecResult {
         val entry = synchronized(lock) { byHandle[handle] }
             ?: return ExecResult.failure(
@@ -405,8 +372,102 @@ class TerminalSessionPool(
                     hint = "先 shell_close 该句柄，再用无 session 参数开辟新会话后重试。"
                 )
             }
-            execute(entry, command)
+            execute(entry, command, timeoutMs)
         }
+    }
+
+    /**
+     * 「查既有槽位 → 复用 / 冲突 / 清僵尸 → 启动 → 登记」一档的全部动作。
+     *
+     * 调用方（[open]）必须持有该槽位的门锁 [openGate]——这四步放在一起才有意义：
+     * 中间任何一步出锁，都给了另一个协程「读到同样的旧状态」的机会。
+     *
+     * @return null = 本档启动失败（后端已 close，继续试下一档）；非 null = 最终结论。
+     */
+    private suspend fun tryCandidate(
+        candidate: TerminalBackend,
+        identity: TerminalIdentity,
+        effectiveAlias: String
+    ): OpenResult? {
+        val backendKey = candidate.backendKey
+        val key = poolKey(backendKey, effectiveAlias)
+
+        val existing = synchronized(lock) { byAlias[key] }
+        if (existing != null) {
+            if (existing.alive) {
+                // R-12：判据从「身份相等」改成「会话实际身份能否满足本次请求的下限」。
+                // 相等太严：`identity=user` 撞上 uid 2000 的会话会报冲突，而那个会话
+                // 完全够用（权限更高）——用户被迫关掉重开，cwd 也丢了。
+                // 相等也太松（反向）：请求 su 撞上 user 会话时，相等判定会放行，
+                // 于是「用户以为提权了，命令其实仍以旧身份跑」——正是注释里要防的那件事。
+                if (!existing.identity.satisfies(identity)) {
+                    // 权限不足：绝不静默复用
+                    runCatching { candidate.close() }
+                    return OpenResult.failure(
+                        code = "identity_conflict",
+                        message = "别名「$effectiveAlias」上已有会话以「${existing.identity.describe()}」执行，" +
+                            "满足不了本次请求的下限「${identity.describe()}」（identity=${identity.wire}）。",
+                        hint = "改用不高于「${existing.identity.wire}」的身份，或先 " +
+                            "shell_close(handle=${existing.handle}) 关闭旧会话再以新身份开辟。"
+                    )
+                }
+                // 复用：丢弃刚建的多余后端，返回既有句柄
+                runCatching { candidate.close() }
+                return OpenResult.ok(
+                    existing.handle, existing.identity, existing.backendKey, existing.alias, reused = true
+                )
+            }
+            // 僵尸：释放别名 + 回收资源
+            releaseEntry(existing)
+            runCatching { existing.backend.close() }
+        }
+
+        // W-59：start 加超时。原本是裸调 `runCatching { candidate.start() }`——
+        // Shizuku 的 `newProcess` 走 binder，binder 卡住时**不会**抛异常也不会返回，
+        // 整条工具调用就挂在那里（用户看到的是「点了没反应」，而不是「启动失败」）。
+        // 超时后照常 close + 回落下一档，语义与「启动失败」一致。
+        var startTimedOut = false
+        val started = withTimeoutOrNull(BACKEND_START_TIMEOUT_MS) {
+            runCatching { candidate.start() }.getOrDefault(false)
+        } ?: run {
+            startTimedOut = true
+            false
+        }
+        if (!started) {
+            runCatching { candidate.close() }
+            AgentLogger.w(
+                TAG,
+                (if (startTimedOut) "后端启动超时（>${BACKEND_START_TIMEOUT_MS}ms），" else "后端启动失败，") +
+                    "回落到下一档：$backendKey（identity=${identity.wire}）"
+            )
+            return null
+        }
+
+        val handle = allocateHandle()
+        // R-12：固化后端的**实际**身份，不是请求值。请求只是下限，
+        // 记请求值会让后续所有报告与冲突判定都建立在假话上。
+        val entry = Entry(handle, candidate.identity, backendKey, effectiveAlias, candidate)
+        synchronized(lock) {
+            byHandle[handle] = entry
+            byAlias[key] = entry
+        }
+        AgentLogger.i(
+            TAG,
+            "会话已开辟 handle=$handle identity=${entry.identity.wire}（请求 ${identity.wire}）" +
+                " pool=$backendKey alias=$effectiveAlias"
+        )
+        return OpenResult.ok(handle, entry.identity, backendKey, effectiveAlias, reused = false)
+    }
+
+    /**
+     * 取某个槽位的门锁（首次用到时创建）。
+     *
+     * 条目**不回收**：数量上限就是「后端种类 × 别名数」，最多几十个 Mutex，
+     * 而回收会带来一个更难查的问题——两个协程可能各自拿到新旧两把锁，
+     * 于是门锁形同虚设。宁可留下几十个空对象。
+     */
+    private fun openGate(key: String): Mutex = synchronized(lock) {
+        openGates.getOrPut(key) { Mutex() }
     }
 
     /** 关闭指定会话（幂等）：回收后端 + 释放别名与句柄。 */
@@ -487,7 +548,11 @@ class TerminalSessionPool(
     /* ------------------------------------------------------------------ */
 
     /** 执行一条命令：起收集协程 → 写命令 + 哨兵 → 等完成 → 切输出 → 截断。 */
-    private suspend fun execute(entry: Entry, command: String): ExecResult {
+    private suspend fun execute(entry: Entry, command: String, timeoutMs: Long? = null): ExecResult {
+        // 本次的完成等待上限：调用方给了就用它，否则退回池默认值。
+        // 所有「报给用户 / 报给模型」的文案都必须用这个实际值——
+        // 固定在文案里写 commandTimeoutMs 会让「20 分钟预算」看起来没生效。
+        val limit = timeoutMs?.coerceAtLeast(1L) ?: commandTimeoutMs
         val token = newToken()
         val sentinelPrefix = SENTINEL_MARKER + token + "__"
         // 哨兵必须「其后紧跟数字退出码」才算命中（PTY 回显的 echo "...$?" 之后是 '$'，不误判）
@@ -539,7 +604,7 @@ class TerminalSessionPool(
             )
         }
 
-        val exitCode = withTimeoutOrNull(commandTimeoutMs) { done.await() }
+        val exitCode = withTimeoutOrNull(limit) { done.await() }
         collector.cancelAndJoin()
 
         if (exitCode == null) {
@@ -556,7 +621,7 @@ class TerminalSessionPool(
             }
             return ExecResult.failure(
                 code = "timeout",
-                message = "命令在 ${commandTimeoutMs}ms 内未完成（会话「${entry.handle}」），已中断并标记该会话不可复用。",
+                message = "命令在 ${limit}ms 内未完成（会话「${entry.handle}」），已中断并标记该会话不可复用。",
                 hint = "把命令拆小、补非交互参数（如 -y），或改装 shell_background 跑长命令；" +
                     "继续操作前请用 shell_close 关闭该句柄，再不带 session 重新开辟。"
             )

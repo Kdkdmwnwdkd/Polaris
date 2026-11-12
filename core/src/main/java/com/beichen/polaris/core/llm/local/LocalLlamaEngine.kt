@@ -4,6 +4,7 @@ import com.beichen.polaris.core.AgentLogger
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * 本地 llama 推理引擎（进程级单例）。
@@ -56,6 +57,40 @@ object LocalLlamaEngine {
      * 加这把锁之后，第二个调用方会**等**第一个加载完，进来时 current 已就绪 → 直接复用。
      */
     private val loadLock = ReentrantLock()
+
+    /**
+     * 推理互斥锁：**同一个 llama_context 上不允许有两个 decode 并发**。
+     *
+     * ## 修前是什么样
+     * [generate] / [chatTemplate] 只经 [withHandle] 做了「防释放计数」，没有任何互斥。
+     * 于是两个协程可以同时进 `nativeGenerate(同一个 handle, …)`。llama.cpp 的
+     * context 不是线程安全的：KV cache、`n_past`、采样器状态、logits 缓冲全是共享可变状态，
+     * 两条序列交错写同一段 KV。表现不是「报个错」，而是：
+     *  - 输出**串台**（A 的回答里出现 B 的 prompt 内容），或逻辑突然跳转；
+     *  - `n_past` 互相覆盖 → 复读、退化；
+     *  - 极端情况写坏 KV 索引 → SIGSEGV（现场看起来像「模型坏了」）。
+     *
+     * 真实触发路径不需要用户做怪事：主对话正在流式生成时，「AI 标题生成」在另一个
+     * 协程里对同一个引擎调 generate——这正是 [isBusy] 想拦却没拦住的那条（它只是
+     * 给调用方一个**建议**，不是闸门）。
+     *
+     * ## 为什么是 ReentrantLock 而不是 Mutex
+     * [generate] 本身是阻塞调用（`nativeGenerate` 在 JNI 里同步跑完），
+     * 不在挂起函数里、也不能挂起。协程的 Mutex 在这里既用不上也不该用。
+     * 调用方（LocalLlamaClient）已经在 IO 线程上，阻塞等待是预期行为。
+     */
+    private val inferenceLock = ReentrantLock()
+
+    /**
+     * 当前**正在生成**的句柄（0 = 没有生成在跑）。
+     *
+     * [stop] 必须停它，而不是 `current.handle`：生成期间用户可能切换了模型，
+     * [releaseLocked] 已把旧句柄挪进 [retiredHandles]，`current` 指向的是新实例。
+     * 修前 `stop()` 停 current——于是「取消旧生成」这个动作落在了一个根本没在跑的
+     * 实例上，真正在跑的旧 handle 收不到中断，只能等它自己吐完 maxTokens。
+     */
+    @Volatile
+    private var generatingHandle: Long = 0L
 
     /**
      * 当前句柄的「正在使用」计数（generate / chatTemplate 期间）。
@@ -293,6 +328,17 @@ object LocalLlamaEngine {
 
     /** 请求停止当前生成（协程取消时调用；生成循环每 token 检查停止标志）。 */
     fun stop() {
+        // 优先停「正在生成的那个句柄」。原因见 [generatingHandle]：生成期间可能已换模型，
+        // 此时 current 是新实例，停它等于什么都没停。
+        val running = generatingHandle
+        if (running != 0L) {
+            LlamaJni.nativeStop(running)
+            return
+        }
+        // 没有生成在跑：可能 stop 与 generate 之间有极短窗口（取消先到）。
+        // 仍然对 current 发一次是安全的——native 侧在每次 nativeGenerate 开头
+        // 都会把 stop 标志清零（llama-jni.cpp 里的 `stop.store(false)`），
+        // 所以这里不会把「下一次生成」提前掐死。
         synchronized(lock) { current?.handle }?.let { handle ->
             if (handle != 0L) LlamaJni.nativeStop(handle)
         }
@@ -300,11 +346,29 @@ object LocalLlamaEngine {
 
     /** 应用模型自带对话模板；未加载时返回空串。 */
     fun chatTemplate(roles: Array<String>, contents: Array<String>): String =
-        withHandle { LlamaJni.nativeChatTemplate(it, roles, contents) } ?: ""
+        // 同 [generate]：模板渲染也会碰同一个 context 上的状态，必须与 decode 串行。
+        // 它的耗时是毫秒级，排队代价可以忽略；放过去则是「生成到一半被改了 prompt 缓冲」。
+        inferenceLock.withLock {
+            withHandle { LlamaJni.nativeChatTemplate(it, roles, contents) }
+        } ?: ""
 
     /** 阻塞式生成；未加载时返回空串。listener 可空。 */
     fun generate(prompt: String, maxTokens: Int, listener: LlamaJni.TokenListener?): String =
-        withHandle { LlamaJni.nativeGenerate(it, prompt, maxTokens, listener) } ?: ""
+        // ★ 互斥：同一个 context 上只能有一条序列在 decode（原因见 [inferenceLock]）。
+        // 等待期间不占 activeUsers，`isBusy` 仍为 true（先到者还没退出），
+        // 标题生成这类「锦上添花」的调用据此外退，不会在队列里干等。
+        inferenceLock.withLock {
+            withHandle { h ->
+                generatingHandle = h
+                try {
+                    LlamaJni.nativeGenerate(h, prompt, maxTokens, listener)
+                } finally {
+                    // 无论正常结束、抛异常还是被 stop 中断，都要清掉：
+                    // 留着会让下一次 stop() 去停一个已经不在生成的句柄。
+                    generatingHandle = 0L
+                }
+            }
+        } ?: ""
 
     /**
      * 取走「GPU 后端在生成期间自己抛异常」的记录（取走即清空，空串表示没发生）。

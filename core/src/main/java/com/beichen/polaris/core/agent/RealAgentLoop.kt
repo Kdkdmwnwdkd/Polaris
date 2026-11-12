@@ -677,7 +677,12 @@ class RealAgentLoop(
             // 这是纯噪音；对一次成功的写入，则会让用户去核对一件已经完成的事。
             val settled = ConcurrentHashMap<String, ToolMessage>()
             val results = try {
-                executeBatch(resp.toolCalls, stepImages, turnRegistry, turn, step, clock, settled)
+                // A-2：把**回合截止时刻**交给本批，而不是只用步边界的 elapsed 检查。
+                // 只挡步边界时，29 分钟起跑的写工具仍能按自己的 10 分钟预算跑到 39 分钟。
+                executeBatch(
+                    resp.toolCalls, stepImages, turnRegistry, turn, step, clock, settled,
+                    turnDeadlineMs = loopStart + turnBudgetMs
+                )
             } catch (cancel: CancellationException) {
                 // T05 树尾闭合：不信任取消时 execute() 的返回值——工具被 kill 后可能返回假成功。
                 // 在 NonCancellable 内给本 Assistant 里所有**未配对**的 ToolCall 补错误 ToolResult，
@@ -773,7 +778,13 @@ class RealAgentLoop(
         step: Int,
         clock: TurnClock,
         // 每有一个调用产出终态 message 就登记，供取消路径取回（见 send() 中的说明）。
-        settled: MutableMap<String, ToolMessage>
+        settled: MutableMap<String, ToolMessage>,
+        /**
+         * A-2：回合截止时刻（[Monotonic] 毫秒）。每次调用前据此现算剩余，
+         * 串行批次里后一个调用因此拿不到「批开始时」的旧额度。
+         * null = 不做回合级裁剪（取消闭合等非执行路径）。
+         */
+        turnDeadlineMs: Long? = null
     ): List<ToolMessage> {
         val seenFingerprints = HashSet<String>()
         val duplicateFlags = calls.map { call ->
@@ -799,7 +810,8 @@ class RealAgentLoop(
             "本批 ${calls.size} 个调用：hasMutation=$hasMutation（${if (hasMutation) "串行" else "并行"}）"
         )
         // R1：带上 turn/step——执行器要在审批之后、真正动手之前记「越过执行边界」
-        val executor = toolExecutor(turnRegistry, turn, step)
+        // A-2：同时带上回合截止，让每个工具调用的等待被裁剪到「回合还剩多少」以内
+        val executor = toolExecutor(turnRegistry, turn, step, turnDeadlineMs)
         return if (hasMutation) {
             // 含写整批串行：单协程顺序执行，直接写 images 无并发问题；顺序确定，
             // 便于日志审计与用户预期
@@ -1212,7 +1224,16 @@ class RealAgentLoop(
      * [RegistryToolExecutor] 的 fullRegistry 参数与全量表对照判定）。
      * executorFactory 注入（测试替身）优先级不变，忽略 [reg]。
      */
-    private fun toolExecutor(reg: ToolRegistry, turn: TurnJournal.Turn? = null, step: Int = 0): ToolExecutor =
+    private fun toolExecutor(
+        reg: ToolRegistry,
+        turn: TurnJournal.Turn? = null,
+        step: Int = 0,
+        /**
+         * A-2：回合截止时刻（单调毫秒）。非 null 时每次调用前折算成「还剩多少」注入执行器；
+         * 用函数形式注入，是因为串行批次里每次调用都必须看到**当时**的剩余，而不是批快照。
+         */
+        turnDeadlineMs: Long? = null
+    ): ToolExecutor =
         executorFactory?.invoke() ?: RegistryToolExecutor(
             reg,
             failureGuard,
@@ -1223,7 +1244,14 @@ class RealAgentLoop(
             // R1：把「越过执行边界」的记账点交给执行器——放在审批之后，见 beforeEffect 注释
             beforeEffect = { call -> turn?.toolDispatched(step, call.id) ?: true },
             // fullRegistry：让执行器区分「工具不存在」与「存在但分组未启用」
-            fullRegistry = registry
+            fullRegistry = registry,
+            // A-2：回合剩余额度（现算；<= 0 时执行器拒绝进入执行）
+            turnRemainingMs = turnDeadlineMs?.let { deadline ->
+                // 显式标注返回类型：lambda 字面量在嵌套泛型里容易推成 `() -> Long`，
+                // 与形参 `() -> Long?` 虽兼容，但保持标注可读性更好，也不依赖协变规则。
+                val remaining: () -> Long? = { (deadline - Monotonic.nowMs()).coerceAtLeast(0L) }
+                remaining
+            }
         )
 
     /**
