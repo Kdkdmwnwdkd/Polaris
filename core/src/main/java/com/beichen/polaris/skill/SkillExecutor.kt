@@ -69,24 +69,44 @@ private const val OUTER_GRACE_MS = 5_000L
  */
 private const val INSTRUCTION_CHECK_INTERVAL = 10_000
 
-/** 脚本一律禁止触碰的 Java 包名前缀：JDK（反射/IO/网络）、Rhino 自身、宿主 App 内部类。 */
-private val BLOCKED_CLASS_PREFIXES = arrayOf(
-    "java.",
-    "javax.",
-    "jdk.",
-    "sun.",
-    "org.mozilla.javascript.",
-    "com.beichen.polaris."
-)
+/*
+ * ── 沙箱边界：白名单为空 ────────────────────────────────────────────────
+ *
+ * 修前这里是一份 6 条前缀的黑名单（`java.` / `javax.` / `jdk.` / `sun.` /
+ * `org.mozilla.javascript.` / `com.beichen.polaris.`），注释写着「任何宿主类名都不放行」——
+ * 那句话与代码不符，而且差得很远：
+ *
+ *   1. 黑名单只覆盖**列出来的**包。`Packages.<任何未列出的包>.<类>.<静态方法>()` 照样能执行。
+ *      用同版本 Rhino 复现过：`Packages.evilpkg.Secret.sideEffect('x')` 执行成功、
+ *      静态字段可读写、返回的对象引用可以继续持有并调方法。
+ *   2. Android 上泄漏面就在漏掉的包里：`android.*`（如
+ *      `android.app.ActivityThread.currentApplication()`）不在名单里，
+ *      而它正是「从脚本拿到 Context」的现成入口。
+ *   3. Rhino 还有 `Packages` / `java` 这类**全局对象**，黑名单连名字都没管——
+ *      它们是 `initStandardObjects()` 装进来的，不是 ClassShutter 能拦住的。
+ *
+ * 所以边界改成两道，且都是「默认拒绝」：
+ *   - [org.mozilla.javascript.ClassShutter] 恒返回 false：脚本访问**任何** Java 类都被拒；
+ *   - `initSafeStandardObjects()`：全局对象里根本没有 `Packages` / `java` /
+ *     `getClass` / `JavaAdapter` / `loadClass`（实测 `typeof Packages === "undefined"`）。
+ *
+ * 这两条合起来才是「脚本唯一能碰到的宿主能力 = 注入的 agent 桥」，
+ * 而桥自身还有 manifest 工具白名单 + 全局能力门。
+ *
+ * 代价：脚本不能再用任何 Java 类（本来也不该用）。注入的 bindings 仍是纯 JS 值
+ * （`input` 是字符串、`agent` 是 [buildAgentObject] 手搭的对象），不受影响。
+ */
 
 /**
  * 基于 Mozilla Rhino 的 JS 引擎：纯 Java 实现，无需 NDK/原生库，可直接在 Android ART 上运行。
  * 选用它而非 QuickJS，是因为本工程可在无原生编译链的环境直接落地脚本能力；
  * 后续若需更小更快，可新增 QuickJsEngine 实现本接口、在 [SkillExecutor] 处替换即可。
  *
- * 沙箱加固（L11）：
- *  1. ClassShutter 屏蔽上表中的包：脚本拿不到 Packages.java.net.Socket / Class.forName / 宿主内部类，
+ * 沙箱加固（L11，2026-11 收口）：
+ *  1. **默认拒绝**：ClassShutter 恒 false（任何 Java 类都不可见）+ `initSafeStandardObjects()`
+ *     （全局里没有 `Packages` / `java` / `getClass`）。脚本拿不到网络、反射、文件、Context，
  *     唯一出口是注入的 agent 桥（其工具调用受 manifest 白名单 + L5 全局能力门双重约束）。
+ *     修前是 6 条前缀的黑名单，漏 `android.*` 等未列包，可执行任意宿主静态方法（已复现）。
  *  2. optimizationLevel = -1（解释执行）——这不是性能取舍，是**中断能力的前提**：
  *     只有解释执行才会按指令数回调 [DeadlineContext.observeInstructionCount]。
  *  3. 指令数看门狗：见 [DeadlineContext]。
@@ -146,11 +166,15 @@ class RhinoJsEngine : JsEngine {
                     cx.languageVersion = org.mozilla.javascript.Context.VERSION_ES6
                     cx.optimizationLevel = -1
                     // 脚本唯一能碰到的宿主对象是 [buildAgentObject] 现搭的纯 JS 对象，
-                    // 不再是 Java 反射封装——所以这里可以一刀切：任何宿主类名都不放行。
-                    cx.setClassShutter(ClassShutter { className ->
-                        !BLOCKED_CLASS_PREFIXES.any { p -> className.startsWith(p) }
-                    })
-                    val scope = cx.initStandardObjects()
+                    // 不再是 Java 反射封装——所以这里可以一刀切：**任何**宿主类名都不放行。
+                    // 白名单式黑名单（只列 6 个前缀）漏掉了 `android.*` 等未列包，
+                    // `Packages.android.app.ActivityThread...` 就能穿过去，见文件头的复现说明。
+                    cx.setClassShutter(ClassShutter { false })
+                    // initStandardObjects 会把 `Packages` / `java` / `getClass` 装进全局：
+                    // 那几条路径不经过 ClassShutter，黑名单再全也拦不住。
+                    // 安全版标准对象不装这些（实测 typeof Packages === "undefined"），
+                    // 标准 JS 内建（Object/Array/JSON/Math/Date/RegExp/Error…）一应俱全。
+                    val scope = cx.initSafeStandardObjects()
                     // 桥接对象必须**逐方法**转成 JS 函数，不能交给 Context.javaToJS：
                     // 它走 Rhino 的 JavaMembers 反射封装，而 JavaMembers 类里引用了
                     // `javax.lang.model.SourceVersion`——那是 JDK 编译器 API，Android 没有。
