@@ -404,6 +404,10 @@ private fun testFileAttachment() {
         assertContains("N1", vm, "data class Images(val name: String, val pages: Int)")
         assertContains("N1", vm, "data class Failed(val reason: String)")
     }
+    // F23–F27：附件的 URI→对象 逻辑已抽到 ui/AttachmentIo.kt（架构守卫的行数冻结所迫），
+    // 结构断言跟着搬到新文件读，否则守的是「代码在哪个文件」而不是「行为在不在」。
+    val attachment = readSource("ui/AttachmentIo.kt")
+
     check("N2 按类型分派：PDF 转图 / DOCX 抽文本 / 文本类直读 / 其它明确拒绝") {
         assertContains("N2", vm, "ext == \"pdf\" -> {")
         assertContains("N2", vm, "ext == \"docx\" -> {")
@@ -412,14 +416,14 @@ private fun testFileAttachment() {
     }
     check("N3 PDF 渲染：前 N 页上限 + 铺白底（透明页不铺白会成黑图）") {
         assertContains("N3", vm, "const val MAX_PDF_PAGES = 5")
-        assertContains("N3", vm, "PdfRenderer(parcel)")
-        assertContains("N3", vm, "bmp.eraseColor(0xFFFFFFFF.toInt())")
+        assertContains("N3", attachment, "PdfRenderer(parcel)")
+        assertContains("N3", attachment, "bmp.eraseColor(0xFFFFFFFF.toInt())")
     }
     check("N4 DOCX 解包抽 <w:t> 文本 + 段落换行 + 实体解码（纯系统 zip，零依赖）") {
-        assertContains("N4", vm, "word/document.xml")
-        assertContains("N4", vm, "Regex(\"<w:t[^>]*>(.*?)</w:t>\"")
-        assertContains("N4", vm, "replace(\"</w:p>\", \"\\n\")")
-        assertContains("N4", vm, "decodeXmlEntities")
+        assertContains("N4", attachment, "word/document.xml")
+        assertContains("N4", attachment, "Regex(\"<w:t[^>]*>(.*?)</w:t>\"")
+        assertContains("N4", attachment, "replace(\"</w:p>\", \"\\n\")")
+        assertContains("N4", attachment, "decodeXmlEntities")
     }
     check("N5 发送时文件正文以「[附件：文件名]」块拼进消息（模型能引用来源）") {
         assertContains("N5", vm, "val fileBlock = files.joinToString")
@@ -1611,7 +1615,9 @@ private fun testSseFallback() {
         assertContains("AD1", llm, "data class PlainBody(val raw: String) : SseReadOutcome")
         assertContains("AD1", llm, "var sawData = false")
         assertContains("AD1", llm, "val rawFallback = StringBuilder()")
-        assertContains("AD1", llm, "return@use if (sawData) SseReadOutcome.Sse else SseReadOutcome.PlainBody(rawFallback.toString())")
+        // F22：网络段改 runCancellable 后 lambda 不再用 return@use，降级判定改成尾表达式，
+        // 行为不变（sawData 决定 Sse / PlainBody），断言只跟写法走。
+        assertContains("AD1", llm, "if (sawData) SseReadOutcome.Sse else SseReadOutcome.PlainBody(rawFallback.toString())")
         assertContains("AD1", llm, "private val PLAIN_BODY_MAX = 2 * 1024 * 1024")
     }
     check("AD2 streamChat/streamText：PlainBody 降级成一次性输出 + Completed(整条)") {
