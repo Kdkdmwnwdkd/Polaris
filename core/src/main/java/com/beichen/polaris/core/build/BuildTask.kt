@@ -59,6 +59,14 @@ data class BuildTask(
     val commitSha: String? = null,
     /** CI run number——App 内「构建 #N」与 GitHub run number 一一对应。 */
     val runNumber: Long? = null,
+    /**
+     * run 的数值主键（`GET /actions/runs/{id}` 用的那个 id）。
+     *
+     * 与 [runNumber] 不是一回事：`run_number` 是仓库内自增序号，只出现在 list 响应里；
+     * 进程被系统杀掉后重进，只有这个 id 能直接续查那一轮 run 的真实状态。
+     * 没有它就只能按 sha 去 list 里翻，翻不到（run 已过期、超出首页）就彻底断了线索。
+     */
+    val runId: Long? = null,
     /** 下载进度 0..1（仅 DOWNLOADING 阶段非空）。 */
     val downloadProgress: Float? = null,
     /** 落盘 APK 路径（SUCCEEDED 时非空）。 */

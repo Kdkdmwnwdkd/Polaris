@@ -98,8 +98,9 @@ fun BuildScreen() {
     // 构建跑在 BuildEngine 自己的作用域里，页面只读结果：
     // 1.2s 轮询 builds.json，既能看进度，也能接上「离开一会儿再回来」的构建。
     LaunchedEffect(Unit) {
-        // 进程重启后把上次中断的任务收成「已停止跟踪」，避免永远挂着「构建中」
-        BuildEngine.reconcileStale(context)
+        // 进程被杀过：能续的 run 续上（CI 可能已跑完），不能续的标停。
+        // 放在轮询前，避免用户先看到一秒「构建中」再跳成「已停止」。
+        BuildEngine.resumeInterrupted(context)
         while (true) {
             // 读盘放 IO：builds.json 几十 KB，但每 1.2s 在主线程解析一次没有道理
             val list = withContext(Dispatchers.IO) { BuildStore.list(context) }
@@ -198,6 +199,25 @@ fun BuildScreen() {
                     enabled = !running,
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                // 「停止」只停本地跟踪：云端 run 会继续跑完。
+                // 不给按钮的话，用户唯一的「取消」就是杀进程——那会把历史留成
+                // 一条永远不动的「构建中」，正是这次要消灭的状态。
+                if (running) {
+                    Spacer(Modifier.height(AgentSpacing.space2))
+                    AkOutlinedButton(
+                        text = "停止跟踪",
+                        onClick = {
+                            BuildEngine.stop(context)
+                            Toast.makeText(
+                                context,
+                                "已停止跟踪；CI 可能仍在 GitHub 上跑完",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
 
                 val cur = current
                 if (cur != null) {
