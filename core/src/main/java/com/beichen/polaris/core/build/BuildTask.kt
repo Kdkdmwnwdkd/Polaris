@@ -32,7 +32,15 @@ enum class BuildStage {
     SUCCEEDED,
 
     /** 任一阶段失败，[BuildTask.error] 是可读原因。 */
-    FAILED
+    FAILED,
+
+    /**
+     * 本地停止跟踪（页面关闭 / 用户停止）。
+     *
+     * 与 [FAILED] 分开：CI 可能仍在 GitHub 上跑，写「失败」会让人以为云端挂了；
+     * 停在 [BUILDING] 又会让人以为还在盯着。这两种误导都会导致「到底要不要去 GitHub 看一眼」判断错。
+     */
+    CANCELLED
 }
 
 /** 构建任务记录（持久化）。 */
@@ -56,7 +64,9 @@ data class BuildTask(
     val updatedAt: Long
 ) {
     val isTerminal: Boolean
-        get() = stage == BuildStage.SUCCEEDED || stage == BuildStage.FAILED
+        get() = stage == BuildStage.SUCCEEDED ||
+            stage == BuildStage.FAILED ||
+            stage == BuildStage.CANCELLED
 }
 
 /** 构建任务持久化（filesDir/builds/builds.json，新的在前，最多保留 50 条）。 */

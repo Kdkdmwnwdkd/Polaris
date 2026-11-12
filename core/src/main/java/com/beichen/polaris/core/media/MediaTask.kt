@@ -1,9 +1,13 @@
 package com.beichen.polaris.core.media
 
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.llm.runCancellable
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -13,6 +17,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -187,16 +192,21 @@ object MediaDownloader {
         val dir = MediaTaskStore.outputsDir(context, taskId).apply { mkdirs() }
         val paths = mutableListOf<String>()
         urls.forEachIndexed { i, url ->
-            runCatching { fetch(dir, i, url, kind) }
-                .onSuccess { paths += it }
-                .onFailure { e ->
-                    AgentLogger.e("MediaDownloader", "下载失败 $url：${e.message}")
-                }
+            try {
+                paths += fetch(dir, i, url, kind)
+            } catch (c: CancellationException) {
+                // 取消不是「这一张下载失败」：必须上抛。
+                // 旧写法 `runCatching {}` 会把 CancellationException 收成单张失败并继续下一张，
+                // 结果用户点了停止、任务状态机已收尾，后台仍在把 4 张图下完。
+                throw c
+            } catch (e: Throwable) {
+                AgentLogger.e("MediaDownloader", "下载失败 $url：${e.message}")
+            }
         }
         paths
     }
 
-    private fun fetch(dir: File, index: Int, url: String, kind: MediaKind): String {
+    private suspend fun fetch(dir: File, index: Int, url: String, kind: MediaKind): String {
         val fallbackExt = if (kind == MediaKind.TEXT_TO_VIDEO) "mp4" else "png"
         val out = File(dir, "%03d.%s".format(index, extOf(url, fallbackExt)))
         if (url.startsWith("data:")) {
@@ -213,22 +223,47 @@ object MediaDownloader {
             if (!meta.contains(";base64")) {
                 // 非 base64 的 data URI 按文本内容处理（罕见），仍可落盘
             }
+            // base64 解码是纯 CPU 段，插不进取消信号；落盘前主动让一次
+            currentCoroutineContext().ensureActive()
             out.writeBytes(bytes)
             return out.absolutePath
         }
         val request = Request.Builder().url(url).get().build()
-        http.newCall(request).execute().use { resp ->
+        return http.runCancellable(request) { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
             val body = resp.body ?: throw IOException("空响应体")
-            out.outputStream().use { body.byteStream().copyTo(it) }
+            try {
+                copyCancellable(body.byteStream(), out)
+            } catch (t: Throwable) {
+                // 半张图 / 半个视频不留在 outputs 目录：取消后它既不会被引用，也没人清理
+                out.delete()
+                throw t
+            }
             val ct = body.contentType()?.subtype
-            if (ct != null && out.extension != ct) {
+            val named = if (ct != null && out.extension != ct) {
                 // Content-Type 与 URL 推测不一致时以 Content-Type 为准（如 ?x=1 丢弃后缀）
-                val renamed = File(dir, "%03d.%s".format(index, ct.substringBefore('+')))
-                if (out.renameTo(renamed)) return renamed.absolutePath
+                File(dir, "%03d.%s".format(index, ct.substringBefore('+')))
+            } else out
+            if (named == out || !out.renameTo(named)) out.absolutePath else named.absolutePath
+        }
+    }
+
+    /**
+     * 分块拷贝 + 每块前检查协程取消。
+     *
+     * 不用 `copyTo`：它是一次读到底的阻塞循环，取消信号只能在整份数据读完后才生效，
+     * 对几百 MB 的视频等于「没有取消」。
+     */
+    private suspend fun copyCancellable(input: InputStream, out: File) {
+        out.outputStream().use { os ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val n = input.read(buf)
+                if (n < 0) break
+                os.write(buf, 0, n)
             }
         }
-        return out.absolutePath
     }
 
     private fun extOf(url: String, fallback: String): String {

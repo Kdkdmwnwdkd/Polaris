@@ -198,6 +198,7 @@ fun BuildScreen() {
                         style = MaterialTheme.typography.bodyMedium,
                         color = when (cur.stage) {
                             BuildStage.FAILED -> MaterialTheme.colorScheme.error
+                            BuildStage.CANCELLED -> MaterialTheme.colorScheme.onSurfaceVariant
                             BuildStage.SUCCEEDED -> MaterialTheme.colorScheme.primary
                             else -> MaterialTheme.colorScheme.onSurface
                         }
@@ -308,6 +309,7 @@ private fun stageText(task: BuildTask): String = when (task.stage) {
 
     BuildStage.SUCCEEDED -> "构建成功"
     BuildStage.FAILED -> "构建失败：${task.error ?: "未知原因"}"
+    BuildStage.CANCELLED -> "已停止跟踪：${task.error ?: "CI 可能仍在运行"}"
 }
 
 private fun buildHeadline(task: BuildTask): String {
@@ -316,6 +318,7 @@ private fun buildHeadline(task: BuildTask): String {
     val status = when (task.stage) {
         BuildStage.SUCCEEDED -> "成功"
         BuildStage.FAILED -> "失败"
+        BuildStage.CANCELLED -> "已停止"
         else -> "进行中"
     }
     return "$head · $status"
@@ -325,7 +328,9 @@ private fun detailLine(task: BuildTask): String {
     val time = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(task.createdAt))
     val sha = task.commitSha?.take(8) ?: "?"
     val size = task.sizeBytes?.let { " · ${formatBytes(it)}" } ?: ""
-    val err = if (task.stage == BuildStage.FAILED) " · ${task.error}" else ""
+    val err = if (task.stage == BuildStage.FAILED || task.stage == BuildStage.CANCELLED) {
+        " · ${task.error}"
+    } else ""
     return "$time · $sha$size$err"
 }
 

@@ -4,12 +4,16 @@ import com.beichen.polaris.core.llm.LlmHttp
 import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.llm.arrOrNull
 import com.beichen.polaris.core.llm.objOrNull
+import com.beichen.polaris.core.llm.runCancellable
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.net.BoundedBody
 import com.beichen.polaris.core.net.BodySlice
 import com.beichen.polaris.core.workspace.WorkspaceStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -59,18 +63,28 @@ class GitHubBuildService(
 
     /** 测连通：GET /user（首次配置的引导步骤）。成功返回登录名。 */
     suspend fun testConnection(): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             val root = get("/user")
-            root["login"]?.primOrNull()?.contentOrNull ?: "ok"
+            Result.success(root["login"]?.primOrNull()?.contentOrNull ?: "ok")
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            Result.failure<String>(e)
         }
     }
 
     /** 远端 main 当前 commit sha。 */
     suspend fun headSha(): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             val root = get("/repos/${cfg.fullName}/git/ref/heads/main")
-            root["object"]?.objOrNull()?.get("sha")?.primOrNull()?.contentOrNull
-                ?: error("响应缺 object.sha")
+            Result.success(
+                root["object"]?.objOrNull()?.get("sha")?.primOrNull()?.contentOrNull
+                    ?: error("响应缺 object.sha")
+            )
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            Result.failure<String>(e)
         }
     }
 
@@ -82,13 +96,13 @@ class GitHubBuildService(
      * 不建空 commit，直接返回当前 HEAD。
      */
     suspend fun pushWorkspace(context: Context): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             // W-27：递归收集（保留子目录结构），与编辑器看到的文件树一致
             val wsRoot = WorkspaceStore.dir(context)
             val files = WorkspaceStore.listTree(context).filter { !it.isDir }
             if (files.isEmpty()) {
                 AgentLogger.d(TAG, "工作区为空，跳过 commit，直接用 HEAD")
-                return@runCatching headSha().getOrThrow()
+                return@withContext Result.success(headSha().getOrThrow())
             }
             val head = headSha().getOrThrow()
             val commitObj = get("/repos/${cfg.fullName}/git/commits/$head")
@@ -135,36 +149,54 @@ class GitHubBuildService(
             val sha = commit["sha"]?.primOrNull()?.contentOrNull ?: error("commit 缺 sha")
             patch("/repos/${cfg.fullName}/git/refs/heads/main", buildJsonObject { put("sha", sha) })
             AgentLogger.d(TAG, "已推送 commit ${sha.take(8)}（${entries.size} 个工作区文件）")
-            sha
+            Result.success(sha)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            Result.failure<String>(e)
         }
     }
 
     /** ② 触发 workflow_dispatch（build.yml 已声明该触发器）。 */
     suspend fun dispatch(): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             post(
                 "/repos/${cfg.fullName}/actions/workflows/${cfg.workflow}/dispatches",
                 buildJsonObject { put("ref", "main") }
             )
-            Unit
+            Result.success(Unit)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            Result.failure<Unit>(e)
         }
     }
 
     /** ③ 找本次 commit 对应的 run（workflow_dispatch 事件，取最新匹配）。 */
     suspend fun findRun(commitSha: String): Result<RunInfo?> = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             val runs = get("/repos/${cfg.fullName}/actions/runs?event=workflow_dispatch&per_page=10")
             val arr = runs["workflow_runs"]?.arrOrNull() ?: error("响应缺 workflow_runs")
             val run = arr.firstOrNull {
                 it.objOrNull()?.get("head_sha")?.primOrNull()?.contentOrNull == commitSha
             }?.objOrNull()
-            run?.let { parseRun(it) }
+            Result.success(run?.let { parseRun(it) })
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            Result.failure<RunInfo?>(e)
         }
     }
 
     /** ③ 轮询 run 状态。 */
     suspend fun runStatus(runId: Long): Result<RunInfo> = withContext(Dispatchers.IO) {
-        runCatching { parseRun(get("/repos/${cfg.fullName}/actions/runs/$runId")) }
+        try {
+            Result.success(parseRun(get("/repos/${cfg.fullName}/actions/runs/$runId")))
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            Result.failure<RunInfo>(e)
+        }
     }
 
     /**
@@ -178,7 +210,7 @@ class GitHubBuildService(
         into: File,
         onProgress: (Float) -> Unit
     ): Result<File> = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             val rel = get("/repos/${cfg.fullName}/releases/tags/latest")
             val assets = rel["assets"]?.arrOrNull() ?: error("release 缺 assets")
             val asset = assets.firstOrNull {
@@ -191,7 +223,11 @@ class GitHubBuildService(
             val url = asset["url"]?.primOrNull()?.contentOrNull ?: error("资产缺 url")
             val size = asset["size"]?.primOrNull()?.long ?: 0L
             downloadTo(url, into, size, onProgress)
-            into
+            Result.success(into)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            Result.failure<File>(e)
         }
     }
 
@@ -200,7 +236,7 @@ class GitHubBuildService(
      * GitHub 对大文件走 CDN 重定向，OkHttp 自动跟随；断流由上层重试策略兜。
      */
     suspend fun downloadArtifact(runId: Long, into: File): Result<File> = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             val artsRoot = get("/repos/${cfg.fullName}/actions/runs/$runId/artifacts")
             val arts = artsRoot["artifacts"]?.arrOrNull() ?: error("run 缺 artifacts")
             val art = arts.firstOrNull {
@@ -216,13 +252,17 @@ class GitHubBuildService(
                     if (entry.name.endsWith(".apk")) {
                         into.outputStream().use { out -> zis.copyTo(out) }
                         zipFile.delete()
-                        return@runCatching into
+                        return@withContext Result.success(into)
                     }
                     entry = zis.nextEntry
                 }
             }
             zipFile.delete()
-            error("artifact zip 内无 APK")
+            Result.failure(java.io.IOException("artifact zip 内无 APK"))
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            Result.failure<File>(e)
         }
     }
 
@@ -240,7 +280,14 @@ class GitHubBuildService(
         return md.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun downloadTo(url: String, into: File, totalBytes: Long, onProgress: (Float) -> Unit) {
+    /**
+     * 直下到文件（重定向由 OkHttp 跟随）。
+     *
+     * 与 [exec] 同样是**可取消**的：APK 有几十 MB，旧写法 `execute()` 在取消后仍会把整包拉完，
+     * 而调用方（[BuildEngine]）此时已经把任务收尾了——下载继续，结果没人接。
+     * 取消时删掉半包：一个截断的 APK 比没有更糟（安装器会报解析失败）。
+     */
+    private suspend fun downloadTo(url: String, into: File, totalBytes: Long, onProgress: (Float) -> Unit) {
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/octet-stream")
@@ -248,28 +295,35 @@ class GitHubBuildService(
             .get()
             .build()
         into.parentFile?.mkdirs()
-        http.newCall(request).execute().use { resp ->
-            if (!resp.isSuccessful) throw java.io.IOException("HTTP ${resp.code}")
-            val body = resp.body ?: throw java.io.IOException("空响应体")
-            val total = if (totalBytes > 0) totalBytes else body.contentLength()
-            var read = 0L
-            val sink = into.sink().buffer()
-            val source = body.source()
-            val buf = okio.Buffer()
-            sink.use { s ->
-                while (true) {
-                    val n = source.read(buf, 64 * 1024)
-                    if (n == -1L) break
-                    read += n
-                    s.write(buf, n)
-                    if (total > 0) onProgress((read.toFloat() / total).coerceIn(0f, 1f))
+        try {
+            http.runCancellable(request) { resp ->
+                if (!resp.isSuccessful) throw java.io.IOException("HTTP ${resp.code}")
+                val body = resp.body ?: throw java.io.IOException("空响应体")
+                val total = if (totalBytes > 0) totalBytes else body.contentLength()
+                var read = 0L
+                val sink = into.sink().buffer()
+                val source = body.source()
+                val buf = okio.Buffer()
+                sink.use { s ->
+                    while (true) {
+                        // 每 64KB 检查一次取消：一次握手成功后，取消信号只能从这里生效
+                        currentCoroutineContext().ensureActive()
+                        val n = source.read(buf, 64 * 1024)
+                        if (n == -1L) break
+                        read += n
+                        s.write(buf, n)
+                        if (total > 0) onProgress((read.toFloat() / total).coerceIn(0f, 1f))
+                    }
+                    s.flush()
                 }
-                s.flush()
             }
+        } catch (c: CancellationException) {
+            into.delete()
+            throw c
         }
     }
 
-    private fun get(path: String): JsonObject {
+    private suspend fun get(path: String): JsonObject {
         val request = Request.Builder()
             .url("$API$path")
             .header("Authorization", "Bearer ${cfg.pat}")
@@ -279,7 +333,7 @@ class GitHubBuildService(
         return exec(request)
     }
 
-    private fun post(path: String, body: JsonObject): JsonObject {
+    private suspend fun post(path: String, body: JsonObject): JsonObject {
         val request = Request.Builder()
             .url("$API$path")
             .header("Authorization", "Bearer ${cfg.pat}")
@@ -292,7 +346,7 @@ class GitHubBuildService(
         return exec(request)
     }
 
-    private fun patch(path: String, body: JsonObject): JsonObject {
+    private suspend fun patch(path: String, body: JsonObject): JsonObject {
         val request = Request.Builder()
             .url("$API$path")
             .header("Authorization", "Bearer ${cfg.pat}")
@@ -305,8 +359,15 @@ class GitHubBuildService(
         return exec(request)
     }
 
-    private fun exec(request: Request): JsonObject {
-        http.newCall(request).execute().use { resp ->
+    /**
+     * 统一出口：所有 GitHub REST 调用都从这里走（PAT 只在头里）。
+     *
+     * 用 [runCancellable] 而不是裸 `execute()`：`LlmHttp.llm` 的 `callTimeout = 0`，
+     * 一次握手成功后只要对端不主动断，请求可以挂很久；协程取消必须真的 cancel 掉 call，
+     * 否则「点停止 / 退页面」只是没人接结果，连接还占着。
+     */
+    private suspend fun exec(request: Request): JsonObject =
+        http.runCancellable(request) { resp ->
             // 审计 F41：同 F40。这里解析的是 commit / tree 对象，正常只有几十 KB。
             val slice = resp.body?.byteStream()
                 ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
@@ -318,10 +379,9 @@ class GitHubBuildService(
             if (slice.truncated) {
                 throw java.io.IOException("GitHub 响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB")
             }
-            if (text.isBlank()) return JsonObject(emptyMap()) // 204（dispatch 成功）
-            return json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
+            if (text.isBlank()) JsonObject(emptyMap()) // 204（dispatch 成功）
+            else json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
         }
-    }
 
     private fun parseRun(o: JsonObject): RunInfo = RunInfo(
         id = o["id"]?.primOrNull()?.long ?: error("run 缺 id"),

@@ -7,6 +7,7 @@ import com.beichen.polaris.core.media.providers.DashScopeMediaProvider
 import com.beichen.polaris.core.media.providers.MiniMaxMediaProvider
 import com.beichen.polaris.core.media.providers.OpenAIMediaProvider
 import com.beichen.polaris.core.media.providers.VolcMediaProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -64,6 +65,8 @@ object MediaRegistry {
         )
         MediaTaskStore.upsert(context, task)
         val handle = runCatching { provider.submit(request) }.getOrElse { e ->
+            // 取消不是「提交失败」：吞掉会写出一个 FAILED 任务，用户看到的是「提交失败：Canceled」
+            if (e is CancellationException) throw e
             AgentLogger.e(TAG, "submit 失败（$providerId）：${e.message}")
             return@withContext fail(context, providerId, request, e.message ?: "提交失败")
         }
@@ -97,6 +100,9 @@ object MediaRegistry {
             ).also { MediaTaskStore.upsert(context, it) }
         runCatching { provider.poll(taskId) }
             .onFailure { e ->
+                // 取消不是「这次轮询失败」：否则任务停在 RUNNING，下一轮接着查，
+                // 页面已经关了却还在后台轮询。
+                if (e is CancellationException) throw e
                 // 轮询失败（网络抖动）不立刻判死刑：保持 RUNNING，下次再试；
                 // 只有 Provider 明确返回 Failed 才终态化。
                 AgentLogger.e(TAG, "poll 失败（${task.id}）：${e.message}")
