@@ -149,9 +149,14 @@ android {
     }
 
     buildTypes {
+        /**
+         * 本地调试包：**不作为发布物**，只给「装到自己手机上边用边查」。
+         *
+         * 签名仍优先挂发布证书——同签名才能覆盖升级线上包，否则本地包装上去
+         * 会与已装版本签名冲突、必须先卸载（权限全丢）。这跟「能不能发出去」是两件事：
+         * 后者由 CI 只发 release 变体来保证。
+         */
         getByName("debug") {
-            // 本项目只产出 debug 变体，所以「发布签名」就挂在它上面：
-            // 同一签名是覆盖升级的唯一前提，变体名与是否发布无关。
             signingConfig = if (hasReleaseKey) {
                 signingConfigs.getByName("polaris")
             } else {
@@ -160,7 +165,39 @@ android {
                 signingConfigs.getByName("debug")
             }
         }
-        // 不要动 release（本项目不产出 release 包）
+
+        /**
+         * 发布变体：`debuggable=false`。
+         *
+         * ## 为什么必须单独有它
+         * 修前本项目**只有 debug 变体**，CI 直接把它发 Release。于是每个用户手上的包都是
+         * `android:debuggable="true"`，后果不是「有点不优雅」：
+         *  1. 同机任意应用可以 `run-as com.beichen.polaris` 进私有目录——包括**明文存的
+         *     API Key**（ConfigStore 用 SharedPreferences 存 key）；
+         *  2. 调试器可以附加，本地推理期间能读进程内存里的密钥；
+         *  3. 构建产物不裁剪、不优化，体积更大。
+         * 这些都是「装上去完全正常、只在安全边界上塌陷」的问题，靠使用发现问题永远发现不了。
+         *
+         * ## 为什么不用 applicationIdSuffix 隔离 debug
+         * 那会把本地包变成另一个应用（`com.beichen.polaris.debug`）：既有数据、已授权限、
+         * 真机验证流程全部要重来一遍。改「发哪个变体」比改「包是谁」代价小得多。
+         */
+        getByName("release") {
+            isDebuggable = false
+            // 不裁剪：R8 会动反射与序列化（kotlinx.serialization 依赖
+            // `@Serializable` 生成的 serializer，keep 规则不全会变成运行期
+            // ClassNotFoundException）。先把「发布包可被调试」这个确定的风险关掉，
+            // 混淆/裁剪另行单独评估——收益小、回归面大。
+            isMinifyEnabled = false
+            signingConfig = if (hasReleaseKey) {
+                signingConfigs.getByName("polaris")
+            } else {
+                // 本地没有发布证书时仍能出 release 包用于验证构建链路（签名是 debug 证书，
+                // 只在本机装得上）。CI 上 POLARIS_REQUIRE_RELEASE_KEY=1 会在更早的地方
+                // 直接失败，不会走到这个分支。
+                signingConfigs.getByName("debug")
+            }
+        }
     }
 
     // 仅本地/模拟器调试：`-Px86Rootfs=true` 时额外打进 x86_64 的 Alpine rootfs。

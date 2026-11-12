@@ -1,4 +1,4 @@
-name: Build Debug APK
+name: Build Release APK
 
 on:
   push:
@@ -237,8 +237,19 @@ jobs:
           keytool -list -v -keystore "$KS" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" \
             | grep -E "SHA256:|Valid from" || true
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+      - name: Build release APK
+        # 一次 Gradle 调用里同时做两件事：
+        #  1. assembleRelease —— 发布物（debuggable=false，见 app/build.gradle.kts）；
+        #  2. compileDebugKotlin —— 仅**编译** debug 变体，不打包。
+        #
+        # 为什么还要 debug 的 class：四十多个 QA harness 拿
+        # app/build/tmp/kotlin-classes/debug 当 classpath（qa_classpath 优先 debug）。
+        # 只出 release 包时它们会整片 SKIP——gate 不报红，但验证面凭空消失，
+        # 这比报红更危险。debug 只编到 Kotlin 字节码，不触发 native / dex / 资源打包，
+        # 增量约一分钟；release 的 llama.cpp 编译才是大头，两者互不复用但只多这一份开销。
+        run: |
+          ./gradlew assembleRelease :app:compileDebugKotlin :core:compileDebugKotlin \
+            --no-daemon --stacktrace
 
       # 指纹与包名守卫：构建出来的包必须由**这一把**钥匙签、必须叫**这一个**包名。
       #
@@ -249,7 +260,7 @@ jobs:
       - name: Verify APK identity (包名 + 签名指纹)
         run: |
           set -euo pipefail
-          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -1)
           if [ -z "${BT:-}" ]; then
             echo "::error::找不到 build-tools，无法验签"
@@ -275,6 +286,22 @@ jobs:
               || { echo "::error::包名不是 com.beichen.polaris，老用户无法覆盖升级"; exit 1; }
           else
             echo "::warning::aapt2 dump badging 无输出，跳过包名校验"
+          fi
+
+          # A-6：发布包绝不能是 debuggable —— 那等于把「同机任意应用可 run-as 读私有目录」
+          # 免费送给所有用户，而私有目录里有**明文存的 API Key**。
+          #
+          # 为什么现在才需要这条：修前 CI 直接发 `assembleDebug` 的产物，所以每个用户手上
+          # 都是 debuggable=true 的包，而「装得上、跑得动」不会暴露任何异常。
+          # 判据用 xmltree 而非 badging：badging 对 application-debuggable 的输出
+          # 在不同 aapt2 版本间不一致，xmltree 是 manifest 原文展开，判据唯一。
+          DEBUGGABLE=$("$BT/aapt2" dump xmltree "$APK" --file AndroidManifest.xml 2>/dev/null \
+                       | grep -c "android:debuggable" || true)
+          echo "debuggable: ${DEBUGGABLE:-0}（必须为 0）"
+          if [ "${DEBUGGABLE:-0}" != "0" ]; then
+            echo "::error::发布包 debuggable=true，拒绝发布（run-as 可读走明文 API Key）"
+            echo "::error::多半是构建了 debug 变体：CI 必须用 ./gradlew assembleRelease"
+            exit 1
           fi
 
       # CI runner 没有预装 kotlinc 发行版，但 Gradle 已经下过 kotlin-compiler-embeddable。
@@ -364,7 +391,7 @@ jobs:
         # 求值阶段取到空串，把运行时值抹掉，SKIP 逻辑就失效了。
         run: |
           set +e
-          bash scripts/qa/run-all.sh app/build/outputs/apk/debug/app-debug.apk 2>&1 | tee /tmp/qa.log
+          bash scripts/qa/run-all.sh app/build/outputs/apk/release/app-release.apk 2>&1 | tee /tmp/qa.log
           # tee 会吞掉左边的退出码，必须取 PIPESTATUS[0]，
           # 否则 run-all.sh 明明 FAIL=1，CI 看到的仍是 0。
           echo "runner exit=${PIPESTATUS[0]}" >> /tmp/qa.log
@@ -406,8 +433,8 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: app-release
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
       # 额外把 APK 发到 latest Release，便于用 ghproxy 等加速镜像直链下载。
@@ -422,7 +449,7 @@ jobs:
           TITLE="北辰 latest (run ${{ github.run_number }})"
           NOTES="commit ${{ github.sha }}"
           # 先保证 release 存在（tag 已存在时 create 会失败，忽略即可）。
-          gh release create "$TAG" app/build/outputs/apk/debug/*.apk \
+          gh release create "$TAG" app/build/outputs/apk/release/*.apk \
             --repo "${{ github.repository }}" \
             --title "$TITLE" \
             --notes "$NOTES" || true
@@ -431,8 +458,13 @@ jobs:
           # 为什么要显式 upload --clobber 而不是只靠 create：
           # tag 已存在时 create 直接失败，APK 根本没换——旧包会被当成新包发出去，
           # 用户装到的是上一版的代码，还以为是最新的。
-          gh release upload "$TAG" app/build/outputs/apk/debug/*.apk \
+          gh release upload "$TAG" app/build/outputs/apk/release/*.apk \
             --repo "${{ github.repository }}" --clobber
+          # 删掉历史遗留的 app-debug.apk：那个包 debuggable=true（同机应用可 run-as
+          # 读走私有目录里的明文 API Key）。`--clobber` 只覆盖**同名**资产，
+          # 旧名字会一直挂在 Release 上被旧链接和镜像继续分发——等于修复没生效。
+          gh release delete-asset "$TAG" app-debug.apk \
+            --repo "${{ github.repository }}" --yes || true
           # 最后把标题/说明也刷成当前这次的 run 号与 commit。
           #
           # 为什么要多这一步：原来只写「create || upload」，create 失败时走 upload 分支，

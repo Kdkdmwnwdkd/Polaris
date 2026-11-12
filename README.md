@@ -8,7 +8,7 @@ Android 本地 AI Agent —— Kotlin / Jetpack Compose，原创实现，四层�
 > 产品名**北辰**（Polaris）。工程内部沿用的 `AgentKit` 与包名 `com.beichen.polaris` 是历史代号，
 > 不出现在桌面、系统设置或 App 内任何位置，仅为兼容已装应用升级链而保留。
 
-> 规模：Kotlin 源码 **301 文件 / 75,202 行** ｜ 源码级 QA **95 个 Kotlin harness + 116 个 shell 校验** ｜ 版本号 = CI 构建号（`1.N`）
+> 规模：Kotlin 源码 **352 文件 / 84,778 行** ｜ 源码级 QA **101 个 Kotlin harness + 142 个 shell 校验** ｜ 版本号 = CI 构建号（`1.N`）
 >
 > 上面这两个数字会随提交漂移，别当契约看：`find app/src/main core/src/main -name '*.kt' | wc -l` 自己数一遍更快。
 >
@@ -78,5 +78,5 @@ bash scripts/qa/run-all.sh
 ## 仓库
 
 - 地址：`https://github.com/Kdkdmwnwdkd/Polaris`（分支 `main`）
-- APK 产物：Release tag `latest`（CI 自动维护 `app-debug.apk`）
-- 加速直链：`https://gh-proxy.com/https://github.com/Kdkdmwnwdkd/Polaris/releases/download/latest/app-debug.apk`
+- APK 产物：Release tag `latest`（CI 自动维护 `app-release.apk`，release 变体，`debuggable=false`）
+- 加速直链：`https://gh-proxy.com/https://github.com/Kdkdmwnwdkd/Polaris/releases/download/latest/app-release.apk`
