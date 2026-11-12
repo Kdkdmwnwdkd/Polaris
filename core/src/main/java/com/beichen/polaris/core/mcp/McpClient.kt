@@ -5,6 +5,7 @@ import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.llm.arrOrNull
 import com.beichen.polaris.core.llm.objOrNull
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.net.BoundedBody
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -37,7 +38,15 @@ class McpClient(
     private val baseUrl: String,
     private val http: OkHttpClient = defaultHttp()
 ) {
-    private var nextId = 1
+    /**
+     * JSON-RPC 请求 id（审计 F28）。
+     *
+     * 原来是 `private var nextId = 1` + `nextId++`：`rpc` 跑在 IO 线程池上，
+     * 并发两次 callTool（模型一回合可并行发多个工具）会读到同一个值，
+     * 两个请求拿到同一个 id——服务端回包就分不清是谁的，结果错配。
+     * 原子递增的代价可以忽略，错配的代价是「工具返回了别人的结果」。
+     */
+    private val nextId = java.util.concurrent.atomic.AtomicInteger(1)
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
     /** initialize 握手。成功返回服务器信息。 */
@@ -92,7 +101,7 @@ class McpClient(
 
     /** 发送单个 JSON-RPC 请求，返回 result 或抛 [McpException]。 */
     private fun rpc(method: String, params: JsonObject): JsonElement {
-        val id = nextId++
+        val id = nextId.getAndIncrement()
         val payload = json.encodeToString(
             JsonRpcRequest.serializer(),
             JsonRpcRequest(id = id, method = method, params = params)
@@ -103,7 +112,12 @@ class McpClient(
             .header("Accept", "application/json, text/event-stream")
             .build()
         http.newCall(request).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
+            // 审计 F29：`body?.string()` 是整份进堆，修前对响应体大小毫无限制。
+            // MCP 服务器由用户自己填，返回一个超长 JSON（或流式无限输出）会把进程读挂。
+            // 与 F19/F21/F23 同一条规则：边读边计数，到上限即停。
+            val text = resp.body?.byteStream()
+                ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES).text }
+                .orEmpty()
             if (!resp.isSuccessful) {
                 throw McpException(resp.code, "HTTP ${resp.code}: ${text.take(300)}")
             }
