@@ -47,7 +47,14 @@ enum class BuildStage {
 @Serializable
 data class BuildTask(
     val id: String,
-    val stage: BuildStage,
+    /**
+     * 有默认值是**为了让未知枚举可降级**，不是为了方便构造。
+     *
+     * 新版写下的 `CANCELLED` 被旧版读到会整体解析失败 → [BuildStore.list] 按空处理 →
+     * 下一次 upsert 直接把整个历史覆盖成一条。一次回滚就清空构建历史，代价太大。
+     * 配 `coerceInputValues = true`，未知值落到 [BuildStage.FAILED]，历史至少还在。
+     */
+    val stage: BuildStage = BuildStage.FAILED,
     /** 触发时的 commit sha（精确定位「哪次提交出的包」）。 */
     val commitSha: String? = null,
     /** CI run number——App 内「构建 #N」与 GitHub run number 一一对应。 */
@@ -72,7 +79,16 @@ data class BuildTask(
 /** 构建任务持久化（filesDir/builds/builds.json，新的在前，最多保留 50 条）。 */
 object BuildStore {
 
-    private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
+    // coerceInputValues：未知枚举（旧版读新版写的 CANCELLED）落到默认值而不是抛异常，
+    // 否则整份 builds.json 解析失败会被当成空历史。
+    // encodeDefaults：给 stage 加了默认值后，默认的 encodeDefaults=false 会把
+    // stage=FAILED 的字段**整个省略**，旧版读到缺字段同样解析失败——反而更糟。
+    private val json = Json {
+        ignoreUnknownKeys = true
+        coerceInputValues = true
+        encodeDefaults = true
+        prettyPrint = true
+    }
     private val lock = Any()
     private const val MAX_HISTORY = 50
 
