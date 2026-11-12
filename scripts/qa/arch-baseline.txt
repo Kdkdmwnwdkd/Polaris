@@ -17,6 +17,13 @@
 # 改用包管理器的 launcher 意图后已全部删除——记录留着，说明豁免可以有，但必须还。
 # （剩下的那处 core → AgentKitApplication 在 CompletionNotifier，靠注入探针解除。）
 
+# 2026-11-12 上调（RealAgentLoop +4）：A-2 修「回合预算只挡步边界」。
+# 只加三样：executeBatch 一个参数、一次实参（loopStart + turnBudgetMs）、
+# 执行器侧一行 turnRemainingMs 注入。注释压到行尾，能省的都省了。
+# 再往下只能把「剩余 <= 0 就不进入执行」的判定挪出执行器——那会让这条语义
+# 散在两处（executor 判超时、loop 判未执行），排障时对不上账，收益不如留着。
+# 抬的幅度 = 这一处修复的实际行数，与前面几次同一口径。
+#
 # ── 行数冻结 ─────────────────────────────────────────────────────────────
 # 超标原因各不相同，共同点是「拆分需要一天以上、且拆分本身没有行为收益」。
 # 上限是冻结时的实际行数，只准往下调：改小了就同步改小这里的数字。
@@ -112,5 +119,5 @@
 lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3588
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3146
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
-lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1499
+lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1503
 lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1535
