@@ -629,6 +629,42 @@ fun main() = runBlocking {
         assertEquals("中断后应能继续求值", "alive", again)
     }
 
+    // —— 沙箱边界（2026-11-12 收口） ——
+    //
+    // 修前是 6 条前缀的黑名单 + `initStandardObjects()`，两处都能穿：
+    //   1. 黑名单只管**列出来的**包，`Packages.<未列包>.<类>.<静态方法>()` 照样执行
+    //      （用同版本 Rhino 复现过：静态方法执行、静态字段读写、对象引用持有都成立）；
+    //   2. `Packages` / `java` 是 initStandardObjects 装进去的**全局对象**，
+    //      根本不经过 ClassShutter——黑名单写得再全也拦不住。
+    // Android 上 `android.*` 正好落在漏掉的包里（`ActivityThread.currentApplication()`）。
+    // 修后：ClassShutter 恒 false（任何宿主类不可见）+ initSafeStandardObjects()。
+
+    check("R9-1 脚本拿不到 Packages / java 等宿主全局") {
+        val engine = com.beichen.polaris.skill.RhinoJsEngine()
+        assertEquals(
+            "Packages 必须不存在（initSafeStandardObjects）",
+            "undefined",
+            engine.eval("(function(){ return typeof Packages })()", emptyMap())
+        )
+        assertEquals(
+            "java 必须不存在",
+            "undefined",
+            engine.eval("(function(){ return typeof java })()", emptyMap())
+        )
+    }
+
+    check("R9-2 未列包名的宿主类同样访问不到") {
+        val engine = com.beichen.polaris.skill.RhinoJsEngine()
+        // 选 kotlin.*：修前黑名单里没有它，而 kotlin-stdlib 一定在 classpath 上，
+        // 所以这条在修前能拿到类（typeof 返回 function/object），修后必须抛。
+        // 用「能拿到类」而不是「能执行方法」作判据，是为了不依赖具体类的方法签名。
+        val out = engine.eval(
+            "(function(){ try { return typeof Packages.kotlin.Unit } catch (e) { return 'BLOCKED' } })()",
+            emptyMap()
+        )
+        assertEquals("必须被拒（修前可访问）", "BLOCKED", out)
+    }
+
     println()
     println("=== R7 结果：$passed 通过 / ${failures.size} 失败 ===")
     if (failures.isNotEmpty()) {

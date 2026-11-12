@@ -308,6 +308,46 @@ private fun main2() = runBlocking {
         assertEquals("应正常完成", "ok", completed.code)
     }
 
+    // —— A-2：回合预算必须作用到**单次调用**（2026-11-12） ——
+    //
+    // 修前回合预算只在步边界判：一个 29 分钟起跑的写工具仍按自己的 10 分钟预算跑，
+    // 回合 39 分钟才收尾。用户对「30 分钟上限」的预期是硬承诺，不是「尽量」。
+
+    check("A-2a 回合剩余额度参与裁剪（工具预算被压到剩余）") {
+        // 工具声明 3 秒、实际睡 2 秒，但回合只剩 150ms → 必须按 150ms 收手
+        val tool = FakeTool("a2-cut", readOnly = true, timeoutBudgetMs = 3_000L, sleepMs = 2_000L)
+        val reg = ToolRegistry().apply { register(tool) }
+        val exec = RegistryToolExecutor(reg, FailureGuard(), turnRemainingMs = { 150L })
+        val start = System.currentTimeMillis()
+        val outcome = exec.execute(
+            ToolCall("a2-1", "a2-cut", JsonObject(emptyMap())),
+            ToolDescriptor("a2-cut", "a2-cut", "{}")
+        )
+        val cost = System.currentTimeMillis() - start
+        assertTrue("应被压到回合剩余的 150ms，实际 ${cost}ms", cost < 1_200L)
+        assertEquals("只读超时码", "tool_timeout", (outcome as ToolCallOutcome.Completed).code)
+    }
+
+    check("A-2b 回合已耗尽时不进入执行（无副作用，可安全重试）") {
+        // 关键区别：这不是「跑了没等到结果」，而是**根本没跑**。
+        // 文案与 code 必须能区分——否则模型会去核对一件没发生的事，或者直接重做。
+        val tool = FakeTool("a2-none", readOnly = false, sleepMs = 1_000L)
+        val reg = ToolRegistry().apply { register(tool) }
+        val exec = RegistryToolExecutor(reg, FailureGuard(), turnRemainingMs = { 0L })
+        val start = System.currentTimeMillis()
+        val outcome = exec.execute(
+            ToolCall("a2-2", "a2-none", JsonObject(emptyMap())),
+            ToolDescriptor("a2-none", "a2-none", "{}")
+        )
+        val cost = System.currentTimeMillis() - start
+        assertTrue("不得真的执行（应 <200ms），实际 ${cost}ms", cost < 200L)
+        assertEquals(
+            "应是「未执行」而不是「超时」",
+            "turn_budget_exhausted",
+            (outcome as ToolCallOutcome.Completed).code
+        )
+    }
+
     check("R6-12 预算声明不可读时退回分档默认，不让工具整调用崩掉") {
         // 真实故障：接口新增默认方法后，某个实现类没有重新编译（增量构建的典型产物），
         // 它的 class 里没有 getTimeoutBudgetMs 桥接，invokeinterface 抛 AbstractMethodError。

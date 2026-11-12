@@ -83,12 +83,25 @@ qa_require_project() {
 # 拆模块后 CLASSES 变成 "app:core"，直接塞给 -Xfriend-paths 会被当成一个不存在的路径，
 # 表现为「internal 符号全部不可见」（连 app 自己的 internal 也报）——本轮踩过一次。
 qa_classpath() {
-    local root="$1" d out=""
-    for d in "$root/app/build/tmp/kotlin-classes/debug" \
-             "$root/core/build/tmp/kotlin-classes/debug"; do
-        [ -d "$d" ] && out="${out:+$out:}$d"
+    local root="$1" v m d out
+    # 变体优先 debug（本地开发的默认产物），整组缺失才回落到 release。
+    #
+    # 为什么需要回落：CI 从 2026-11-12 起只产 release 包（发布包不能是 debuggable，
+    # 见 app/build.gradle.kts）。若 harness 只认 debug，一次 release 构建会让
+    # 四十多个 runner 全部 SKIP——门禁不报红，但验证面凭空消失，比报红更危险。
+    #
+    # 为什么「整组」而不是逐模块补：两个变体同时存在时逐模块补会把同名类
+    # 在 classpath 上放两遍（app:debug + app:release），编译虽容忍，但
+    # qa_classes_stale 的「最新 class」判定会跨变体串味，误报产物陈旧。
+    for v in debug release; do
+        out=""
+        for m in app core; do
+            d="$root/$m/build/tmp/kotlin-classes/$v"
+            [ -d "$d" ] && out="${out:+$out:}$d"
+        done
+        if [ -n "$out" ]; then printf '%s' "$out"; return; fi
     done
-    printf '%s' "$out"
+    printf ''
 }
 
 # qa_classes_stale <仓库根> [class 目录]
@@ -106,8 +119,12 @@ qa_classes_stale() {
     if [ -n "$classes" ]; then
         pairs=("$classes:$root/app/src/main")
     else
-        pairs=("$root/app/build/tmp/kotlin-classes/debug:$root/app/src/main"
-               "$root/core/build/tmp/kotlin-classes/debug:$root/core/src/main")
+        # 与 qa_classpath 同一套变体回落：只有 release 产物时也照常判陈旧，
+        # 否则「产物在哪」这一层就会静默失效（函数返回空 = 一切正常）。
+        local v=debug
+        [ -d "$root/app/build/tmp/kotlin-classes/debug" ] || v=release
+        pairs=("$root/app/build/tmp/kotlin-classes/$v:$root/app/src/main"
+               "$root/core/build/tmp/kotlin-classes/$v:$root/core/src/main")
     fi
     local pair d src newest
     for pair in "${pairs[@]}"; do

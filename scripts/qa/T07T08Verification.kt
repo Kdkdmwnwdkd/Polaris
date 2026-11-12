@@ -97,7 +97,20 @@ private class FakeShellBackend(
     override val backendKey: String,
     override val identity: TerminalIdentity = TerminalIdentity.User,
     private val chunkDelayMs: Long = 0,
-    private val startOk: Boolean = true
+    private val startOk: Boolean = true,
+    /**
+     * 启动耗时（毫秒）：用于制造「查 → 启 → 登记」之间的重叠窗口。
+     *
+     * A-10 的原子性只有在 start 真的挂起一段时间时才暴露得出来——瞬间返回的话，
+     * 两个协程大概率是严格串行跑完的，测试会假绿。
+     */
+    private val startDelayMs: Long = 0,
+    /**
+     * 静默模式：收到命令后**不回哨兵**，让池一直等到超时。
+     *
+     * 用来测「调用方覆盖超时」——默认后端总会在同一 tick 内应答，超时分支永远走不到。
+     */
+    private val silent: Boolean = false
 ) : TerminalBackend {
 
     private val channel = Channel<String>(Channel.UNLIMITED)
@@ -114,12 +127,15 @@ private class FakeShellBackend(
     override val isAlive: Boolean get() = started && !closed && !forceDead
 
     override suspend fun start(): Boolean {
+        if (startDelayMs > 0) delay(startDelayMs)
         if (startOk) started = true
         return startOk
     }
 
     override suspend fun send(input: String): Boolean {
         if (!isAlive) return false
+        // 静默模式：收下但不产生任何输出（含不答哨兵）→ 池只能靠超时收场。
+        if (silent) return true
         val line = input.trimEnd('\n', '\r')
         val markIdx = line.indexOf(TerminalSessionPool.SENTINEL_MARKER)
         if (markIdx >= 0 && line.trimStart().startsWith("echo")) {
@@ -785,6 +801,76 @@ private fun testReleaseLifecycle() = runBlocking {
 }
 
 /* ================================================================== */
+/* A-10 / A-2：会话池的两处并发与超时语义（2026-11-12 加固）             */
+/* ================================================================== */
+
+/**
+ * A-10：同别名并发 open 必须只留一条会话。
+ *
+ * 修前「查 → 启 → 登记」三段各自出锁：两个协程同时读到「该槽位为空」，各起一个后端，
+ * 先后登记——后登记的覆盖 `byAlias`，前一个就此失去句柄，成为**没人能关掉的孤儿 shell**
+ * （进程泄漏，输出收集协程还在跑）。模型一批里并发调两个 `shell_run` 就会触发。
+ *
+ * 判据用 `pool.list().size`：修前是 2（两条都在 byHandle 里，只有一条在 byAlias 里），
+ * 修后必须是 1。只看「句柄是否相同」不够——修后也可能恰好都复用同一条，区分度低。
+ */
+private fun testConcurrentOpenSameAlias() = runBlocking {
+    check("A-10 同别名并发 open 只留一条会话（不再开孤儿 shell）") {
+        val source = object : TerminalBackendSource {
+            override fun obtain(identity: TerminalIdentity, preferProot: Boolean): TerminalBackend? =
+                if (identity == TerminalIdentity.User) {
+                    // startDelayMs：让 start 真的挂起 60ms，制造「查-启-写」重叠窗口。
+                    // 不加这个延时，两个协程往往严格串行跑完，测试会假绿。
+                    FakeShellBackend(TerminalBackend.KEY_USER, startDelayMs = 60)
+                } else {
+                    null
+                }
+        }
+        val pool = TerminalSessionPool(source)
+        val (a, b) = coroutineScope {
+            val ja = async { pool.open(TerminalIdentity.User) }
+            val jb = async { pool.open(TerminalIdentity.User) }
+            ja.await() to jb.await()
+        }
+        assertTrue("两次 open 都应成功（a=${a.errorCode} b=${b.errorCode}）", a.ok && b.ok)
+        assertEquals("应复用同一句柄", a.handle, b.handle)
+        assertEquals("会话表只应有一条（修前会多出孤儿 shell）", 1, pool.list().size)
+        pool.closeAll()
+    }
+}
+
+/**
+ * A-2：池层超时必须能由调用方覆盖。
+ *
+ * 修前 `run()` 没有超时参数，一律用池常量 30 秒；`shell_run` 声明了 20 分钟预算，
+ * 但那个值只到执行器、再没往下传——`gradle build` 第 30 秒必被判超时、会话标脏。
+ *
+ * 这里把池默认设成 10 秒、调用时传 200ms：如果覆盖没生效，耗时会接近 10 秒，
+ * 断言直接失败（这也是为什么阈值取 2 秒而不是「接近 200ms」——留出 CI 抖动余量）。
+ */
+private fun testCommandTimeoutOverride() = runBlocking {
+    check("A-2 单条命令超时可被调用方覆盖（20 分钟预算才有意义）") {
+        val source = object : TerminalBackendSource {
+            override fun obtain(identity: TerminalIdentity, preferProot: Boolean): TerminalBackend? =
+                if (identity == TerminalIdentity.User) {
+                    // silent：收下命令但永不回哨兵 → 只能靠超时收场
+                    FakeShellBackend(TerminalBackend.KEY_USER, silent = true)
+                } else {
+                    null
+                }
+        }
+        val pool = TerminalSessionPool(source, commandTimeoutMs = 10_000L)
+        val handle = pool.open(TerminalIdentity.User).handle ?: error("open 应成功")
+        val t0 = System.currentTimeMillis()
+        val result = pool.run(handle, "echo hi", timeoutMs = 200L)
+        val cost = System.currentTimeMillis() - t0
+        assertEquals("应按 timeout 失败", "timeout", result.errorCode)
+        assertTrue("必须按传入的 200ms 收手（池默认 10s），实际 ${cost}ms", cost < 2_000L)
+        pool.closeAll()
+    }
+}
+
+/* ================================================================== */
 
 fun main() {
     println("=== Phase1 · T07/T08 终端后端抽象 + 会话池 QA 行为验证 ===")
@@ -799,6 +885,9 @@ fun main() {
     testTruncatorBoundaries()
     testShellToolAndBridge()
     testReleaseLifecycle()
+    // 2026-11-12 加固：并发安全（A-10）与超时覆盖（A-2）
+    testConcurrentOpenSameAlias()
+    testCommandTimeoutOverride()
 
     println("\n=== 汇总: $passed passed, ${failures.size} failed ===")
     if (failures.isNotEmpty()) {
