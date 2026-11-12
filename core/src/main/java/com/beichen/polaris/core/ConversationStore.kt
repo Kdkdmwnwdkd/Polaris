@@ -776,13 +776,34 @@ class ConversationStore(file: File) {
      * 文件不存在就返回空表（从未超限的会话是常态，不是异常）。
      */
     fun archivedTurns(convId: String, offset: Int = 0, limit: Int = Int.MAX_VALUE): List<TurnRecord> {
-        val text = runCatching { archiveFile(convId).readText() }.getOrNull() ?: return emptyList()
-        val all = text.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .mapNotNull { line -> runCatching { archiveJson.decodeFromString<TurnRecord>(line) }.getOrNull() }
-            .toList()
-        return ConversationArchive.page(all, offset, limit)
+        // 审计 F45：原来是 `readText()` + 全量解析 + 再做分页——归档「永不重写、只追加」，
+        // 一个用了半年的会话，这个文件几十 MB，翻一页要把整份读进堆并解析成对象。
+        // 分页本来就是为了「别一次全拿」，结果内存在读文件那步已经付掉了。
+        // 改成流式：逐行读、逐行丢，内存只留 [limit] 条。
+        if (limit <= 0) return emptyList()
+        val file = archiveFile(convId)
+        if (!file.exists()) return emptyList()
+        val from = offset.coerceAtLeast(0)
+        return runCatching {
+            val out = ArrayList<TurnRecord>(minOf(limit, 128))
+            file.bufferedReader().useLines { lines ->
+                var idx = 0
+                // 保持「紧凑 JSONL、一轮一行、非空行才解析」的口径（与写入端同一条不变式），
+                // 但 sequence 是惰性的：只需要前 limit 条时，后面的行根本不会被读到。
+                for (t in lines.map { it.trim() }.filter { it.isNotEmpty() }) {
+                    // offset 数的是「能解析出来的记录」，坏行不占号（与旧实现一致）
+                    val rec = runCatching {
+                        archiveJson.decodeFromString<TurnRecord>(t)
+                    }.getOrNull() ?: continue
+                    if (idx >= from) {
+                        out += rec
+                        if (out.size >= limit) break
+                    }
+                    idx++
+                }
+            }
+            out
+        }.getOrDefault(emptyList())
     }
 
     /**
@@ -793,8 +814,12 @@ class ConversationStore(file: File) {
      * 可接受的误差——它只用来决定「要不要显示入口」，真正的数据以 [archivedTurns] 为准。
      */
     fun archivedCount(convId: String): Int {
-        val text = runCatching { archiveFile(convId).readText() }.getOrNull() ?: return 0
-        return text.count { it == '\n' }
+        // 审计 F46：同 F45，只为数个数不该把整份读进内存。
+        val file = archiveFile(convId)
+        if (!file.exists()) return 0
+        return runCatching {
+            file.bufferedReader().useLines { it.count { line -> line.isNotBlank() } }
+        }.getOrDefault(0)
     }
 
     /**
