@@ -28,6 +28,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
+import com.beichen.polaris.core.net.BoundedBody
+import com.beichen.polaris.core.net.BodySlice
 
 /**
  * 阿里云 DashScope 通义万相（调研 06 号文档的国内首选：图/视频都有、文档全）。
@@ -103,8 +105,16 @@ class DashScopeMediaProvider(private val apiKey: String) : MediaProvider {
             .header("X-DashScope-Async", "true")
             .build()
         http.newCall(request).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
+            // 审计 F42：返回体可能是 b64_json（整图 base64），`body?.string()` 无上限。
+            // 8MB 够装两三张 1024² PNG；连这个都超说明服务端在返回别的东西，明确失败。
+            val slice = resp.body?.byteStream()
+                ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
+                ?: BodySlice.EMPTY
+            val text = slice.text
             if (!resp.isSuccessful) throw MediaException("HTTP ${resp.code}: ${text.take(300)}")
+            if (slice.truncated) {
+                throw MediaException("响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析")
+            }
             val root = json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
             return root["output"]?.objOrNull()?.get("task_id")?.primOrNull()?.contentOrNull
                 ?: throw MediaException("提交响应缺 task_id：${text.take(300)}")
@@ -118,8 +128,16 @@ class DashScopeMediaProvider(private val apiKey: String) : MediaProvider {
             .get()
             .build()
         http.newCall(request).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
+            // 审计 F42：返回体可能是 b64_json（整图 base64），`body?.string()` 无上限。
+            // 8MB 够装两三张 1024² PNG；连这个都超说明服务端在返回别的东西，明确失败。
+            val slice = resp.body?.byteStream()
+                ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
+                ?: BodySlice.EMPTY
+            val text = slice.text
             if (!resp.isSuccessful) throw MediaException("HTTP ${resp.code}: ${text.take(300)}")
+            if (slice.truncated) {
+                throw MediaException("响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析")
+            }
             return json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
         }
     }

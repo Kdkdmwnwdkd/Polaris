@@ -16,6 +16,7 @@ import com.beichen.polaris.memory.MemoryStore
 import com.beichen.polaris.core.PromptItem
 import com.beichen.polaris.core.PromptStore
 import com.beichen.polaris.core.llm.KeyPoolStore
+import com.beichen.polaris.core.net.BoundedBody
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -153,10 +154,19 @@ internal class BackupUseCase(
     fun restoreFrom(uri: Uri) {
         _state.value = BackupUiState.Working(exporting = false)
         scope.launch(Dispatchers.IO) {
+            // 审计 F30：修前是 `openInputStream(uri)?.use { it.readBytes() }`——整份进堆，
+            // 之后才交给 BackupArchive 解析。BackupArchive 内部的 64MB 上限做得很好，
+            // 但它守的是「解压后」，而这里在它之前就已经把文件整个读完了。
+            // 恢复备份时用户从文件管理器选错一个几百 MB 的视频，进程当场被打挂。
+            // 改法：读的过程就限长，超限直接拒绝，压根不给 OOM 机会。
             val bytes = runCatching {
-                app.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                app.contentResolver.openInputStream(uri)?.use {
+                    BoundedBody.readBytes(it, BoundedBody.MAX_BULK_BYTES)
+                }
             }.getOrNull() ?: run {
-                _state.value = BackupUiState.Failed("无法读取所选文件")
+                _state.value = BackupUiState.Failed(
+                    "无法读取所选文件，或文件超过 ${BoundedBody.MAX_BULK_BYTES / 1024 / 1024} MB（不是备份文件？）"
+                )
                 return@launch
             }
             when (val read = BackupArchive.read(bytes)) {

@@ -5,6 +5,8 @@ import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.llm.arrOrNull
 import com.beichen.polaris.core.llm.objOrNull
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.net.BoundedBody
+import com.beichen.polaris.core.net.BodySlice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -346,10 +348,18 @@ class GitHubGitService(
             .header("X-GitHub-Api-Version", "2022-11-28")
             .build()
         http.newCall(authed).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
+            // 审计 F40：`body?.string()` 整份进堆。GitHub 的 trees 接口在仓库文件极多时
+            // 会返回几 MB JSON，加上网络中间层异常响应，没有上限就没有兜底。
+            val slice = resp.body?.byteStream()
+                ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
+                ?: BodySlice.EMPTY
+            val text = slice.text
             if (!resp.isSuccessful) {
                 // 只带状态码与截断后的服务端消息：响应体里不会出现我们的 PAT
                 throw IOException("HTTP ${resp.code}：${text.take(300)}")
+            }
+            if (slice.truncated) {
+                throw IOException("GitHub 响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止")
             }
             return text
         }

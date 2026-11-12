@@ -10,6 +10,7 @@
 #   B 行数：单个 .kt 上限 1500 行，存量见白名单且只减不增
 #   C 单点：工具 schema 序列化只允许 ToolSchemaJson 一处实现
 #   D 自检：白名单条目必须仍然命中（文件改名/删掉后残留条目会让守卫变成摆设）
+#   E 单点：读文件 / 读响应体必须经 BoundedBody 限长（「读完再截断」已犯五次）
 #
 # 退出码：0 通过 / 1 有违规 / 3 环境不具备（这里不用 3，纯静态检查总是可跑）。
 set -uo pipefail
@@ -130,6 +131,27 @@ for f in ClaudeClient GeminiClient; do
     bad "$f 未走 ToolSchemaJson"
   fi
 done
+
+say ""
+say "[E] 单点：读文件 / 读响应体必须有上限"
+
+# 「先整份读进内存、再在返回值上截断」这个错误本项目犯过五次：
+#   read_file(F19) → http_request(F21) → 附件(F23) → MCP(F29) → 模型列表(F34)
+# 每次都是单点补一处，所以每次都会再犯。规则：除下面两个自带「读之前先判长度」
+# 的入口外，一律走 BoundedBody（边读边计数，到上限即停）。
+RAW_ALLOW='TextEncoding\.kt|GitHubGitTools\.kt'
+raw_hits=$(grep -rn --include=*.kt -E '\.readBytes\(\)|body\?\.string\(\)' \
+  app/src/main/java core/src/main/java 2>/dev/null \
+  | grep -vE ':[0-9]+:[[:space:]]*(//|\*)' \
+  | grep -vE "$RAW_ALLOW" || true)
+
+if [ -n "$raw_hits" ]; then
+  n_raw=$(printf '%s\n' "$raw_hits" | wc -l | tr -d ' ')
+  bad "发现 ${n_raw} 处无上限读取，必须改走 BoundedBody："
+  printf '%s\n' "$raw_hits" | head -5 | sed 's/^/        /'
+else
+  good "无裸读：文件与响应体均经 BoundedBody 限长"
+fi
 
 say ""
 if [ "$fail" -eq 0 ]; then

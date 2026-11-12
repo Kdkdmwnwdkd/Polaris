@@ -1,6 +1,8 @@
 package com.beichen.polaris.core
 
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.net.BoundedBody
+import com.beichen.polaris.core.net.BodySlice
 import com.beichen.polaris.core.net.EndpointPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -69,12 +71,24 @@ class ModelListFetcher(
                 if (!r.isSuccessful) {
                     // 响应体可能回显 sk-xxx：只脱敏后进日志，异常 message 只带状态码，
                     // 绝不把响应体拼进 message（可能夹带信息）
-                    val errBody = runCatching { r.body?.string() }.getOrDefault("") ?: ""
+                    val errBody = runCatching {
+        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+        r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+    }.getOrDefault("")
                     AgentLogger.httpError(r.code, AgentLogger.sanitize(errBody).take(200))
                     throw IOException("获取模型列表失败：HTTP ${r.code}")
                 }
-                val text = r.body?.string().orEmpty()
-                parseModelIds(text, providerId)
+                // 审计 F34：修前 `body?.string()` 整份进堆。baseUrl 是用户自己填的，
+                // 一个坏掉或恶意的兼容服务返回 500MB JSON，点「拉取模型」就是 OOM。
+                // 截断的 JSON 解析不了，所以撞到上限直接报错——不能把半截数据交给 parser
+                // 再让用户看到一句莫名其妙的「格式错误」。
+                val slice = r.body?.byteStream()
+                    ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
+                    ?: BodySlice.EMPTY
+                if (slice.truncated) {
+                    throw IOException("模型列表响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止")
+                }
+                parseModelIds(slice.text, providerId)
             }
         }
 

@@ -72,6 +72,16 @@ object BoundedBody {
     const val MAX_READ_BYTES: Long = 8L * 1024 * 1024
 
     /**
+     * 批量导入类读取（备份恢复）的上限。
+     *
+     * 与 [MAX_READ_BYTES] 分开，是因为两者保护的对象不同：8MB 是「一次网络响应」，
+     * 而备份文件天然比单个响应大（几百个会话的 JSON）。这里取 64MB，与
+     * `BackupArchive.MAX_TOTAL_BYTES` 同值——超过这个体量的备份本身就不正常，
+     * 与其读进内存再解析，不如当场拒绝。
+     */
+    const val MAX_BULK_BYTES: Long = 64L * 1024 * 1024
+
+    /**
      * 读最多 [maxBytes] 字节；[input] **不会被关闭**（由调用方 `use` 管理，
      * 因为 OkHttp 还要靠它释放连接）。
      *
@@ -93,6 +103,35 @@ object BoundedBody {
             return BodySlice(decode(buf, total), truncated, total.toLong())
         } catch (_: IOException) {
             return BodySlice(decode(buf, total), true, total.toLong())
+        }
+    }
+
+    /**
+     * 限长读字节：**超限返回 `null`**，而不是截断后返回。
+     *
+     * 与 [read] 的区别在于语义：文本截断还剩下前半段能看，图片、压缩包、待 base64 的
+     * 文件截断后就是坏数据——交出去只会让调用方拿着一张残图去请求接口，错误信息还指向
+     * 别处。所以这里宁可明确失败。
+     *
+     * 读的过程中一旦超过 [maxBytes] 立即停止，内存峰值不超过 `maxBytes + 1`；
+     * 修前的写法是 `stream.readBytes()` 之后再 `if (bytes.size > LIMIT)`，
+     * 上限根本没有作用在读的过程上——同一族错误本项目已踩过五次，所以现在有
+     * `arch-guard [E]` 盯着：新代码再这么写会当场红。
+     */
+    fun readBytes(input: InputStream, maxBytes: Long): ByteArray? {
+        val cap = maxBytes.coerceIn(1L, MAX_BULK_BYTES).toInt()
+        val buf = ByteArray(cap)
+        var total = 0
+        try {
+            while (total < cap) {
+                val n = input.read(buf, total, cap - total)
+                if (n < 0) return buf.copyOf(total)
+                total += n
+            }
+            // 读满上限后再探 1 字节：读到就说明超限，整份作废
+            return if (input.read() >= 0) null else buf
+        } catch (_: IOException) {
+            return null
         }
     }
 

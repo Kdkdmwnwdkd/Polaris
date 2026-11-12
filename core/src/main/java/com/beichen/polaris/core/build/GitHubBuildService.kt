@@ -6,6 +6,8 @@ import com.beichen.polaris.core.llm.arrOrNull
 import com.beichen.polaris.core.llm.objOrNull
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.net.BoundedBody
+import com.beichen.polaris.core.net.BodySlice
 import com.beichen.polaris.core.workspace.WorkspaceStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -93,10 +95,20 @@ class GitHubBuildService(
             val baseTree = commitObj["tree"]?.objOrNull()?.get("sha")?.primOrNull()?.contentOrNull
                 ?: error("HEAD commit 缺 tree")
 
-            val entries = files.map { entry ->
+            // 审计 F33：修前 `f.readBytes()` 没有任何长度检查，而 base64 编码后内存还要
+            // 再翻 4/3。工作区里放一个几十 MB 的模型文件或日志，点「构建」就是 OOM。
+            // 源码文件 8MB 已经很宽松；超了明确跳过并记日志，而不是把机器拖死。
+            val entries = files.mapNotNull { entry ->
                 val f = java.io.File(wsRoot, entry.path)
+                val raw = runCatching {
+                    f.inputStream().use { BoundedBody.readBytes(it, BoundedBody.MAX_READ_BYTES) }
+                }.getOrNull()
+                if (raw == null) {
+                    AgentLogger.w(TAG, "跳过 ${entry.path}：读取失败或超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB")
+                    return@mapNotNull null
+                }
                 val blob = post("/repos/${cfg.fullName}/git/blobs", buildJsonObject {
-                    put("content", Base64.getEncoder().encodeToString(f.readBytes()))
+                    put("content", Base64.getEncoder().encodeToString(raw))
                     put("encoding", "base64")
                 })
                 buildJsonObject {
@@ -114,7 +126,7 @@ class GitHubBuildService(
             })
             val treeSha = tree["sha"]?.primOrNull()?.contentOrNull ?: error("tree 缺 sha")
             val commit = post("/repos/${cfg.fullName}/git/commits", buildJsonObject {
-                put("message", "北辰构建：工作区 ${files.size} 个文件")
+                put("message", "北辰构建：工作区 ${entries.size} 个文件")
                 put("tree", treeSha)
                 put("parents", kotlinx.serialization.json.buildJsonArray {
                     add(kotlinx.serialization.json.JsonPrimitive(head))
@@ -122,7 +134,7 @@ class GitHubBuildService(
             })
             val sha = commit["sha"]?.primOrNull()?.contentOrNull ?: error("commit 缺 sha")
             patch("/repos/${cfg.fullName}/git/refs/heads/main", buildJsonObject { put("sha", sha) })
-            AgentLogger.d(TAG, "已推送 commit ${sha.take(8)}（${files.size} 个工作区文件）")
+            AgentLogger.d(TAG, "已推送 commit ${sha.take(8)}（${entries.size} 个工作区文件）")
             sha
         }
     }
@@ -295,9 +307,16 @@ class GitHubBuildService(
 
     private fun exec(request: Request): JsonObject {
         http.newCall(request).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
+            // 审计 F41：同 F40。这里解析的是 commit / tree 对象，正常只有几十 KB。
+            val slice = resp.body?.byteStream()
+                ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
+                ?: BodySlice.EMPTY
+            val text = slice.text
             if (!resp.isSuccessful) {
                 throw java.io.IOException("HTTP ${resp.code}: ${text.take(300)}")
+            }
+            if (slice.truncated) {
+                throw java.io.IOException("GitHub 响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB")
             }
             if (text.isBlank()) return JsonObject(emptyMap()) // 204（dispatch 成功）
             return json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())

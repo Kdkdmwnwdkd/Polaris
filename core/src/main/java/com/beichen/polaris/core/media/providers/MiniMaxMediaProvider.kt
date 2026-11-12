@@ -23,6 +23,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
+import com.beichen.polaris.core.net.BoundedBody
+import com.beichen.polaris.core.net.BodySlice
 
 /**
  * MiniMax 海螺视频（调研 06 号文档「MiniMax 海螺（视频强项）」直译）。
@@ -58,8 +60,16 @@ class MiniMaxMediaProvider(private val apiKey: String) : MediaProvider {
             .post(json.encodeToString(JsonObject.serializer(), body).toRequestBody(JSON))
             .build()
         http.newCall(request_).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
+            // 审计 F42：返回体可能是 b64_json（整图 base64），`body?.string()` 无上限。
+            // 8MB 够装两三张 1024² PNG；连这个都超说明服务端在返回别的东西，明确失败。
+            val slice = resp.body?.byteStream()
+                ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
+                ?: BodySlice.EMPTY
+            val text = slice.text
             if (!resp.isSuccessful) throw MediaException("HTTP ${resp.code}: ${text.take(300)}")
+            if (slice.truncated) {
+                throw MediaException("响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析")
+            }
             val root = json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
             val baseResp = root["base_resp"]?.objOrNull()
             if (baseResp != null && baseResp["status_code"]?.primOrNull()?.contentOrNull?.toIntOrNull() != 0) {
@@ -81,8 +91,16 @@ class MiniMaxMediaProvider(private val apiKey: String) : MediaProvider {
             .get()
             .build()
         http.newCall(request).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
+            // 审计 F42：返回体可能是 b64_json（整图 base64），`body?.string()` 无上限。
+            // 8MB 够装两三张 1024² PNG；连这个都超说明服务端在返回别的东西，明确失败。
+            val slice = resp.body?.byteStream()
+                ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
+                ?: BodySlice.EMPTY
+            val text = slice.text
             if (!resp.isSuccessful) throw MediaException("HTTP ${resp.code}: ${text.take(300)}")
+            if (slice.truncated) {
+                throw MediaException("响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析")
+            }
             val root = json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
             return@withContext when (root["status"]?.primOrNull()?.contentOrNull) {
                 "Success" -> {

@@ -69,6 +69,13 @@ private fun collectWorkspace(
             skipped += "$path（不存在或不是文件）"
             continue
         }
+        // 审计 F32：先判长度，再读。修前是 `readBytes()` 之后再交给 isCommittable 判
+        // 2MB——工作区里丢一个 500MB 的日志，push_workspace 时整份进堆直接 OOM。
+        // `length()` 只是元数据，不读内容，代价可以忽略。
+        if (file.length() > GitHubGitLogic.MAX_FILE_BYTES) {
+            skipped += "$path（超过 ${GitHubGitLogic.MAX_FILE_BYTES / 1024 / 1024} MB 或路径非法）"
+            continue
+        }
         val bytes = runCatching { file.readBytes() }.getOrNull()
         if (bytes == null) {
             skipped += "$path（读取失败）"

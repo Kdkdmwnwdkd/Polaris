@@ -23,6 +23,7 @@ import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.llm.FinishReason
 import com.beichen.polaris.core.llm.KeyPoolPolicy
 import com.beichen.polaris.core.llm.KeyPoolRuntime
+import com.beichen.polaris.core.net.BoundedBody
 import com.beichen.polaris.core.net.EndpointPolicy
 
 /**
@@ -376,7 +377,10 @@ class OpenAIClient(
         return resp.use { r ->
             if (!r.isSuccessful) {
                 // ⚠️ resp.body?.string() 只能读一次，必须先存变量再使用
-                val errBody = runCatching { r.body?.string() }.getOrDefault("") ?: ""
+                val errBody = runCatching {
+        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+        r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+    }.getOrDefault("")
                 // 401/403 的响应体常回显 sk-xxx 或 token，落日志与抛出的异常文案都必须先脱敏
                 val safeBody = AgentLogger.sanitize(errBody)
                 AgentLogger.httpError(r.code, safeBody)
@@ -392,8 +396,20 @@ class OpenAIClient(
             // 空体不是「空回答」而是协议异常：旧写法对 body 直接加了非空断言，
             // 空体时抛 NPE，文案退化成「请求失败：null」，既看不出是哪种失败、
             // 也没法按状态码归类。
-            val text = r.body?.string()
+            // 审计 F36：非流式响应体此前也是 `body?.string()` 整份进堆。baseUrl 是用户
+            // 自己填的，服务端异常时返回一个超大 JSON，这一发就把进程打挂。
+            // 截断的 JSON 只会解析出残缺回答，比报错更难排查，所以撞到上限直接失败。
+            val slice = r.body?.byteStream()
+                ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
                 ?: throw LlmHttpException(r.code, "LLM 响应体为空（HTTP ${r.code}）", "")
+            if (slice.truncated) {
+                throw LlmHttpException(
+                    r.code,
+                    "LLM 响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析",
+                    ""
+                )
+            }
+            val text = slice.text
             AgentLogger.llmResponse(
                 effectiveModel(),
                 true,
@@ -578,7 +594,10 @@ class OpenAIClient(
                     // 3s/10s 短序列硬刚限流（真机 19:05 连续 3 次 429 后运行直接失败）。
                     // 改抛结构化 LlmHttpException：isRetryable/retryReason/429 专用
                     // 退避序列全部能认出来。
-                    val errBody = runCatching { resp.body?.string() }.getOrDefault("") ?: ""
+                    val errBody = runCatching {
+        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+        resp.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+    }.getOrDefault("")
                     AgentLogger.httpError(resp.code, AgentLogger.sanitize(errBody))
                     throw LlmHttpException(
                         code = resp.code,
@@ -707,7 +726,10 @@ class OpenAIClient(
         }
         resp.use { r ->
             // 响应体可能回显 sk-xxx，必须先脱敏再截断
-            val body = runCatching { r.body?.string() }.getOrDefault("") ?: ""
+            val body = runCatching {
+        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+        r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+    }.getOrDefault("")
             val safe = AgentLogger.sanitize(body)
             PingResult(code = r.code, bodyPreview = safe.take(200))
         }

@@ -68,6 +68,7 @@ import com.beichen.polaris.core.media.MediaProvider
 import com.beichen.polaris.core.media.MediaTask
 import com.beichen.polaris.core.media.MediaTaskStore
 import com.beichen.polaris.core.media.Ratio
+import com.beichen.polaris.core.net.BoundedBody
 import com.beichen.polaris.core.media.TaskStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -133,17 +134,20 @@ fun MediaScreen() {
     ) { uri ->
         if (uri != null) {
             scope.launch {
+                // 审计 F31：修前是 `readBytes()` 之后再判 `bytes.size > 4MB`——上限被放在
+                // 读完之后，选一张 100MB 的原图先 OOM、再报「超过 4MB」，用户看到的是闪退。
+                // 改为读的过程中就限长，超限直接返回 null。
+                val limit = 4L * 1024 * 1024
                 val bytes = withContext(Dispatchers.IO) {
                     runCatching {
-                        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        context.contentResolver.openInputStream(uri)?.use {
+                            BoundedBody.readBytes(it, limit)
+                        }
                     }.getOrNull()
                 }
                 when {
                     bytes == null ->
-                        Toast.makeText(context, "读取图片失败", Toast.LENGTH_SHORT).show()
-
-                    bytes.size > 4 * 1024 * 1024 ->
-                        Toast.makeText(context, "图片超过 4MB，请换一张", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "读取失败：图片超过 4MB 或无法访问", Toast.LENGTH_SHORT).show()
 
                     else -> {
                         refDataUri = "data:image/png;base64," +

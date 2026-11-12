@@ -28,6 +28,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.UUID
+import com.beichen.polaris.core.net.BoundedBody
 
 /**
  * Gemini generateContent API 适配（Provider id = "gemini"）。
@@ -103,13 +104,26 @@ class GeminiClient(
 
         resp.use { r ->
             if (!r.isSuccessful) {
-                val errBody = runCatching { r.body?.string() }.getOrDefault("") ?: ""
+                val errBody = runCatching {
+        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+        r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+    }.getOrDefault("")
                 val safeBody = AgentLogger.sanitize(errBody)
                 AgentLogger.httpError(r.code, safeBody)
                 throw LlmHttpException(r.code, "Gemini 请求失败 ${r.code}：${safeBody.take(300)}", safeBody)
             }
-            val text = r.body?.string()
+            // 审计 F38：同 F36。
+            val slice = r.body?.byteStream()
+                ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
                 ?: throw LlmHttpException(r.code, "Gemini 响应体为空（HTTP ${r.code}）", "")
+            if (slice.truncated) {
+                throw LlmHttpException(
+                    r.code,
+                    "Gemini 响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析",
+                    ""
+                )
+            }
+            val text = slice.text
             AgentLogger.llmResponse(
                 effectiveModel(), true,
                 System.currentTimeMillis() - startedAt,
@@ -145,7 +159,10 @@ class GeminiClient(
         AgentLogger.apiTrace(endpointUrl(true), effectiveModel(), effectiveApiKey())
         http.runCancellable(request) { resp ->
             if (!resp.isSuccessful) {
-                val errBody = runCatching { resp.body?.string() }.getOrDefault("") ?: ""
+                val errBody = runCatching {
+        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+        resp.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+    }.getOrDefault("")
                 val safeBody = AgentLogger.sanitize(errBody)
                 AgentLogger.httpError(resp.code, safeBody)
                 // hotfix10：同 OpenAIClient——结构化 LlmHttpException（code + Retry-After）
@@ -254,7 +271,10 @@ class GeminiClient(
             throw e
         }
         resp.use { r ->
-            val body = runCatching { r.body?.string() }.getOrDefault("") ?: ""
+            val body = runCatching {
+        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+        r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+    }.getOrDefault("")
             val safe = AgentLogger.sanitize(body)
             PingResult(code = r.code, bodyPreview = safe.take(200))
         }

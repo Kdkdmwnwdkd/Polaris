@@ -1,5 +1,7 @@
 package com.beichen.polaris.core.llm
 
+import com.beichen.polaris.core.net.BoundedBody
+import com.beichen.polaris.core.net.BodySlice
 import com.beichen.polaris.core.net.EndpointPolicy
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -54,9 +56,17 @@ object BalanceService {
                 .get()
                 .build()
             client.newCall(request).execute().use { resp ->
-                val body = resp.body?.string().orEmpty()
+                // 审计 F35：同 F34。余额接口是第三方地址（用户可填），响应体不受我们控制。
+                // 1MB 对 JSON 余额来说已经极宽松；撞到就明说，不把半截 JSON 交给 parser。
+                val slice = resp.body?.byteStream()
+                    ?.let { BoundedBody.read(it, 1L * 1024 * 1024) }
+                    ?: BodySlice.EMPTY
+                val body = slice.text
                 if (!resp.isSuccessful) {
                     throw IllegalStateException("HTTP ${resp.code}：${body.take(160)}")
+                }
+                if (slice.truncated) {
+                    throw IllegalStateException("余额响应超过 1 MB，已中止解析")
                 }
                 BalanceParsing.parse(providerId, body)
                     ?: throw IllegalStateException("响应里没有可识别的余额字段")

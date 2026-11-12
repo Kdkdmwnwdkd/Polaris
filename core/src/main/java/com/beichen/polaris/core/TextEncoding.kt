@@ -88,11 +88,16 @@ object TextEncoding {
     /**
      * 严格解码全文；含非法字节时返回 `null`（不抛，省得每个调用方都写一层 catch）。
      *
-     * 调用方须先自行限制文件大小（[EDIT_MAX_BYTES]），本方法会整份载入。
+     * 文件超过 [EDIT_MAX_BYTES] 直接返回 `null`（调用方不必再判一次，但判了也无害）。
      */
     fun readStrictUtf8(file: File): String? = try {
-        val bytes = file.readBytes()
-        strictDecoder().decode(ByteBuffer.wrap(bytes)).toString()
+        // 契约不该只写在注释里：调用方漏判长度就会整份进堆，这里兜一次底。
+        if (file.length() > EDIT_MAX_BYTES) {
+            null
+        } else {
+            val bytes = file.readBytes()
+            strictDecoder().decode(ByteBuffer.wrap(bytes)).toString()
+        }
     } catch (_: CharacterCodingException) {
         null
     } catch (_: IOException) {

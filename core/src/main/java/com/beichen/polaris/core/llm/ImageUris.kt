@@ -3,6 +3,7 @@ package com.beichen.polaris.core.llm
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.ChatMessage
 import com.beichen.polaris.core.UserMessage
+import com.beichen.polaris.core.net.BoundedBody
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -38,7 +39,12 @@ internal object ImageUris {
                 AgentLogger.i("LLM", "图片下载失败 ${r.code}: ${url.take(80)}")
                 return null
             }
-            val bytes = r.body?.bytes() ?: return null
+            // 审计 F39：修前 `body?.bytes()` 完全无上限。URL 来自模型输出或用户消息，
+            // 模型给出一个 500MB 的链接，下载就把进程打挂；base64 之后还要再翻 4/3。
+            // 多数接口 5MB 就拒图，8MB 已经够宽松，超了直接跳过这张图。
+            val bytes = r.body?.byteStream()
+                ?.let { BoundedBody.readBytes(it, BoundedBody.MAX_READ_BYTES) }
+                ?: return null
             val mime = r.header("Content-Type")?.substringBefore(';')?.trim() ?: "image/png"
             "data:$mime;base64," + android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
         }
