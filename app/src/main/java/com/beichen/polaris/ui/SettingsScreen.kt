@@ -1,12 +1,9 @@
 package com.beichen.polaris.ui
 
 import android.Manifest
-import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.drawable.Icon as AndroidIcon
 import android.os.Build
-import android.service.quicksettings.TileService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -73,7 +70,6 @@ import android.widget.Toast
 import com.beichen.polaris.core.agent.ApprovalTier
 import com.beichen.polaris.core.agent.SurvivalCheckService
 import com.beichen.polaris.pet.PetState
-import com.beichen.polaris.pet.PetTileService
 import com.beichen.polaris.runtime.lease.LeaseRegistry
 import com.beichen.polaris.runtime.lease.LeaseSnapshot
 import com.beichen.polaris.ui.contract.SettingsScreenContract
@@ -383,36 +379,22 @@ fun SettingsScreen(
                 }
             }
             /**
-             * 把「北辰」添加到下拉快捷设置。
+             * 加磁贴只能**手动**，这里只负责把步骤说清楚。
              *
-             * Android 13 起有官方 API 会弹系统确认框（用户点「添加」才生效，不能静默塞）。
-             * 13 以下没有这条路，只能告诉用户手动加——不要伪造一个「已添加」的假成功。
+             * 本来想用 `requestAddTileService`（Android 13 起，会弹系统确认框），
+             * 编译期就否掉了：它是 `TileService` 的**实例方法**，不是静态方法
+             * （Java 签名 `public void requestAddTileService(...)`，要靠实例的
+             * Context 决定"加到哪个用户"）。设置页拿不到 TileService 实例，
+             * 自己 bind 又需要系统级权限 `BIND_QUICK_SETTINGS_TILE`，走不通。
+             *
+             * 于是退回到「告诉用户点哪儿」：多一步，但不撒谎、不引额外依赖。
              */
-            val addPetTile: () -> Unit = {
-                val added = runCatching {
-                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                        false
-                    } else {
-                        TileService.requestAddTileService(
-                            ComponentName(context, PetTileService::class.java),
-                            "北辰",
-                            AndroidIcon.createWithResource(
-                                context,
-                                android.R.drawable.ic_btn_speak_now
-                            ),
-                            java.util.concurrent.Executor { it.run() },
-                            null
-                        )
-                        true
-                    }
-                }.getOrDefault(false)
-                if (!added) {
-                    Toast.makeText(
-                        context,
-                        "请在系统快捷设置（下拉通知栏 → 编辑）里手动添加「北辰」",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
+            val showTileGuide: () -> Unit = {
+                Toast.makeText(
+                    context,
+                    "下拉通知栏 → 点右上角「编辑」（铅笔图标）→ 找到「北辰」，拖到上面两排",
+                    Toast.LENGTH_LONG
+                ).show()
             }
 
             AkGroup(
@@ -466,7 +448,7 @@ fun SettingsScreen(
                     icon = Icons.Outlined.Bolt,
                     title = "加到快捷设置",
                     description = "下拉通知栏点「北辰」，不必回桌面找它",
-                    onClick = addPetTile
+                    onClick = showTileGuide
                 )
                 // 只在「已开启但没授权」时出现：没开桌宠的人不需要看到这一条，
                 // 而开了却拒过权限的人需要一个补授权的入口（否则只能卸载重装）。

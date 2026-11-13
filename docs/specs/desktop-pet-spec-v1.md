@@ -377,7 +377,7 @@ e: PetPanel.kt: Restricted suspending functions can only invoke member or
 改动  PetState.kt            start(ctx, action) —— action 随启动意图一起下去
 改动  PetOverlay.kt          beginVoice() + autoFocusInput
 改动  PetPanel.kt            BubbleCard 的自动聚焦改为受控
-改动  SettingsScreen.kt      「加到快捷设置」（Android 13+ 走系统确认框）
+改动  SettingsScreen.kt      「加到快捷设置」：只给手动步骤（原因见 §12.4）
 ```
 
 数据流只有一条：
@@ -406,6 +406,21 @@ e: PetPanel.kt: Restricted suspending functions can only invoke member or
 展开是全新组合，`Unit` 照样跑。于是「没听清」的提示会弹键盘，磁贴唤起会弹键盘。
 现在改成 `autoFocusInput` 受控：点形象展开 = 聚焦（要打字），语音唤起与瞬时提示 = 不聚焦
 （守卫 I10）。
+
+### 12.3.1 一次编译期被否掉的「一键添加」
+
+本来想在设置页调 `TileService.requestAddTileService()`（Android 13 起，会弹系统确认框，
+用户点「添加」才生效）。CI 直接给了 `Unresolved reference: requestAddTileService`——
+它是 **`TileService` 的实例方法**（Java 签名 `public void requestAddTileService(...)`），
+不是静态方法：要靠实例的 Context 决定「加到哪个用户」。
+
+设置页拿不到 TileService 实例；自己 `bindService` 又需要系统级权限
+`BIND_QUICK_SETTINGS_TILE`。这条路是死胡同，于是退回「告诉用户点哪儿」：
+
+> 下拉通知栏 → 点右上角「编辑」→ 找到「北辰」，拖到上面两排。
+
+多一步，但不撒谎、不引依赖。**这也是本地静态守卫看不见的一类错误**——
+`[I]` 段断言的是「磁贴存在且能绑上」，编译错误只有 CI 会告诉你。
 
 ### 12.4 明确没做
 
