@@ -29,6 +29,7 @@ import com.beichen.polaris.core.AppScope
 import com.beichen.polaris.ui.AgentKitTheme
 import com.beichen.polaris.ui.AppearanceState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -344,14 +345,17 @@ class PetOverlayHost(
      *
      * **必须走仲裁器，不能直接 `speaker.speak`。** 直接调引擎看起来只是少一层，
      * 实际会丢掉两件事：① 播报不会登记成 `AudioHolder.Speak`，仲裁器不知道有声音在响；
-     * ② 用户此时按住说话，`beginCapture` 拿得到麦克风，但 `revoked` 不会触发，
+     * ② 用户此时长按说话，`beginCapture` 拿得到麦克风，但 `revoked` 不会触发，
      * 于是「朗读停不下来 + 录音把自己念的也录进去」同时发生。
      *
-     * 这正是二期第一稿的样子：P12-5（朗读中被语音打断）必挂，而屏幕上什么都看不出来。
+     * 第二个坑是**线程**：本类的 `scope` 是 `AppScope.io`，而 `TextSpeaker` 的约定是
+     * 「speak / stop 都在主线程」（它的音频焦点字段和 `mainHandler` 都是按这个假设写的）。
+     * 所以这里显式切回 Main——`arbiter.speak` 内部会碰 AudioManager 与 TTS 引擎，
+     * 在 IO 线程调不报错，但焦点请求与 `onDone` 回调的时序会变得不可预测。
      */
     fun speak(text: String) {
         if (text.isBlank()) return
-        scope.launch {
+        scope.launch(Dispatchers.Main) {
             AudioGraph.arbiter(context).speak(text)
                 .onFailure { AgentLogger.w(TAG, "桌宠朗读失败：${it.message}") }
         }

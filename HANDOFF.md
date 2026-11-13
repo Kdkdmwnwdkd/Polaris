@@ -113,7 +113,7 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
       app/.../pet/PetPanel.kt             形象（Canvas 自绘，无素材）+ 气泡 + 输入 + 语音入口
       app/.../pet/PetAgentSession.kt      独立轻量会话（最小只读工具表）
       app/.../pet/PetVoice.kt             语音输入（SpeechRecognizer 直连 + 仲裁 + 超时）
-      scripts/qa/run-desktop-pet-verification.sh   38 条守卫（A–H 八段）
+      scripts/qa/run-desktop-pet-verification.sh   39 条守卫（A–H 八段）
 
 改动  AndroidManifest.xml                 注册 service（foregroundServiceType=specialUse）
       app/ui/SettingsScreen.kt            「桌面助手」组：总开关 + 悬浮窗/麦克风引导 + 未运行重试

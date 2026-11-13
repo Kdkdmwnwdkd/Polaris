@@ -246,6 +246,15 @@ else
   good "F1b 没有绕过仲裁器直接调引擎"
 fi
 
+# 线程：本类的 scope 是 AppScope.io，而 TextSpeaker 的音频焦点与 mainHandler 都按
+# 「speak 在主线程」写的。在 IO 线程调不报错，但焦点请求与 onDone 的时序会漂——
+# 表现为「偶尔不 ducking」「偶尔 onDone 没触发导致 speaking 卡住」。
+if grep -q 'scope.launch(Dispatchers.Main)' "$OVERLAY"; then
+  good "F1c 朗读显式切回主线程"
+else
+  bad "F1c 朗读没有切主线程 —— TextSpeaker 的线程约定是主线程"
+fi
+
 # 桌宠不挂 SpeakTool：回答的朗读统一由 PetOverlayHost 在每轮结束后做（经仲裁器）。
 # 挂上它，模型主动调用一次就会把同一段话念两遍——而屏幕上只是「念了两遍」，
 # 没有任何报错，是最难发现的那类缺陷。

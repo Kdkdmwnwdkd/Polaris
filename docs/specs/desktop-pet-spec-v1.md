@@ -170,7 +170,7 @@
   app/src/main/java/com/beichen/polaris/pet/PetOverlay.kt          WindowManager + ComposeView + 三个 owner
   app/src/main/java/com/beichen/polaris/pet/PetPanel.kt            形象（Canvas 自绘）+ 气泡 + 输入
   app/src/main/java/com/beichen/polaris/pet/PetAgentSession.kt     独立轻量会话（驱动 RealAgentLoop）
-  scripts/qa/run-desktop-pet-verification.sh                       38 条守卫（A–H 八段）
+  scripts/qa/run-desktop-pet-verification.sh                       39 条守卫（A–H 八段）
 
 改动
   AndroidManifest.xml                    注册 service（foregroundServiceType=specialUse）
@@ -205,7 +205,7 @@ Composable，窗口与状态层不用改。
 
 *2026-11-13 立案。当时 App 处于 run 711，应用内更新刚在真机闭环。*
 *2026-11-13 晚：一期骨架落地（§8 清单 + §10 纪要），守卫 `run-desktop-pet-verification.sh` 27 条。*
-*2026-11-14：二期语音闭环落地（§11），新增 `[H]` 段 10 条 + `F1b` 反向断言，共 38 条。*
+*2026-11-14：二期语音闭环落地（§11），新增 `[H]` 段 10 条 + `F1b`/`F1c` 两条反向断言，共 39 条。*
 
 ---
 
