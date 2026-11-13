@@ -6,7 +6,6 @@ import android.media.AudioRecordingConfiguration
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.Process
 import com.beichen.polaris.core.voice.AudioHolder
 import com.beichen.polaris.core.voice.AudioLease
 import com.beichen.polaris.core.voice.ClaimResult
@@ -14,7 +13,6 @@ import com.beichen.polaris.core.voice.ExternalBusy
 import com.beichen.polaris.core.voice.MicClaim
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import java.util.concurrent.Executor
 
 /**
  * 声音仲裁器的 Android 装配层。
@@ -46,7 +44,6 @@ class VoiceArbiter(
         runCatching { appContext.getSystemService(AudioManager::class.java) }.getOrNull()
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val mainExecutor = Executor { r -> mainHandler.post(r) }
 
     val claim = MicClaim(log)
 
@@ -162,7 +159,10 @@ class VoiceArbiter(
             }
         }
         runCatching {
-            am.registerAudioRecordingCallback(mainExecutor, cb)
+            // 用 (callback, handler) 这个重载。(Executor, callback) 那个在 SDK stub 里
+            // 取不到（CI 里编译报「inferred type is Executor but AudioRecordingCallback
+            // was expected」）——它只在部分 system stub 里可见。
+            am.registerAudioRecordingCallback(cb, mainHandler)
             recordingCallback = cb
             applyExternalState(am.activeRecordingConfigurations)
         }.onFailure { log("注册录音探测失败：${it.message}") }
@@ -184,8 +184,15 @@ class VoiceArbiter(
             claim.setExternalBusy(ExternalBusy.CallInProgress)
             return
         }
-        val myUid = Process.myUid()
-        val others = configs.orEmpty().any { it.clientUid != myUid }
+        // 不能按 uid 排除自己：AudioRecordingConfiguration.getClientUid() 在 SDK stub 里
+        // 是 @hide（CI 报 Unresolved reference），拿不到。改用「此刻我们自己是不是
+        // 正持有麦克风」来近似——自己没在录时，配置列表非空就一定是别人。
+        //
+        // 已知局限（写下来免得后人以为是 bug）：我们自己正在录的时候，列表里必然有自己，
+        // 此时若还有别人在录也分辨不出来。这种情况下我们本来就在用麦克风，
+        // 少报一次外部占用不会造成错误决策。
+        val selfRecording = claim.current.value?.holder == AudioHolder.Capture
+        val others = !selfRecording && configs.orEmpty().isNotEmpty()
         claim.setExternalBusy(if (others) ExternalBusy.OtherAppRecording else null)
     }
 }
