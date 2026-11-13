@@ -116,6 +116,50 @@ else
   fail "A11 运行中仍然只有停止键 —— 「发送即打断」用户按不到"
 fi
 
+# ── 进程级音频层（2026-11-13）────────────────────────────────────────────
+# 仲裁器的作用域必须与它的不变量同域。MicClaim 的类注释写的是「唯一的事实来源」，
+# 而它当时是 ViewModel 私有实例——桌宠活在 Service 里、没有 Activity，一上线就是
+# 两个引擎（叠音）、两个仲裁器（互相看不见谁占着麦克风）。下面四条盯的是「别再缩回去」：
+# 这类退化不会报错，只会表现为「偶尔有人的语音被吞掉」。
+AG=$(find app/src/main -name "AudioGraph.kt" 2>/dev/null | head -1)
+if [ -n "$AG" ] && grep -qF "object AudioGraph" "$AG"; then
+  pass "A12 音频层有进程级所有者 AudioGraph"
+else
+  fail "A12 没有 AudioGraph —— 音频层又回到每个调用方 new 一份"
+fi
+
+# 除 AudioGraph 外，任何文件再 new 一次都是第二个持有者。声明所在文件本身不算。
+others=$(grep -rlE '\b(TextSpeaker|VoiceArbiter)\(' --include=*.kt app/src/main 2>/dev/null \
+  | grep -v 'audio/AudioGraph.kt' | grep -v 'audio/TextSpeaker.kt' | grep -v 'audio/VoiceArbiter.kt' || true)
+if [ -z "$others" ]; then
+  pass "A13 TextSpeaker / VoiceArbiter 只有 AudioGraph 一个构造点"
+else
+  fail "A13 有人绕开 AudioGraph 自己 new：$(echo "$others" | tr '\n' ' ')"
+fi
+
+# 不申请焦点 = 用户放音乐时朗读会和音乐混在一起，且别的 App 播报时我们不会让路。
+if grep -qF "requestAudioFocus(" "$SPEAKER" && grep -qF "abandonAudioFocusRequest(" "$SPEAKER"; then
+  pass "A14 TTS 申请并归还音频焦点"
+else
+  fail "A14 TTS 不申请音频焦点 —— 与音乐/导航混音，也没有让路语义"
+fi
+
+# speaking 是乐观置 true 的。没有兜底时，引擎静默失败会让它永久为 true，
+# 三期唤醒词上线后表现为「喊了没反应」，且重启才好。
+if grep -qF "postDelayed(" "$SPEAKER" && grep -qF "disarmWatchdog(" "$SPEAKER"; then
+  pass "A15 speaking 有卡死兜底（按文本长度估算 + 到点停）"
+else
+  fail "A15 speaking 没有兜底 —— 引擎不回调时会永久为 true"
+fi
+
+# 进程级引擎的生命周期不能挂在 Activity 上：ViewModel 一销毁就 shutdown，
+# 后台回合的朗读会被掐在半句，桌宠更是直接哑掉。
+if grep -qE 'speaker\.shutdown\(|voiceArbiter\.close\(' "$VM"; then
+  fail "A16 ChatViewModel 仍在释放进程级音频层 —— 销毁一个页面就会掐掉别人的朗读"
+else
+  pass "A16 ChatViewModel 不释放进程级音频层"
+fi
+
 echo ""
 echo "[B] 行为：真编真跑（2 个纯 Kotlin 源文件）"
 

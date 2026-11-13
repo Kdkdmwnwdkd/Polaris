@@ -5,6 +5,7 @@ import com.beichen.polaris.automation.DeviceContextStore
 import com.beichen.polaris.automation.adb.AdbCredentials
 import com.beichen.polaris.automation.adb.AdbSession
 import com.beichen.polaris.automation.shizuku.ShizukuShell
+import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.browser.BrowserHost
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.CompletionNotifier
@@ -306,6 +307,17 @@ object AppGraph {
                 link = "构建页 ↔ 进程级构建协程（切页面不中断，同一时间只允许一个构建）；" +
                     "harness 里不取消就会带着上一轮的网络请求进入下一个用例",
                 reset = { BuildEngine.reset() }
+            )
+        )
+
+        // ── 音频：进程级单例（对话页 / 后台回合 / 桌宠共用）─────────────────
+        add(
+            Global(
+                name = "AudioGraph",
+                packageName = "com.beichen.polaris.audio",
+                link = "TTS 引擎与麦克风仲裁器 ↔ 对话页 / 后台回合 / 桌宠。悬浮窗活在 Service 里、" +
+                    "没有 Activity，若各自 new 一份就会同时出声、互相看不见对方占着麦克风",
+                reset = { AudioGraph.reset() }
             )
         )
 

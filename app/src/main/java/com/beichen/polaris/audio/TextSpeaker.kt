@@ -1,6 +1,11 @@
 package com.beichen.polaris.audio
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import kotlinx.coroutines.CompletableDeferred
@@ -48,6 +53,62 @@ class TextSpeaker(context: Context) {
     /** 是否正在出声。供打断仲裁判断 `Activity.speaking`。 */
     val speaking: StateFlow<Boolean> = _speaking.asStateFlow()
 
+    /** 播报用的 AudioManager；null = 设备没有音频服务（极少数精简 ROM），此时跳过焦点申请。 */
+    private val audioManager: AudioManager? =
+        runCatching { appContext.getSystemService(AudioManager::class.java) }.getOrNull()
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** 是否持有音频焦点。speak 在主线程、onDone 在引擎线程，必须保证可见性。 */
+    @Volatile
+    private var focusHeld = false
+
+    /**
+     * 卡死兜底。
+     *
+     * `speaking` 是**乐观**置 true 的（见 [speak] 里「部分引擎不回调 onStart」那段）。
+     * 乐观的另一面是：如果引擎既不回调 `onStart` 也不回调 `onDone`/`onError`
+     * （静默失败、引擎进程被杀、厂商 ROM 的 TTS 服务被冻结），`speaking` 会永久为 true。
+     *
+     * 现在的代价只是「点麦克风先停播报」多一次无害的 stop；三期唤醒词上线后，
+     * 它会变成「桌宠永远认为自己在说话，唤醒词永久被拒」——用户只会看到
+     * 「喊了没反应」，而且重启才好。所以不是锦上添花，是给乐观置位补一条退路。
+     */
+    @Volatile
+    private var watchdog: Runnable? = null
+
+    /**
+     * 被别的应用抢走音频焦点时停止播报。
+     *
+     * 只处理**丢失**，不处理 `LOSS_TRANSIENT_CAN_DUCK`：朗读本来就不该压过导航播报，
+     * 但「导航说一句」就掐掉整段回答也不合适。让引擎自己混音是更小的恶。
+     */
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> stop()
+        }
+    }
+
+    /**
+     * 焦点请求。`GAIN_TRANSIENT_MAY_DUCK` 而不是 `GAIN_TRANSIENT`：
+     * 用户在听音乐时问一句，把音乐压下去、答完恢复，比直接掐掉音乐礼貌。
+     *
+     * 输出用途声明为 `USAGE_ASSISTANT`：让系统的「语音助手正在说话」判定生效，
+     * 部分 ROM 会据此降低其他 App 的音量，这是免费的体验提升。
+     */
+    private val focusRequest: AudioFocusRequest by lazy {
+        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener(focusListener, mainHandler)
+            .build()
+    }
+
     /**
      * 当前这一句的 utteranceId。
      *
@@ -92,6 +153,7 @@ class TextSpeaker(context: Context) {
             if (utteranceId != null && utteranceId == currentUtteranceId) {
                 currentUtteranceId = null
                 _speaking.value = false
+                finishUtterance()
             }
         }
 
@@ -100,6 +162,7 @@ class TextSpeaker(context: Context) {
             if (utteranceId == null || utteranceId == currentUtteranceId) {
                 currentUtteranceId = null
                 _speaking.value = false
+                finishUtterance()
             }
         }
 
@@ -107,8 +170,59 @@ class TextSpeaker(context: Context) {
             if (utteranceId == null || utteranceId == currentUtteranceId) {
                 currentUtteranceId = null
                 _speaking.value = false
+                finishUtterance()
             }
         }
+    }
+
+    /** 一句结束的公共收尾：撤兜底、放焦点。回调线程是引擎的，Handler 操作本身线程安全。 */
+    private fun finishUtterance() {
+        disarmWatchdog()
+        abandonFocus()
+    }
+
+    private fun requestFocus() {
+        val am = audioManager ?: return
+        if (focusHeld) return
+        val r = runCatching { am.requestAudioFocus(focusRequest) }
+            .getOrDefault(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
+        // 拿不到焦点也继续念：用户明确要求朗读，静默取消比「和音乐混在一起」更糟。
+        // 这里只决定「要不要在结束时放弃焦点」，不决定「要不要出声」。
+        focusHeld = r == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    private fun abandonFocus() {
+        if (!focusHeld) return
+        focusHeld = false
+        runCatching { audioManager?.abandonAudioFocusRequest(focusRequest) }
+    }
+
+    /**
+     * 按文本长度估一个「正常该念完」的时刻，到点仍在念就判死。
+     *
+     * 中文 4.5 字/秒是系统 TTS 默认语速的实测中位数；英文按字符算偏保守（念得完）。
+     * 多留 10 秒不是怕算不准，是怕用户中途暂停/接电话后恢复——那属于正常播放。
+     */
+    private fun armWatchdog(id: String, text: String, rate: Float) {
+        disarmWatchdog()
+        val estimate = (text.length / 4.5f * 1_000f / rate.coerceIn(0.5f, 2.0f)).toLong()
+        val delayMs = estimate.coerceAtLeast(15_000L) + 10_000L
+        val r = Runnable {
+            // id 已变 = 后面又念了新的一句，这条兜底过期了，不能误杀新句
+            if (currentUtteranceId == id) {
+                currentUtteranceId = null
+                _speaking.value = false
+                runCatching { tts?.stop() }
+                abandonFocus()
+            }
+        }
+        watchdog = r
+        mainHandler.postDelayed(r, delayMs)
+    }
+
+    private fun disarmWatchdog() {
+        watchdog?.let { mainHandler.removeCallbacks(it) }
+        watchdog = null
     }
 
     /**
@@ -142,17 +256,21 @@ class TextSpeaker(context: Context) {
             // 先登记 id 再出声：onStart 可能比 speak() 返回还早（引擎线程），
             // 顺序反了会让第一句的 onStart 因 id 不匹配而被丢掉。
             currentUtteranceId = utteranceId
+            requestFocus()
+            val spoken = text.take(MAX_SPEAK_CHARS)
             val code = runCatching {
-                engine.speak(text.take(MAX_SPEAK_CHARS), TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+                engine.speak(spoken, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
             }.getOrDefault(TextToSpeech.ERROR)
             if (code == TextToSpeech.ERROR) {
                 currentUtteranceId = null
                 _speaking.value = false
+                abandonFocus()
                 Result.failure(IllegalStateException("TTS 播放失败（引擎返回 ERROR）"))
             } else {
                 // 乐观置 true：部分引擎不回调 onStart（尤其讯飞/小爱系），
                 // 只靠回调会让 speaking 永远停在 false，仲裁器就不知道有人在说话。
                 _speaking.value = true
+                armWatchdog(utteranceId, spoken, rate)
                 Result.success(Unit)
             }
         }
@@ -164,17 +282,21 @@ class TextSpeaker(context: Context) {
      * 不等引擎回调——用户点「停」的那一瞬间，麦克风就该可以用了。
      */
     fun stop() {
+        disarmWatchdog()
         runCatching { tts?.stop() }
         currentUtteranceId = null
         _speaking.value = false
+        abandonFocus()
     }
 
-    /** 停止并释放引擎（ViewModel onCleared 调用）。 */
+    /** 停止并释放引擎（[AudioGraph.reset] 调用）。 */
     fun shutdown() {
+        disarmWatchdog()
         runCatching {
             tts?.stop()
             tts?.shutdown()
         }
+        abandonFocus()
         tts = null
         ready = false
         initDeferred = null

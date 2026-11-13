@@ -122,7 +122,15 @@
 # 判定口径没变：新增的是**排版分支**，没有新增业务判断；真要复核，看的是
 # "有没有新函数"而不是文件总行数——这轮新增的函数只有 Editorial.kt 里的
 # 六个排版原语（独立文件，398 行，见 app/src/main/java/com/beichen/polaris/ui/Editorial.kt）。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3625
+# 2026-11-13 上调（ChatViewModel +16）：音频层进程化 + 打断提示瞬时化。
+# 桌宠（docs/specs/desktop-pet-spec-v1.md）活在 Service 里、没有 Activity，必须与主界面
+# 共用同一个 TTS 引擎与 MicClaim；原来是 ViewModel 私有实例，桌宠一上线就是两个引擎
+# （叠音）、两个仲裁器（互相看不见「谁占着麦克风」）。增量只有三处：
+#   ① 取单例（净 -1 行，两个 import 合一个）；② onCleared 不再释放进程级引擎；
+#   ③ 打断提示改瞬时（showInterruptNotice + 常量，11 行）——原来它复用「恢复提示」
+#      的横幅，用户得手动点「知道了」，而这条提示本该像 toast 一样自己走。
+# +16 里 9 行是注释。真正的新逻辑只有「5 秒后若内容没被覆盖就清空」一条。
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3641
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3186
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1532

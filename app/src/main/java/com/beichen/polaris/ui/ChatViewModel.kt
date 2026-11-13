@@ -135,8 +135,7 @@ import com.beichen.polaris.skill.market.MarketSource
 import com.beichen.polaris.skill.market.MarketUiItem
 import com.beichen.polaris.skill.checkCapabilityGate
 import com.beichen.polaris.memory.MemoryItem
-import com.beichen.polaris.audio.TextSpeaker
-import com.beichen.polaris.audio.VoiceArbiter
+import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.core.voice.Activity
 import com.beichen.polaris.core.voice.AudioLease
 import com.beichen.polaris.core.voice.ClaimResult
@@ -223,6 +222,7 @@ import com.beichen.polaris.tools.registerAppControlTools
 import com.beichen.polaris.tools.terminalShellCommandRunner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -407,6 +407,20 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 用户点「知道了」后关闭恢复提示。 */
     override fun dismissInterruptedNotice() {
         _interruptedNotice.value = null
+    }
+
+    /**
+     * 打断类提示是**瞬时**的：写完自动撤回，不用用户点「知道了」。
+     *
+     * 与恢复提示共用 [interruptedNotice] 是安全的：恢复提示只在冷启动 reconcile 时写，
+     * 那一刻不可能有在跑的回合。清之前比对内容，防止定时器误删期间写入的恢复提示。
+     */
+    private fun showInterruptNotice(text: String) {
+        _interruptedNotice.value = text
+        viewModelScope.launch {
+            delay(INTERRUPT_NOTICE_MS)
+            if (_interruptedNotice.value == text) _interruptedNotice.value = null
+        }
     }
 
     /**
@@ -605,18 +619,15 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** L9 记忆库：跨会话长期记忆，持久化到 filesDir/memory/memory.json。 */
     private val memoryStore = MemoryStore(File(app.filesDir, "memory"))
 
-    /** 系统 TTS（W-16）；onCleared 释放引擎。 */
-    private val speaker = TextSpeaker(app)
+    /** 系统 TTS（W-16）。进程级单例，见 [AudioGraph]——桌宠要共用同一个引擎。 */
+    private val speaker = AudioGraph.speaker(app)
 
     /**
-     * 声音仲裁器：麦克风与扬声器只能有一个持有者。
-     *
-     * 它知道「谁在占着」，所以播报与录音不会同时进行——这是「播报中点麦克风会录到
-     * 自己声音」那个缺陷的根治位置。它也负责探测别的应用是否在录音（API 29+）。
+     * 声音仲裁器：麦克风与扬声器只能有一个持有者，这个位置根治了「播报中点麦克风
+     * 会录到自己声音」。2026-11-13 改为进程级共享：它的不变量是进程级的，而当时
+     * 只在 ViewModel 内唯一——桌宠一上线就是两个仲裁器，互相看不见。
      */
-    private val voiceArbiter = VoiceArbiter(app, speaker, viewModelScope) {
-        AgentLogger.i("Voice", it)
-    }
+    private val voiceArbiter = AudioGraph.arbiter(app)
 
     /** 当前语音输入持有的麦克风租约（null = 没在录）。 */
     private var captureLease: AudioLease? = null
@@ -1095,10 +1106,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      */
     override fun onCleared() {
         runCatching { terminalPool.releaseAllAsync() }
-        // 声音仲裁器先关：它会停播报、注销录音探测，再释放 TTS 引擎
-        runCatching { voiceArbiter.close() }
-        // W-16：释放 TTS 引擎（不释放会一直占着音频焦点）
-        runCatching { speaker.shutdown() }
+        // 音频层**不在这里释放**：它是进程级的（[AudioGraph]），引擎要留给后台回合与桌宠。
+        // 这一页只交还自己持有的东西——麦克风租约，以及由本页发起的播报。
+        runCatching { endVoiceCapture() }
+        runCatching { voiceArbiter.stopSpeech() }
         // W-25：唤醒挂起中的提问/计划，避免 deferred 悬着（协程随 ViewModel 取消）
         runCatching { AskUserBroker.cancel() }
         runCatching { PlanBroker.cancel() }
@@ -2448,6 +2459,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         const val INTERRUPT_WAIT_MS = 4_000L
 
         /**
+         * 打断提示停留时长：要盖过 [INTERRUPT_WAIT_MS]，用户才看得见「刚才为什么断了」。
+         */
+        const val INTERRUPT_NOTICE_MS = 5_000L
+
+        /**
          * W-46：喂给模型的历史最多回看多少轮。
          *
          * 只是**构造阶段的粗暴上限**，真正的体积控制交给 `ContextBudget`（按 token 预算整段丢）。
@@ -2627,11 +2643,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                         if (!ok) {
                             // 超时说明旧回合连取消都不响应。此时开始新一轮会造成两轮重叠，
                             // 宁可让用户再点一次——这是可控的失败。
-                            _interruptedNotice.value = "上一轮还在收尾，请稍后再发一次"
+                            showInterruptNotice("上一轮还在收尾，请稍后再发一次")
                             return@launch
                         }
                         voiceArbiter.stopSpeech()
-                        if (decision.notice.isNotBlank()) _interruptedNotice.value = decision.notice
+                        if (decision.notice.isNotBlank()) showInterruptNotice(decision.notice)
                         // 递归：此刻 isRunning 已为 false（join 保证 finish 已执行），走正常路径。
                         // 重新读 input.value 是有意的——用户在这几秒里改了字，发改后的。
                         send()
@@ -2640,7 +2656,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 }
 
                 is InterruptDecision.Reject -> {
-                    _interruptedNotice.value = decision.message
+                    showInterruptNotice(decision.message)
                     return
                 }
 

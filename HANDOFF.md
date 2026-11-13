@@ -112,7 +112,8 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
 
 改动  AndroidManifest.xml                 注册 service（foregroundServiceType=specialUse）
       app/ui/SettingsScreen.kt            总开关 + 悬浮窗权限引导
-复用  audio/TextSpeaker.kt                直接 new，不用改
+复用  audio/AudioGraph.kt                 取进程级 TTS（`speaker(ctx)`）；**不要 new TextSpeaker**，
+                                       否则桌宠与主界面各有一个引擎，叠音且仲裁失效
       core/agent/RealAgentLoop.kt         直接实例化
       core/AppScope.kt                    [io] 上下文
 ```
@@ -188,7 +189,29 @@ Ensure that you have a dependency on the Kotlin standard library`——看起来
 exec java -cp "$CP" "$MAIN" -kotlin-home "$BASE" "$@"
 ```
 
-### 5.4 推送
+配套：`$BASE/lib/` 下还要有 `kotlin-compiler.jar` 的运行期依赖（trove4j、annotations），
+以及各 runner 按固定文件名找的 `kotlinx-serialization-json-jvm.jar`、
+`kotlinx-serialization-core-jvm.jar`、`kotlinx-serialization-compiler-plugin.jar`。
+缺插件的症状是 `plugin classpath entry points to a non-existent location: `（冒号后为空）——
+看起来像语法错误，其实是 `-Xplugin=""`。
+
+还有一处容易配错：**插件必须与编译器同一种打包**。`kotlin-compiler.jar`（非 embeddable）
+配非 embeddable 的插件；`kotlin-compiler-embeddable.jar` 配 embeddable 插件。混用会得到
+`NoSuchMethodError: KtClassLikeInfo.getScopeAnchor()`，栈里全在序列化插件内部，与业务无关。
+最省事的做法是**缓存与 `$KC_HOME` 全部用 embeddable**——那样两处解析到的是同一个 jar，
+不存在混配的可能。
+
+### 5.4 坑三：`/usr/bin/awk` 是断链
+
+症状：`r03` / `title-owner` / `runall` 在同一轮里一起红，日志写「ChatScreen 结构变了，
+断言失效」「找不到 maybeGenerateTitle 函数体」——看起来像代码被改坏了。
+
+根因：`/usr/bin/awk -> /etc/alternatives/awk`，而目标不存在（`mawk` 装了但 alternatives
+没建链）。这些断言用 `awk '/pattern/,/^}/'` 截取代码块，awk 一失败就截出空串。
+
+修法：`ln -sf /usr/bin/mawk /usr/bin/awk`。
+
+### 5.5 推送
 
 - 直连 `github.com:443` 时通时断，**单次 200 不代表大对象能传完**。判据要看三层（解析 / 单请求 / 实际传输），
   细节见 [`docs/ops/沙箱网络与GitHub通道说明.md`](docs/ops/沙箱网络与GitHub通道说明.md)。

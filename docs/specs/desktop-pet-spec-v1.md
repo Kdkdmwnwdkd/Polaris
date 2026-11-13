@@ -24,7 +24,7 @@
 | 悬浮窗权限 | 已声明，**无实现** | `AndroidManifest.xml:31` `SYSTEM_ALERT_WINDOW` |
 | 录音权限 | 已声明 | `AndroidManifest.xml:19` `RECORD_AUDIO` |
 | 麦克风前台服务类型 | 已声明 | `AndroidManifest.xml:16` `FOREGROUND_SERVICE_MICROPHONE` |
-| 语音合成（说话） | 可用于生产 | `app/audio/TextSpeaker.kt`（中文语种、语速、8s 初始化超时、引擎缺失明确报错） |
+| 语音合成（说话） | 可用于生产，**进程级** | `app/audio/TextSpeaker.kt`（中文语种、语速、8s 初始化超时、引擎缺失明确报错）；经 `AudioGraph.speaker(ctx)` 取，不要自己 new |
 | 语音输入（听话） | **只有系统弹窗方案** | `ChatScreen.kt:264` 起的 `RecognizerIntent` + `SpeechLogic` |
 | Agent 核心 | 可脱离 Activity 驱动 | `core/agent/RealAgentLoop.kt:138`，先例见 `SubAgentRunner.kt:97` |
 | Agent 主动说话 | 已是注册工具 | `app/tools/SpeakTool.kt` |
@@ -74,7 +74,7 @@
 
 ### 2.3 桌宠对话不能复用 `ChatViewModel`
 
-那个类 3522 行、绑 Activity 生命周期、20 个 Contract。悬浮窗活在 Service 里，没有 Activity。
+那个类三千多行、绑 Activity 生命周期、20 个 Contract。悬浮窗活在 Service 里，没有 Activity。
 
 必须做一条**独立轻量会话通道**：`RealAgentLoop` 直接实例化 + 精简的结果流。
 `SubAgentRunner` 已经证明了这条路可行（它在无 UI 场景下就是这么起 loop 的）。
@@ -173,7 +173,9 @@
   core/agent/AgentRunService.kt          复用其前台服务模式，或让桌宠服务复用同一通知渠道
 
 复用
-  audio/TextSpeaker.kt                   直接 new，无需改动
+  audio/AudioGraph.kt                    取进程级 TTS / 仲裁器（`speaker(ctx)` / `arbiter(ctx)`）
+                                         **不要自己 new TextSpeaker**——那会得到第二个引擎，
+                                         与主界面叠音，且两个 MicClaim 互相看不见
   core/agent/RealAgentLoop.kt            直接实例化
   core/AppScope.kt                       [io] 上下文
 ```
