@@ -2,11 +2,8 @@ package com.beichen.polaris.pet
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,7 +46,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -63,7 +59,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -82,13 +77,13 @@ import kotlinx.coroutines.launch
  * ## 交互
  *
  * - 点形象：展开 / 收起气泡
- * - 按住形象：说话；松手识别并发送（二期）
+ * - 长按形象：开始听（说完自动发送；点气泡里的麦克风可提前结束）
  * - 拖形象：移动；松手由 [PetOverlayHost.snapToEdge] 吸附到左右边缘
  * - 气泡标题栏「⋯」：弹出「打开主应用 / 关闭桌面助手」
  *
- * **长按原来是菜单，二期被「按住说话」占了。** 这不是随意挪动：桌宠的主路径是语音，
- * 而「按住说话」在用户心智里就等于长按——把它放到二级菜单里（点开气泡→找到麦克风→
- * 按住）会让最常见的动作变成三步。菜单本身只有两项，挪进气泡反而更容易被发现。
+ * **长按原来是菜单，二期让给了语音。** 这不是随意挪动：桌宠的主路径是语音，
+ * 「长按说话」在用户心智里就是最自然的那个动作；把它放进二级菜单（点开气泡→找麦克风）
+ * 会让最常见的动作变成三步。菜单本身只有两项，挪进气泡反而更容易被发现。
  *
  * 收起气泡时故意不销毁输入框所在的 composition 之外的协程作用域——
  * [rememberCoroutineScope] 挂在 [PetPanel] 上，用户收起气泡不影响正在跑的那一轮。
@@ -115,8 +110,7 @@ fun PetPanel(
     onDrag: (Float, Float) -> Unit,
     onDragEnd: () -> Unit,
     onVoiceStart: () -> Unit,
-    onVoiceStop: () -> Unit,
-    onVoiceCancel: () -> Unit
+    onVoiceStop: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var messages by remember { mutableStateOf<List<PetBubble>>(emptyList()) }
@@ -174,8 +168,7 @@ fun PetPanel(
                     menuOpen = !menuOpen
                 },
                 onVoiceStart = onVoiceStart,
-                onVoiceStop = onVoiceStop,
-                onVoiceCancel = onVoiceCancel
+                onVoiceStop = onVoiceStop
             )
             Spacer(Modifier.height(6.dp))
         }
@@ -208,8 +201,7 @@ fun PetPanel(
             onDrag = onDrag,
             onDragEnd = onDragEnd,
             onVoiceStart = onVoiceStart,
-            onVoiceStop = onVoiceStop,
-            onVoiceCancel = onVoiceCancel
+            onVoiceStop = onVoiceStop
         )
     }
 }
@@ -229,8 +221,7 @@ private fun BubbleCard(
     onCollapse: () -> Unit,
     onMenu: () -> Unit,
     onVoiceStart: () -> Unit,
-    onVoiceStop: () -> Unit,
-    onVoiceCancel: () -> Unit
+    onVoiceStop: () -> Unit
 ) {
     val listState = rememberLazyListState()
     val focus = remember { FocusRequester() }
@@ -401,7 +392,7 @@ private fun BubbleCard(
                             if (input.isEmpty()) {
                                 Text(
                                     text = when {
-                                        capturing -> "松手就发"
+                                        capturing -> "在听，说完自动发"
                                         sending -> "等它说完…"
                                         else -> "说点什么…"
                                     },
@@ -414,25 +405,35 @@ private fun BubbleCard(
                     }
                 )
                 Spacer(Modifier.width(6.dp))
-                // 按住说话（与形象上的长按是同一条路）。正在请求时禁用：
-                // 二期不做「说话打断回答」，那是主应用的语义，桌宠的气泡只有一间房。
+                // 麦克风：点一下开始听，再点一下结束。**不是**「按住」。
+                //
+                // 为什么不做按住：语音识别自带静音判定（引擎认为说完 → onResults），
+                // 由它决定「什么时候说完了」比手指按住更准——句子中间的停顿不会被切掉。
+                // 而且「按住」需要一个抬手事件，而 Compose 的 AwaitPointerEventScope 是
+                // `@RestrictsSuspension` 的，拿不到（这一版第一稿就死在 CI 上）。
+                //
+                // 正在请求回答时禁用：二期不做「说话打断回答」，桌宠的气泡只有一间房。
+                val recording = voiceState is PetVoiceState.Arming ||
+                    voiceState is PetVoiceState.Listening
+                val micEnabled = !sending && voiceState !is PetVoiceState.Transcribing
                 Box(
                     modifier = Modifier
                         .size(26.dp)
                         .clip(CircleShape)
                         .background(
-                            if (capturing) scheme.primary else scheme.surfaceVariant.copy(alpha = 0.95f)
+                            if (recording) scheme.primary else scheme.surfaceVariant.copy(alpha = 0.95f)
                         )
-                        .then(
-                            if (sending) Modifier
-                            else Modifier.holdToTalk(onVoiceStart, onVoiceStop, onVoiceCancel)
-                        ),
+                        .pointerInput(micEnabled, recording) {
+                            if (micEnabled) {
+                                detectTapGestures { if (recording) onVoiceStop() else onVoiceStart() }
+                            }
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Mic,
-                        contentDescription = "按住说话",
-                        tint = if (capturing) scheme.onPrimary else scheme.onSurfaceVariant,
+                        contentDescription = if (recording) "结束说话" else "语音输入",
+                        tint = if (recording) scheme.onPrimary else scheme.onSurfaceVariant,
                         modifier = Modifier.size(15.dp)
                     )
                 }
@@ -548,8 +549,7 @@ private fun PetBody(
     onDrag: (Float, Float) -> Unit,
     onDragEnd: () -> Unit,
     onVoiceStart: () -> Unit,
-    onVoiceStop: () -> Unit,
-    onVoiceCancel: () -> Unit
+    onVoiceStop: () -> Unit
 ) {
     val scheme = MaterialTheme.colorScheme
     val listening = voiceState is PetVoiceState.Arming || voiceState is PetVoiceState.Listening
@@ -619,16 +619,24 @@ private fun PetBody(
     Canvas(
         modifier = Modifier
             .size(sizeDp.dp)
-            .pointerInput(Unit) {
+            .pointerInput(thinking) {
                 detectTapGestures(
                     onTap = { onClick() },
-                    // 长按已被「按住说话」占用。这里给空实现不是占位：
-                    // detectTapGestures **没有** onLongPress 时，长按后抬手会补发一次 onTap，
-                    // 结果是「按住说完话，顺手把气泡收起来」。空实现只负责吃掉那一次 tap。
-                    onLongPress = {}
+                    // 长按 = 开始听。
+                    //
+                    // **没有「松手结束」**：Compose 的 `AwaitPointerEventScope` 标注了
+                    // `@RestrictsSuspension`，在里面拿不到抬手事件，也不能调 `coroutineScope`
+                    // 起计时器（第一版就是这么写的，CI 两处报
+                    // "Restricted suspending functions can only invoke ..."）。
+                    //
+                    // 但这反而更对：语音识别自带静音判定（说完 → onResults），
+                    // 由它决定结束时机比手指按住更符合说话节奏——句中的停顿不会被切掉。
+                    // 想提前结束就点气泡里的麦克风（toggle）。
+                    //
+                    // `thinking` 时不响应：正在等回答，二期不做「说话打断回答」。
+                    onLongPress = { if (!thinking) onVoiceStart() }
                 )
             }
-            .holdToTalkIfIdle(thinking, onVoiceStart, onVoiceStop, onVoiceCancel)
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDrag = { change, amount ->
@@ -726,70 +734,3 @@ private fun PetBody(
         }
     }
 }
-
-/**
- * 「按住说话」判定阈值。
- *
- * 这个数字同时承担两件事：区分「点一下」与「按住」，以及决定「说第一个字前要等多久」。
- * 太小（<250ms）会把单击展开误判成录音，用户点一下桌宠就听到自己半句话被发出去；
- * 太大（>600ms）会让每次说话都有明显迟滞感。
- *
- * 400ms 与 Android 系统长按阈值（500ms）接近但不相等——语音比长按菜单更常用，
- * 值得快 100ms。
- */
-private const val HOLD_MS = 400L
-
-/**
- * 按住说话。形象与气泡里的麦克风按钮共用这一份实现。
- *
- * 为什么不用 `detectTapGestures(onLongPress = ...)`：那个回调**没有抬手事件**。
- * 「按住开始、松手结束」这个语义必须自己等 up，否则松手后状态永远停在 Listening，
- * 只有下一个 20 秒硬超时能救。
- *
- * 取消路径有两条，都必须处理：
- *  - 抬手 → [onStop]，请引擎出最终结果；
- *  - 被其他手势吃掉（拖动桌宠）→ `waitForUpOrCancellation()` 返回 null → [onCancel]，
- *    丢弃已录内容。用户拖桌宠说明他不想说了，把拖动前那半句话发出去更奇怪。
- */
-private fun Modifier.holdToTalk(
-    onStart: () -> Unit,
-    onStop: () -> Unit,
-    onCancel: () -> Unit
-): Modifier = this.pointerInput(Unit) {
-    awaitEachGesture {
-        awaitFirstDown(requireUnconsumed = false)
-        var holding = false
-        var up: PointerInputChange? = null
-        // coroutineScope 而不是 withTimeoutOrNull：需要「计时器」与「等抬手」赛跑，
-        // 且计时器要能在抬手时被取消。withTimeoutOrNull 只能超时、不能提前取消主流程。
-        coroutineScope {
-            val timer = launch {
-                delay(HOLD_MS)
-                holding = true
-                // 必须吞异常：`pointerInput` 的协程一旦抛出，这个手势处理器会**永久失效**
-                // ——桌宠从此点不动、拖不动，而屏幕上没有任何错误提示。相比之下
-                // 「这一次没录上」是可控的失败，下一次按还能用。
-                runCatching { onStart() }
-            }
-            up = waitForUpOrCancellation()
-            timer.cancel()
-        }
-        if (holding) {
-            runCatching { if (up != null) onStop() else onCancel() }
-        }
-    }
-}
-
-/**
- * [holdToTalk] 的「正忙就不响应」版本。
- *
- * 为什么忙碌时要整条拆掉而不是在 onStart 里判断：留着它，用户按住 400ms 会看到天线
- * 加速、形象发亮（那是「在听」的视觉），结果什么都没录——比没反应更让人困惑。
- * 拆掉之后，忙碌时按下去是纯粹的「没反应」，而形象本来就在快速闪烁，语义是一致的。
- */
-private fun Modifier.holdToTalkIfIdle(
-    busy: Boolean,
-    onStart: () -> Unit,
-    onStop: () -> Unit,
-    onCancel: () -> Unit
-): Modifier = if (busy) this else holdToTalk(onStart, onStop, onCancel)

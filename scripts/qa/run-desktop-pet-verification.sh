@@ -157,7 +157,7 @@ say ""
 # ---------------------------------------------------------------- D 工具边界
 say "[D] 工具边界（无审批 ⇒ 只能只读）"
 
-allowed="CalculatorTool WebSearchTool ReadFileTool MemorySearchTool SpeakTool"
+allowed="CalculatorTool WebSearchTool ReadFileTool MemorySearchTool"
 registered=$(grep -oE 'register\([A-Za-z]+Tool\(' "$SESSION" | sed 's/register(//; s/($//' | sort -u)
 if [ -z "$registered" ]; then
   bad "D1 没解析到任何 register(...) —— 桌宠拿不到任何工具"
@@ -228,16 +228,33 @@ say ""
 # ---------------------------------------------------------------- F 单点复用
 say "[F] 复用既有单点"
 
-if grep -q 'AudioGraph.speaker(context).speak' "$OVERLAY"; then
-  good "F1 朗读走 AudioGraph.speaker（进程级唯一引擎）"
+# 必须是 arbiter，不是 speaker。
+#
+# 第一版写的是 `AudioGraph.speaker(context).speak(...)`，守卫也跟着断言了那一行——
+# 等于把错误固化成了「正确行为」。它漏掉的正是仲裁：播报不登记 Speak 租约，
+# 用户此时说话，`beginCapture` 拿得到麦克风但 `revoked` 不触发，
+# 于是「朗读停不下来 + 录音录进自己念的内容」。
+if grep -q 'AudioGraph.arbiter(context).speak' "$OVERLAY"; then
+  good "F1 朗读走 AudioGraph.arbiter（引擎唯一 + 播报登记占位）"
 else
-  bad "F1 朗读没有走 AudioGraph —— 会得到第二个 TTS 引擎，与主界面叠音"
+  bad "F1 朗读没有走仲裁器 —— 播报不占位，语音输入时会录进自己的声音"
 fi
 
-if grep -q 'AudioGraph.arbiter(appContext)' "$SESSION"; then
-  good "F2 speak 工具拿到的是进程级仲裁器（播报与录音互斥才成立）"
+if grep -qE 'AudioGraph\.speaker\([^)]*\)\.speak' "$OVERLAY" "$SESSION" 2>/dev/null; then
+  bad "F1b 直接调了 speaker.speak —— 必须经 arbiter.speak 才有互斥"
 else
-  bad "F2 SpeakTool 没有接 AudioGraph.arbiter"
+  good "F1b 没有绕过仲裁器直接调引擎"
+fi
+
+# 桌宠不挂 SpeakTool：回答的朗读统一由 PetOverlayHost 在每轮结束后做（经仲裁器）。
+# 挂上它，模型主动调用一次就会把同一段话念两遍——而屏幕上只是「念了两遍」，
+# 没有任何报错，是最难发现的那类缺陷。
+# 排除注释行：类注释里正好解释「为什么没有 SpeakTool」，那是文档不是代码。
+if grep -n 'SpeakTool' "$SESSION" 2>/dev/null \
+    | grep -qvE '^[0-9]+:[[:space:]]*(\*|//)'; then
+  bad "F2 桌宠注册了 SpeakTool —— 回答会被念两遍（onReply 已经念过一次）"
+else
+  good "F2 没有 SpeakTool：朗读只有 onReply 一个出口"
 fi
 
 if grep -q 'new TextSpeaker' "$OVERLAY" "$SESSION" "$SERVICE" 2>/dev/null; then

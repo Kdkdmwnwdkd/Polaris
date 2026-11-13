@@ -40,7 +40,7 @@ sealed interface PetVoiceState {
     /** 正在收声。[partial] 是引擎给的实时文本，可能为空（多数引擎前几百毫秒不给）。 */
     data class Listening(val partial: String) : PetVoiceState
 
-    /** 松手了，等最终结果。这段时间用户会盯着屏幕，必须有反馈。 */
+    /** 已经结束录音，等引擎出最终结果。这段时间用户会盯着屏幕，必须有反馈。 */
     data object Transcribing : PetVoiceState
 }
 
@@ -99,7 +99,7 @@ class PetVoiceInput(
     /** 本次会话是否还活着。所有异步回调先查它，避免迟到的回调改动新会话的状态。 */
     private var active = false
 
-    /** 已经松手、正在等最终结果。用于忽略松手之后才到的 partial。 */
+    /** 已经结束、正在等最终结果。用于忽略结束之后才到的 partial。 */
     private var finishing = false
 
     /**
@@ -115,9 +115,9 @@ class PetVoiceInput(
     }
 
     /**
-     * 松手后的结果等待上限。
+     * 主动结束后的结果等待上限。
      *
-     * 松手 → 引擎上传/解码 → 出结果，正常 300–1500ms。5 秒还没回来说明引擎侧没响应，
+     * 结束 → 引擎上传/解码 → 出结果，正常 300–1500ms。5 秒还没回来说明引擎侧没响应，
      * 只能当作没听清。这段时间的 UI 是 [PetVoiceState.Transcribing]，用户不会以为卡死。
      */
     private val resultTimeout = Runnable {
@@ -231,7 +231,12 @@ class PetVoiceInput(
         return true
     }
 
-    /** 松手：请引擎尽快给结果。不会立刻释放麦克风——那要等 [onResults] / [onError]。 */
+    /**
+     * 结束录音：请引擎尽快给结果。不会立刻释放麦克风——那要等 [onResults] / [onError]。
+     *
+     * 正常路径下**不会**被调用：识别引擎自带静音判定，说完它会自己走 [onResults]。
+     * 这个方法给的是「用户点麦克风提前结束」——比如他说完了但引擎还在等更多内容。
+     */
     fun stop() {
         if (!active || finishing) return
         finishing = true

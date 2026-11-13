@@ -110,10 +110,10 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
 新增  app/.../pet/PetState.kt             开关意图 + 运行态（AppGraph 第 26 条）
       app/.../pet/PetOverlayService.kt    前台服务 + WindowManager（TYPE_APPLICATION_OVERLAY）
       app/.../pet/PetOverlay.kt           ComposeView + 手工挂三个 owner + 拖动吸附
-      app/.../pet/PetPanel.kt             形象（Canvas 自绘，无素材）+ 气泡 + 输入 + 按住说话
+      app/.../pet/PetPanel.kt             形象（Canvas 自绘，无素材）+ 气泡 + 输入 + 语音入口
       app/.../pet/PetAgentSession.kt      独立轻量会话（最小只读工具表）
       app/.../pet/PetVoice.kt             语音输入（SpeechRecognizer 直连 + 仲裁 + 超时）
-      scripts/qa/run-desktop-pet-verification.sh   37 条守卫（A–H 八段）
+      scripts/qa/run-desktop-pet-verification.sh   38 条守卫（A–H 八段）
 
 改动  AndroidManifest.xml                 注册 service（foregroundServiceType=specialUse）
       app/ui/SettingsScreen.kt            「桌面助手」组：总开关 + 悬浮窗/麦克风引导 + 未运行重试
@@ -144,9 +144,15 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
 
 ### 3.6 二期语音（2026-11-14 落地）
 
-**手势变了**：长按形象从「弹菜单」改成「按住说话」，菜单挪到气泡标题栏的「⋯」。
-真机清单 P11-7 已同步改口。理由见 spec §11.3——「按住说话」就是长按，把它放进
-二级菜单会让主路径变成三步。
+**手势变了**：长按形象从「弹菜单」改成「开始听」，菜单挪到气泡标题栏的「⋯」。
+真机清单 P11-7 已同步改口。理由见 spec §11.3——「长按说话」是最自然的那个动作，
+放进二级菜单会让主路径变成三步。
+
+**没有「松手结束」**：说完由引擎的静音判定收尾，句子中间的停顿不会被切断；
+想提前结束就点气泡里的麦克风（toggle）。第一版写成「按住说话、松手结束」，
+被 CI 拦下——Compose 的 `AwaitPointerEventScope` 是 `@RestrictsSuspension` 的，
+`awaitEachGesture` 里不能调 `coroutineScope`/`launch`/`delay`，也就起不了计时器、
+拿不到抬手事件。这一条值得记住，它看起来完全能编译。
 
 **四个必须知道的约束**（都在 `PetVoice.kt` 的类注释里）：
 

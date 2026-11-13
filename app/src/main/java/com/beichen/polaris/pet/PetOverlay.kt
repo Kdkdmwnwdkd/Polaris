@@ -177,8 +177,7 @@ class PetOverlayHost(
                         onDrag = ::moveBy,
                         onDragEnd = ::snapToEdge,
                         onVoiceStart = { voice?.start() },
-                        onVoiceStop = { voice?.stop() },
-                        onVoiceCancel = { voice?.cancel() }
+                        onVoiceStop = { voice?.stop() }
                     )
                 }
             }
@@ -340,11 +339,20 @@ class PetOverlayHost(
 
     private fun px(dp: Int): Int = (dp * context.resources.displayMetrics.density).toInt()
 
-    /** 朗读。失败不影响气泡——文字已经在屏幕上了。 */
+    /**
+     * 朗读。失败不影响气泡——文字已经在屏幕上了。
+     *
+     * **必须走仲裁器，不能直接 `speaker.speak`。** 直接调引擎看起来只是少一层，
+     * 实际会丢掉两件事：① 播报不会登记成 `AudioHolder.Speak`，仲裁器不知道有声音在响；
+     * ② 用户此时按住说话，`beginCapture` 拿得到麦克风，但 `revoked` 不会触发，
+     * 于是「朗读停不下来 + 录音把自己念的也录进去」同时发生。
+     *
+     * 这正是二期第一稿的样子：P12-5（朗读中被语音打断）必挂，而屏幕上什么都看不出来。
+     */
     fun speak(text: String) {
         if (text.isBlank()) return
         scope.launch {
-            runCatching { AudioGraph.speaker(context).speak(text) }
+            AudioGraph.arbiter(context).speak(text)
                 .onFailure { AgentLogger.w(TAG, "桌宠朗读失败：${it.message}") }
         }
     }

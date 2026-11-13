@@ -1,7 +1,6 @@
 package com.beichen.polaris.pet
 
 import android.content.Context
-import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.AssistantMessage
 import com.beichen.polaris.core.ChatMessage
@@ -17,7 +16,6 @@ import com.beichen.polaris.memory.MemoryStore
 import com.beichen.polaris.skill.ModelConfig
 import com.beichen.polaris.tools.CalculatorTool
 import com.beichen.polaris.tools.ReadFileTool
-import com.beichen.polaris.tools.SpeakTool
 import com.beichen.polaris.tools.WebSearchTool
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -41,8 +39,12 @@ import java.util.Locale
  *
  * ## 工具集为什么这么小
  *
- * `ChatViewModel` 里有 45 个内联 `register(...)`，没有可复用的工厂。桌宠一期只接
- * **只读、无副作用**的五个工具：算数、联网搜索、读工作区、查记忆、朗读。
+ * `ChatViewModel` 里有 45 个内联 `register(...)`，没有可复用的工厂。桌宠只接
+ * **只读、无副作用**的四个工具：算数、联网搜索、读工作区、查记忆。
+ *
+ * 没有 `SpeakTool`：桌宠的「说」只有一个出口——[PetOverlayHost.speak]（每轮回答结束后
+ * 朗读）。再挂一个 speak 工具，模型一旦主动调用，同一段话就会被念两遍。
+ * 这和「音频单一持有者」是同一个原则：同一件事只留一个出口。
  *
  * 这条边界不只是「省事」，它是**审批缺失的补偿**：桌宠没有界面弹审批卡片，
  * [RealAgentLoop] 的 `approval` 传 null（等于关闭审批）。一旦这里出现写文件、
@@ -94,7 +96,6 @@ class PetAgentSession(context: Context) {
             register(WebSearchTool())
             register(ReadFileTool(WorkspaceStore.dir(appContext)))
             register(MemorySearchTool(MemoryStore(File(appContext.filesDir, "memory"))))
-            register(SpeakTool(AudioGraph.arbiter(appContext)))
         }
     }
 
@@ -220,7 +221,8 @@ class PetAgentSession(context: Context) {
         - 不要用 Markdown（列表符号、表格、代码块）——朗读出来是噪音。
         - 不确定就直说，不要编。
 
-        你能用这些工具：算数、联网搜索、读工作区文件、查长期记忆、朗读。
+        你能用这些工具：算数、联网搜索、读工作区文件、查长期记忆。
+        你的回答会被自动朗读，不需要你去调什么朗读工具。
         没有写文件、没有执行命令、不能操作其他 App。用户要你做这类事时，
         直接说这边做不到，建议回主应用里做。
     """.trimIndent()
