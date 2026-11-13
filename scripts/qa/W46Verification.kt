@@ -73,7 +73,10 @@ fun main() {
         // （exposure.tools → exposure0.visible 就变过一次），断言要验的是"顺序"不是"拼写"。
         val sysIdx = loop.indexOf("messages.add(SystemMessage(buildSystemPrompt(")
         val priorIdx = loop.indexOf("messages.addAll(priorMessages)")
-        val userIdx = loop.indexOf("messages.add(UserMessage(userInput, images))", sysIdx)
+        // 只认到 `UserMessage(` 为止，不看实参：接缝①接入后实参从 `userInput, images`
+        // 变成了 `seamInput.text, seamInput.images`（可改写），改的是内容不是位置。
+        // 断言的对象是「当前输入排在历史之后」这个顺序，绑实参只会让接缝一动就假红。
+        val userIdx = loop.indexOf("messages.add(UserMessage(", priorIdx)
         assertTrue("三处顺序缺失", sysIdx >= 0 && priorIdx > sysIdx && userIdx > priorIdx)
     }
 

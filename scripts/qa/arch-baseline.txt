@@ -125,7 +125,7 @@
 lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3588
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3153
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
-lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1503
+lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1532
 lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1535
 
 # 2026-11-13 上调（ChatScreen +5）：工具返回的图片改成采样解码。
@@ -133,3 +133,17 @@ lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1535
 # 就是 48MB 堆；现在统一走 AttachmentIo.decodeSampled(bytes, 1080)。
 # 新增的 5 行是常量 PREVIEW_MAX_EDGE_PX 与它上面那行说明——不是新逻辑，
 # 但「为什么是 1080」必须写在调用点旁边，否则后人会随手改成 -1（原始尺寸）。
+
+# 2026-11-13 上调（RealAgentLoop +29，1503 → 1532）：三个可改写接缝 + 工具守卫链。
+# 增量全部是**接线**，没有新增业务判断：
+#   ① 构造参数 seams（含 6 行说明「与 hooks 的分工」，这是最容易被后人合并回去的地方）；
+#   ② 用户消息接缝 3 行（取裁决 + 回落原文 + 填消息）；
+#   ③ Handled 短路分支 10 行（落盘 / 时间线 / 收尾 / 返回，一行都不能省，省哪行都会
+#      让这条回合在 UI 或 journal 里留下不一致的痕迹）；
+#   ④ 守卫调用 4 行（含「拒绝走同一条收尾路径」的说明——这句话不写，后人就会
+#      改成 if (denied != null) return，工具卡片永久停在「执行中」）；
+#   ⑤ 助手消息通知 3 行。
+# 语义实现本身一行都没进这个文件：分发在 AgentSeams.kt（199 行）、
+# 守卫链在 ToolGuard.kt（约 150 行）、拒绝落地在 SeamDeny.kt（39 行），
+# 三者都可独立编译、有各自的行为断言。这里只留「在正确的位置调用一次」。
+# 再压缩只能删注释，而删掉的那几句正是「为什么不能那么写」的理由。

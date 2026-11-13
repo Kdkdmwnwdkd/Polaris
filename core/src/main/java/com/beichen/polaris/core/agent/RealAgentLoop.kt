@@ -199,6 +199,14 @@ class RealAgentLoop(
     private val attemptOut: AttemptOutputTracker = AttemptOutputTracker(), // R-09：已上屏字符数
     private val hooks: Hooks = NoopHooks,
     /**
+     * 三个可改写接缝（用户消息改写 / 工具守卫 / 助手消息观测），见 [AgentSeams]。
+     *
+     * 与 [hooks] 的分工：Hooks 是**只读四时机**，本参数是可改写与可拒绝的三个点。
+     * 默认 [AgentSeams.NONE] 时三个分发方法都在首行返回，行为与改造前逐字节一致
+     * （harness 与子代理不传，走这条路）。
+     */
+    private val seams: AgentSeams = AgentSeams.NONE,
+    /**
      * R5：回合结构化事件观察者（null = 关闭）。
      *
      * 与 [hooks] / [onEvent] 的分工见 [TurnEvent] 的类注释：Hooks 面向执行器观测，
@@ -533,8 +541,11 @@ class RealAgentLoop(
         // 才有所指。priorMessages 只用于**构造请求**，返回值不含它们（调用方按返回值落盘，
         // 若把历史一并返回会被重复写入会话）。裁剪统一交给 buildRequestMessages → ContextBudget。
         messages.addAll(priorMessages)
+        // 接缝①：用户消息（waterfall，可改写 / 可短路）。空装配时首行返回原文。
+        val seamDecision = seams.applyUserMessage(UserTurnInput(userInput, images))
+        val seamInput = (seamDecision as? UserMessageDecision.Proceed)?.input ?: UserTurnInput(userInput, images)
         // 功能四（P0-2）：用户手动附带的图片随首条用户消息一起发
-        messages.add(UserMessage(userInput, images))
+        messages.add(UserMessage(seamInput.text, seamInput.images))
         // W-49：本轮输入在 messages 里的下标。解图（pruneImages）必须按它锚定——
         // 多轮会话里「首条 UserMessage」是历史最老的那条且不带图，把它当锚点等于没保护，
         // 反例见 ContextBudget.pruneImages 的 KDoc。
@@ -545,9 +556,20 @@ class RealAgentLoop(
         fun turnResult(): List<ChatMessage> = messages.drop(priorMessages.size)
         checkpoint?.invoke(messages)
 
+        // 接缝①短路：中间件已就地答复，不进循环。没有工具调用、没有副作用，
+        // 因此也不留下「未闭合回合」——它本来就不需要恢复。
+        if (seamDecision is UserMessageDecision.Handled) {
+            messages.add(AssistantMessage(seamDecision.reply))
+            checkpoint?.invoke(messages)
+            clock.turnStarted(seamInput.text.length, exposure0.visible.size)
+            hooks.beforeStop()
+            status.set("inline_reply")
+            return turnResult()
+        }
+
         // R5：回合开始事件。工具面规模取「当前暴露面」的可见工具数——
         // 用户报「模型没按我说的做」时，第一眼要确认的就是「它到底看得见哪些工具」。
-        clock.turnStarted(userInput.length, exposure0.visible.size)
+        clock.turnStarted(seamInput.text.length, exposure0.visible.size)
         // 截断提示每回合最多报一次：多步循环里同一原因会反复出现，刷屏反而让人忽略。
         var truncatedNotified = false
 
@@ -650,6 +672,9 @@ class RealAgentLoop(
                 onEvent?.invoke(AgentEvent.OutputTruncated(resp.finishReason))
             }
             checkpoint?.invoke(messages)
+            // 接缝②：助手消息观测（parallel，只读）。放在落盘之后——先保证历史完整，
+            // 再让桌宠/语音/埋点去看。监听器超时与异常都不影响本回合。
+            seams.notifyAssistant(resp)
 
             // LLM 不再请求工具调用 -> 给出最终回答，结束循环
             if (resp.toolCalls.isEmpty()) {
@@ -870,7 +895,11 @@ class RealAgentLoop(
         // callId（P5-1）：不带的话，同一步并行两个同名工具时配对只能靠猜
         clock.toolStarted(step, call.name, call.arguments.toString().take(120), call.id)
         val toolStart = System.currentTimeMillis()
-        val outcome = try {
+        // 接缝③：守卫链（bail，首个 Deny 即终止；null = 全链弃权放行）。
+        // 拒绝走**同一条**收尾路径（tool.end / settled / ToolFinished），UI 才能把卡片翻成终态；
+        // 单独 return 会让那张卡永远停在「执行中」。
+        val denied = seams.denyOutcomeOrNull(call, descriptor, step, scope)
+        val outcome = denied ?: try {
             val d = descriptor ?: ToolDescriptor(call.name, call.name, "{}")
             if (executor is BatchToolExecutor) {
                 executor.execute(call, d, duplicateInBatch)
