@@ -1,6 +1,7 @@
 # 交接简报：从这一页开始
 
-> 写于 **2026-11-13 20:30** ｜ 仓库 `Kdkdmwnwdkd/Polaris` ｜ `main` = `1939aa2`
+> 写于 **2026-11-13** ｜ 仓库 `Kdkdmwnwdkd/Polaris` ｜ **基线 = 本文档所在的那次提交**
+> （不要记 SHA：文档一经更新 SHA 就变。用 `git log -1 --format=%h` 看当前，用 §1 的命令判断它是否健康。）
 > 这份文档写给「接手的人或模型」，**不依赖任何聊天记录**。读完这一页就该能开工。
 
 ---
@@ -202,7 +203,7 @@ exec java -cp "$CP" "$MAIN" -kotlin-home "$BASE" "$@"
 
 | 事项 | 状态 | 怎么办 |
 |---|---|---|
-| CI 最后一次构建结果 | **未确认**（沙箱到 `api.github.com` 时通时断） | 打开仓库 Actions 页看 `1939aa2` |
+| CI 最后一次构建结果 | **未确认**（沙箱到 `api.github.com` 时通时断） | 打开仓库 Actions 页看最新一次构建（应覆盖 `a1e25e4` / `1939aa2`） |
 | 之前用过的 PAT | 待用户撤销 | 已从沙箱删除，仍需在 GitHub 设置里 revoke |
 | 桌宠形象 / 唤醒词 / 历史互通 | 待拍板 | 见 §3.5 |
 | 桌宠真机验证 | 未做 | 上线后在 `docs/ops/DEVICE-VERIFICATION-PENDING.md` 新增 P11 章节 |
