@@ -21,6 +21,7 @@
 |---|---|---|---|---|
 | DeepSeek Super-agent 原型 | deepseek-ai/dsh-superagent-prototype | 20005 | MIT | **架构层与运行层的纪律样板**：单写者表、角色化窄接口、持久副作用队列、并发槽抢占。见 [`superagent-架构层与运行层-2026-11-06.md`](superagent-架构层与运行层-2026-11-06.md) |
 | IRIDIS | WWRJ3321/IRIDIS | 95 | Apache-2.0 | 本地推理调度（按机型定线程/ctx、KV 复用），2026-11-05 参照谱系补入 |
+| DeepSeek Harness | deepseek-ai/deepseek-harness | 34k | MIT | **插件接缝与工具守卫链的教科书**：一切皆插件、五种事件分发、单调守卫。见 [`11-deepseek-harness-2026-11-13.md`](11-deepseek-harness-2026-11-13.md)。开发者预览，会破坏兼容 |
 
 ## 四层架构（自底向上，禁止反向依赖）
 
@@ -58,6 +59,8 @@
 | [07-build-pipeline.md](07-build-pipeline.md) | 构建交付链路（自有 CI 产品化） |
 | [08-competitor-architecture.md](08-competitor-architecture.md) | 五个同类应用的架构总剖析 |
 | [09-licenses.md](09-licenses.md) | 许可证决策记录（开源路线保障） |
+| [10-agent-mechanisms-2026-11-13.md](10-agent-mechanisms-2026-11-13.md) | **机制库**：语音唤醒/麦克风仲裁、桌宠三条渲染路线与自动 Live2D 流水线、打断仲裁、主动说话判据、插件接缝、工具守卫、SAS 配对、约束解码、记忆做梦、虚拟屏幕。14 个开源项目，7 个读过源码 |
+| [11-deepseek-harness-2026-11-13.md](11-deepseek-harness-2026-11-13.md) | DeepSeek Harness（`dsh`）拆解：Cordis 五概念、五种事件分发、工具执行流水线、轮次生命周期、59 包切分粒度 |
 
 ## 本目录与产品代码的关系
 
