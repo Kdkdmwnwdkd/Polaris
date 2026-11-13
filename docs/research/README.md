@@ -61,6 +61,7 @@
 | [09-licenses.md](09-licenses.md) | 许可证决策记录（开源路线保障） |
 | [10-agent-mechanisms-2026-11-13.md](10-agent-mechanisms-2026-11-13.md) | **机制库**：语音唤醒/麦克风仲裁、桌宠三条渲染路线与自动 Live2D 流水线、打断仲裁、主动说话判据、插件接缝、工具守卫、SAS 配对、约束解码、记忆做梦、虚拟屏幕。14 个开源项目，7 个读过源码 |
 | [11-deepseek-harness-2026-11-13.md](11-deepseek-harness-2026-11-13.md) | DeepSeek Harness（`dsh`）拆解：Cordis 五概念、五种事件分发、工具执行流水线、轮次生命周期、59 包切分粒度 |
+| [12-on-device-feasibility.md](12-on-device-feasibility.md) | **端上可行性**：按「断电脑可用」重新分类 16 个项目（端上自跑 / PC 侧控制 / 纯桌面）、B 类 star 最高的三个原因、端上六条硬约束、端上独有能力清单、功能可行性矩阵与六步路线 |
 
 ## 本目录与产品代码的关系
 
