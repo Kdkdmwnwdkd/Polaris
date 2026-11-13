@@ -10,7 +10,7 @@
 | **P7** 发布包不可调试 | ✅ **已在模拟器验完** | `run-as` 报 `not debuggable`，`flags` 无 `DEBUGGABLE`；CI 包 `aapt2` 也确认未声明该属性 |
 | **P8** 长命令不被 30 秒掐断 | ✅ **已在模拟器验完** | 90 秒命令退出码 0、`DONE_MARKER_90S`，整轮 126 秒 `completed`，无 `session_desynced` |
 | P9 技能沙箱 | 可不验 | 沙箱 fail-closed，最坏是脚本跑不起来；CI 的 R9-1/R9-2 已断言 |
-| **P10** 应用内更新 | 🟡 模拟器验到「安装确认页」 | 下载/校验/拉起安装器已验；最后一跳卡在模拟器 ABI（CI 包只带 arm64），真机同签名可覆盖安装 |
+| **P10** 应用内更新 | ✅ 真机已验（2026-11-13，710 → 711） | 应用内下载 → SHA-256 校验 → 系统安装器 → 覆盖升级，全程未跳浏览器 |
 | **P1–P3** 容器租约 | ❗需要 arm64 真机 | proot 在 x86 模拟器上无法让 musl 程序 `execve`，只能到「租约就绪」半步 |
 | **P4–P6** | 任何设备都能做 | 失败路径 / 诊断包 / 截断提示，不需要 arm64 |
 
@@ -265,13 +265,13 @@ for i in $(seq 1 90); do sleep 1; done; echo done
 
 ---
 
-## P10 应用内更新：下载不再跳浏览器
+## P10 应用内更新：下载不再跳浏览器　✅ 真机已验（2026-11-13）
 
 | | |
 |---|---|
-| 阻塞原因 | 最后一跳要真机：CI 包只带 `arm64-v8a`，x86_64 模拟器解压 native 库必失败（`res=-113`） |
+| 结论 | 已闭环。模拟器受 ABI 限制只验到安装确认页，真机走完最后一跳 |
 | 代码 | `core/update/ApkDownloader.kt`、`core/update/UpdateChecker.kt`、`app/update/UpdateInstaller.kt`、`ui/AboutScreen.kt` |
-| 服务器侧断言 | `scripts/qa/run-update-inapp-verification.sh`（23 条结构断言，CI 已跑） |
+| 服务器侧断言 | `scripts/qa/run-update-inapp-verification.sh`（28 条结构断言，CI 711 已跑） |
 
 **修前**：关于页「去下载」＝ `ACTION_VIEW` 打开浏览器。用户要自己等浏览器下载完、
 去文件管理器找包、再点安装；国内打开 github release 还常常是空白页。
@@ -279,8 +279,14 @@ for i in $(seq 1 90); do sleep 1; done; echo done
 改成 `app-release.apk` 并删除 debug 资产——点「更新」下到的是一张 404 页面。
 
 **现在的路径**：检查更新 → 「立即更新」→ 应用内流式下载（进度 / 速度 / 可取消）→
-校验（Content-Length、ZIP 魔数、包名、versionCode 严格相等）→ `cacheDir/updates/` →
+校验（Content-Length、ZIP 魔数、包名、versionCode 严格相等、SHA-256 与 Release digest 比对）→ `cacheDir/updates/` →
 FileProvider `content://` → 系统安装器。
+
+**真机已验（2026-11-13，710 → 711）**：
+手机上是 710，关于页点「检查更新」→「有新版本：构建 711（当前 710）」→「立即更新」→
+进度条走完 → 系统安装页 → 安装成功，版本号变为 `1.711`，原有对话与配置保留。
+全程没有跳浏览器。711 的包已带 SHA-256 校验（`0df454e4…`），下载时与 Release 接口的
+`digest` 逐字节比对，第三方镜像替换字节会被当场拒绝并换源。
 
 **模拟器已验（2026-11-12，x86_64 / API 30）**：
 1. 装 700 的包，关于页显示「当前构建号 700」；
@@ -290,7 +296,7 @@ FileProvider `content://` → 系统安装器。
 5. 最终 `App not installed`，logcat 原文：`Failed to extract native libraries, res=-113`
    —— 这是 CI 包只有 arm64 `.so`、模拟器是 x86_64 导致的，与下载/校验/安装链路无关。
 
-**真机怎么验（2 分钟）**：装 CI 的 release 包（`app-release.apk`）→ 关于页 →
+**真机验法（下次发版可照做，2 分钟）**：保持旧版本 → 关于页 →
 「检查更新」→ 出现「有新版本：构建 N+1」→「立即更新」→ 等进度条走完 →
 系统安装页点「安装」→ 装完 App 自动重启，关于页版本号变成 `1.N+1`，且原有数据还在。
 
