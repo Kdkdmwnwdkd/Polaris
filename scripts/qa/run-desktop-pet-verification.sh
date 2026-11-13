@@ -15,7 +15,8 @@
 #   D  工具边界   桌宠没有审批界面，一旦混进写工具就是「无审批 + 有副作用」
 #   E  窗口语义   收起态不缩到形象大小 → 透明矩形挡住底下应用的点击
 #   F  单点复用   自己 new TextSpeaker → 与主界面叠音（AudioGraph 的 KDoc 写了原因）
-#   G  常驻成本   一期不做语音，服务里出现 AudioRecord 就是范围失控
+#   G  范围控制   出现 AudioRecord 就是手搓录音（识别该交给系统服务）
+#   H  语音闭环   二期：不弹系统页、走仲裁、销毁引擎、有超时、错误可执行
 #
 # 退出码：0 通过 / 1 有违规。
 set -uo pipefail
@@ -35,6 +36,7 @@ STATE=app/src/main/java/com/beichen/polaris/pet/PetState.kt
 SESSION=app/src/main/java/com/beichen/polaris/pet/PetAgentSession.kt
 OVERLAY=app/src/main/java/com/beichen/polaris/pet/PetOverlay.kt
 PANEL=app/src/main/java/com/beichen/polaris/pet/PetPanel.kt
+VOICE=app/src/main/java/com/beichen/polaris/pet/PetVoice.kt
 SETTINGS=app/src/main/java/com/beichen/polaris/ui/SettingsScreen.kt
 GRAPH=app/src/main/java/com/beichen/polaris/AppGraph.kt
 APP=app/src/main/java/com/beichen/polaris/AgentKitApplication.kt
@@ -258,18 +260,102 @@ fi
 say ""
 
 # ---------------------------------------------------------------- G 范围控制
-say "[G] 一期范围（不做常驻麦克风）"
+say "[G] 范围控制"
 
-if grep -qE 'AudioRecord|RECORD_AUDIO' "$SERVICE" "$OVERLAY" "$SESSION" 2>/dev/null; then
-  bad "G1 一期骨架里出现了录音相关代码 —— 语音是二期，别把耗电风险提前引进来"
+# 二期把语音纳入了范围，但「语音输入」与「自己录音」是两件事：
+# 识别交给系统的 SpeechRecognizer，它内部处理了采样率、降噪、VAD、音频焦点。
+# 一旦这里出现 AudioRecord，说明有人开始手搓录音——那会带来一整条新的
+# 音频链路（缓冲、重采样、超时、静音判定），而它和识别服务的能力完全重复。
+if grep -qE '\bAudioRecord\b' "$SERVICE" "$OVERLAY" "$SESSION" "$VOICE" 2>/dev/null; then
+  bad "G1 出现了 AudioRecord —— 语音识别应走 SpeechRecognizer，不要自己开录音"
 else
-  good "G1 没有常驻录音（一期只有文字问答 + 朗读）"
+  good "G1 没有自己开 AudioRecord（识别交给系统服务）"
 fi
 
 if grep -q 'IMPORTANCE_MIN' "$SERVICE"; then
   good "G2 常驻通知走最低优先级渠道（不响、不亮、不打扰）"
 else
   bad "G2 常驻通知没有用 IMPORTANCE_MIN —— 用户会被一条常驻通知烦到"
+fi
+
+say ""
+
+# ---------------------------------------------------------------- H 语音闭环
+say "[H] 语音闭环（二期）"
+
+if [ ! -f "$VOICE" ]; then
+  bad "H0 缺少 PetVoice.kt —— 二期语音的全部逻辑都该在这里，不该散进 UI"
+else
+  good "H0 语音层独立成文件"
+
+  # H1 必须是 API 版。Activity 版（RecognizerIntent + StartActivityForResult）会全屏弹
+  # 系统识别页，那正是桌宠要避免的——「一直在桌面」的幻觉一次弹窗就碎了。
+  if grep -q 'createSpeechRecognizer' "$VOICE"; then
+    good "H1 走 SpeechRecognizer API（不弹系统识别页）"
+  else
+    bad "H1 没有用 createSpeechRecognizer —— 桌宠不能弹系统识别页"
+  fi
+
+  # H2 不许从这个文件里拉起任何 Activity。系统识别页一旦被 launch，用户就跳出悬浮窗了。
+  if grep -qE 'startActivity' "$VOICE"; then
+    bad "H2 PetVoice 里出现了 startActivity —— 语音路径绝不能把用户弹出悬浮窗"
+  else
+    good "H2 语音路径不启动任何 Activity"
+  fi
+
+  # H3 必须先请麦克风。不请就录 = 播报没停、录进自己的声音（一期修过的那个 bug）。
+  if grep -q 'beginCapture' "$VOICE" && grep -q 'endCapture' "$VOICE"; then
+    good "H3 录音前后都走声音仲裁（beginCapture / endCapture）"
+  else
+    bad "H3 没有走声音仲裁 —— 播报中点麦克风会把自己念的内容录进去"
+  fi
+
+  # H4 引擎必须销毁。不复用、不销毁都会让「第二次录音没有任何回调」。
+  if grep -q '\.destroy()' "$VOICE" && grep -q '\.cancel()' "$VOICE"; then
+    good "H4 每次会话结束都 cancel + destroy 引擎"
+  else
+    bad "H4 没有 destroy SpeechRecognizer —— 第二次录音会静默失败"
+  fi
+
+  # H5 必须有超时。引擎的静音判定各家不同，没有兜底会永久卡在「在听」。
+  if grep -q 'postDelayed' "$VOICE" && grep -q 'removeCallbacks' "$VOICE"; then
+    good "H5 有硬超时与结果超时兜底"
+  else
+    bad "H5 没有超时 —— 按下去不说话会让状态永久停在 Listening"
+  fi
+
+  # H6 错误码必须逐条映射。全塞进「未知错误」等于没处理：
+  # 用户看到「未知错误」只能再试一次，看到「没听到声音」才知道该大声点。
+  mapped=$(grep -c 'SpeechRecognizer.ERROR_' "$VOICE")
+  if [ "$mapped" -ge 8 ]; then
+    good "H6 错误码映射 $mapped 条（用户能据此知道该做什么）"
+  else
+    bad "H6 错误码只映射了 $mapped 条 —— 其余会落到「识别失败」这种不可执行的文案"
+  fi
+
+  # H7 权限必须查。Service 不能申请权限，只能查；不查就 start 会拿到
+  # ERROR_INSUFFICIENT_PERMISSIONS，用户看到的是一句不像原因的原因。
+  if grep -q 'RECORD_AUDIO' "$VOICE"; then
+    good "H7 录音前检查麦克风权限，并给出可执行的提示"
+  else
+    bad "H7 没有检查 RECORD_AUDIO —— Service 申请不了权限，必须先查再给引导"
+  fi
+fi
+
+# H8 引擎只能有一个创建点。散在 UI 里就会出现两个会话抢同一个麦克风，
+# 表现为「按住说话没反应」，而日志里只有一条 ERROR_RECOGNIZER_BUSY。
+if grep -qE 'createSpeechRecognizer' "$PANEL" "$OVERLAY" "$SERVICE" 2>/dev/null; then
+  bad "H8 桌宠 UI 里直接创建了 SpeechRecognizer —— 语音引擎只能由 PetVoice 持有"
+else
+  good "H8 语音引擎只有 PetVoice 一个创建点"
+fi
+
+# H9 识别结果必须走 PetPanel 的 send，不能自己拼一条消息。
+# 绕过 send 的表现是「语音发的消息不进对话、不朗读答案」。
+if grep -q 'voicePrompt' "$PANEL" && grep -q 'voicePrompt' "$OVERLAY"; then
+  good "H9 语音结果经 voicePrompt 回到 PetPanel 的统一发送路径"
+else
+  bad "H9 语音结果没有走统一发送路径 —— 会出现「发了但没回答」"
 fi
 
 say ""

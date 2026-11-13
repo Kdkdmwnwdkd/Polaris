@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.runtime.getValue
@@ -92,6 +94,36 @@ class PetOverlayHost(
     var expanded: Boolean by mutableStateOf(false)
         private set
 
+    /**
+     * 语音状态。
+     *
+     * 用 `mutableStateOf` 而不是 `StateFlow`：所有写入都在主线程（[PetVoiceInput] 的回调
+     * 由 `SpeechRecognizer` 保证在主线程），Compose 直接读就能观察，少一层 collect 和
+     * 一次 `collectAsState` 的生命周期绑定。
+     */
+    var voiceState: PetVoiceState by mutableStateOf(PetVoiceState.Idle)
+        private set
+
+    /** 一次性提示（没权限 / 没听清 / 麦克风被占）。[NOTICE_MS] 后自动清空。 */
+    var notice: String? by mutableStateOf(null)
+        private set
+
+    /**
+     * 语音识别出的待发送文本。
+     *
+     * 为什么要绕这一道：`send` 是 [PetPanel] 的内部闭包（它要改 messages / sending 这些
+     * 局部状态），宿主拿不到。所以识别结果先落到这里，由 PetPanel 用 `LaunchedEffect`
+     * 消费并回调 [consumeVoicePrompt] 清空——一次性事件的常见写法。
+     */
+    var voicePrompt: String? by mutableStateOf(null)
+        private set
+
+    private var voice: PetVoiceInput? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val clearNotice = Runnable { notice = null }
+
     fun show() {
         if (view != null) return
         // 主题是全局单例，Service 里没人替它读过盘。不 load 会拿到默认配色，
@@ -132,6 +164,10 @@ class PetOverlayHost(
                         bubbleWidth = BUBBLE_WIDTH_DP,
                         alignEnd = !snappedLeft,
                         ask = ask,
+                        voiceState = voiceState,
+                        notice = notice,
+                        voicePrompt = voicePrompt,
+                        onVoicePromptConsumed = ::consumeVoicePrompt,
                         onExpandedChange = ::applyExpanded,
                         onReply = onReply,
                         onClose = {
@@ -139,7 +175,10 @@ class PetOverlayHost(
                         },
                         onOpenApp = onOpenApp,
                         onDrag = ::moveBy,
-                        onDragEnd = ::snapToEdge
+                        onDragEnd = ::snapToEdge,
+                        onVoiceStart = { voice?.start() },
+                        onVoiceStop = { voice?.stop() },
+                        onVoiceCancel = { voice?.cancel() }
                     )
                 }
             }
@@ -153,16 +192,57 @@ class PetOverlayHost(
         }
         view = compose
         params = lp
+
+        // 语音引擎与窗口同生同灭。放在 addView 之后：加窗失败就没必要建它。
+        // 构造时不创建 SpeechRecognizer（只在 start() 里建），所以这一步是零成本的。
+        voice = PetVoiceInput(
+            context = context,
+            onState = { voiceState = it },
+            onText = { text ->
+                // 不在这里直接发：PetPanel 的 send 还管着消息列表、气泡滚动、朗读，
+                // 绕过去就会变成「语音发的消息不进历史」。
+                voicePrompt = text
+            },
+            onProblem = { message -> showNotice(message) }
+        )
+
         compose.post { snapToEdge() }
     }
 
     fun hide() {
+        mainHandler.removeCallbacks(clearNotice)
+        // 先停语音再拆窗口：录音中拆窗会让 SpeechRecognizer 的回调打到已销毁的 composition，
+        // 而麦克风要等 20 秒硬超时才释放——用户看到的是「桌宠没了，但麦克风还占着」。
+        voice?.destroy()
+        voice = null
+        voiceState = PetVoiceState.Idle
+        voicePrompt = null
+        notice = null
         scope.cancel()
         view?.let { v -> runCatching { windowManager.removeView(v) } }
         view = null
         params = null
         expanded = false
         owner.detach()
+    }
+
+    /** PetPanel 消费完一条语音结果后调用。 */
+    fun consumeVoicePrompt() {
+        voicePrompt = null
+    }
+
+    /**
+     * 显示一条瞬时提示，并把气泡展开——收起态下气泡不渲染，用户什么都看不到。
+     *
+     * 重复调用时重置计时：连续两次「没听清」，第二次的提示应该完整停留 5 秒，
+     * 而不是被第一次的定时器提前清掉（清之前比对内容的那套在这里不需要，
+     * 因为 removeCallbacks 已经保证只有一个 pending 的清除任务）。
+     */
+    private fun showNotice(text: String) {
+        notice = text
+        applyExpanded(true)
+        mainHandler.removeCallbacks(clearNotice)
+        mainHandler.postDelayed(clearNotice, NOTICE_MS)
     }
 
     /**
@@ -273,6 +353,15 @@ class PetOverlayHost(
         const val TAG = "PetOverlay"
         const val PET_SIZE_DP = 84
         const val BUBBLE_WIDTH_DP = 296
+
+        /**
+         * 提示停留时长。
+         *
+         * 5 秒：足够读完「没听清，再说一次试试」（11 个字），又不至于让上一次的错误
+         * 挂在用户已经开始的新一轮上面。与 `ChatViewModel.INTERRUPT_NOTICE_MS` 取同一个值，
+         * 两处提示在用户眼里的节奏应该一致。
+         */
+        const val NOTICE_MS = 5_000L
     }
 }
 

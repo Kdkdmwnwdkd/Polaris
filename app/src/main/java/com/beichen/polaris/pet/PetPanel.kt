@@ -2,8 +2,11 @@ package com.beichen.polaris.pet
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +26,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -43,6 +49,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -56,6 +63,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -74,8 +82,13 @@ import kotlinx.coroutines.launch
  * ## 交互
  *
  * - 点形象：展开 / 收起气泡
+ * - 按住形象：说话；松手识别并发送（二期）
  * - 拖形象：移动；松手由 [PetOverlayHost.snapToEdge] 吸附到左右边缘
- * - 长按：弹出「打开主应用 / 关闭桌面助手」
+ * - 气泡标题栏「⋯」：弹出「打开主应用 / 关闭桌面助手」
+ *
+ * **长按原来是菜单，二期被「按住说话」占了。** 这不是随意挪动：桌宠的主路径是语音，
+ * 而「按住说话」在用户心智里就等于长按——把它放到二级菜单里（点开气泡→找到麦克风→
+ * 按住）会让最常见的动作变成三步。菜单本身只有两项，挪进气泡反而更容易被发现。
  *
  * 收起气泡时故意不销毁输入框所在的 composition 之外的协程作用域——
  * [rememberCoroutineScope] 挂在 [PetPanel] 上，用户收起气泡不影响正在跑的那一轮。
@@ -88,12 +101,22 @@ fun PetPanel(
     /** true = 贴在屏幕右侧。形象跟着贴边方向排，展开时它才不会从边上「跳」到中间。 */
     alignEnd: Boolean,
     ask: suspend (String) -> PetReply,
+    /** 当前语音状态。收起态下 `Listening` 会让形象本身进入「在听」的样子。 */
+    voiceState: PetVoiceState,
+    /** 外部注入的瞬时提示（没权限 / 没听清 / 被占用）。5 秒后由宿主清空。 */
+    notice: String?,
+    /** 语音识别出的待发送文本。非空即发送，发完回调 [onVoicePromptConsumed]。 */
+    voicePrompt: String?,
+    onVoicePromptConsumed: () -> Unit,
     onExpandedChange: (Boolean) -> Unit,
     onClose: () -> Unit,
     onOpenApp: () -> Unit,
     onReply: (PetReply) -> Unit,
     onDrag: (Float, Float) -> Unit,
-    onDragEnd: () -> Unit
+    onDragEnd: () -> Unit,
+    onVoiceStart: () -> Unit,
+    onVoiceStop: () -> Unit,
+    onVoiceCancel: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var messages by remember { mutableStateOf<List<PetBubble>>(emptyList()) }
@@ -101,33 +124,58 @@ fun PetPanel(
     var sending by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
 
+    /**
+     * 发一轮。文字输入与语音走同一条路——语音识别成功后直接调这里，
+     * 不另写一套「识别完再发」，否则两条路的 loading / 错误 / 朗读行为会慢慢分叉。
+     */
+    val send: (String) -> Unit = { raw ->
+        val text = raw.trim()
+        if (text.isNotEmpty() && !sending) {
+            input = ""
+            messages = messages + PetBubble(text, mine = true)
+            sending = true
+            scope.launch {
+                val reply = ask(text)
+                sending = false
+                if (!reply.silent) {
+                    messages = messages + PetBubble(reply.text, mine = false, failed = reply.failed)
+                }
+                onReply(reply)
+            }
+        }
+    }
+
     Column(
         modifier = Modifier.width(if (expanded) bubbleWidth.dp else petSize.dp),
         horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start
     ) {
+        // 语音识别完成 → 走与打字完全相同的发送路径。
+        //
+        // 放置位置有讲究：`send` 要改 messages / sending 这些局部状态，只能写在 PetPanel 里。
+        // 顺序是「先发后清」——反过来会先触发一次重组（voicePrompt 变 null），
+        // LaunchedEffect 重启并取消当前协程，某些情况下会把还没跑到的 `send` 掐掉。
+        LaunchedEffect(voicePrompt) {
+            val text = voicePrompt ?: return@LaunchedEffect
+            send(text)
+            onVoicePromptConsumed()
+        }
+
         if (expanded) {
             BubbleCard(
                 messages = messages,
                 input = input,
                 onInputChange = { input = it },
                 sending = sending,
-                onSend = {
-                    val text = input.trim()
-                    if (text.isNotEmpty() && !sending) {
-                        input = ""
-                        messages = messages + PetBubble(text, mine = true)
-                        sending = true
-                        scope.launch {
-                            val reply = ask(text)
-                            sending = false
-                            if (!reply.silent) {
-                                messages = messages + PetBubble(reply.text, mine = false, failed = reply.failed)
-                            }
-                            onReply(reply)
-                        }
-                    }
+                notice = notice,
+                voiceState = voiceState,
+                onSend = { send(input) },
+                onCollapse = { onExpandedChange(false) },
+                onMenu = {
+                    menuOpen = !menuOpen
                 },
-                onCollapse = { onExpandedChange(false) }
+                onVoiceStart = onVoiceStart,
+                onVoiceStop = onVoiceStop,
+                onVoiceCancel = onVoiceCancel
             )
             Spacer(Modifier.height(6.dp))
         }
@@ -149,6 +197,7 @@ fun PetPanel(
         PetBody(
             sizeDp = petSize,
             thinking = sending,
+            voiceState = voiceState,
             onClick = {
                 if (menuOpen) {
                     menuOpen = false
@@ -156,9 +205,11 @@ fun PetPanel(
                     onExpandedChange(!expanded)
                 }
             },
-            onLongPress = { menuOpen = !menuOpen },
             onDrag = onDrag,
-            onDragEnd = onDragEnd
+            onDragEnd = onDragEnd,
+            onVoiceStart = onVoiceStart,
+            onVoiceStop = onVoiceStop,
+            onVoiceCancel = onVoiceCancel
         )
     }
 }
@@ -172,8 +223,14 @@ private fun BubbleCard(
     input: String,
     onInputChange: (String) -> Unit,
     sending: Boolean,
+    notice: String?,
+    voiceState: PetVoiceState,
     onSend: () -> Unit,
-    onCollapse: () -> Unit
+    onCollapse: () -> Unit,
+    onMenu: () -> Unit,
+    onVoiceStart: () -> Unit,
+    onVoiceStop: () -> Unit,
+    onVoiceCancel: () -> Unit
 ) {
     val listState = rememberLazyListState()
     val focus = remember { FocusRequester() }
@@ -182,6 +239,10 @@ private fun BubbleCard(
     // 展开时自动聚焦输入框：桌宠的主要用法是「点开就说」，
     // 还要用户再点一下输入框是多余的一步。延迟是因为窗口刚去掉
     // FLAG_NOT_FOCUSABLE，系统还没把焦点给到窗口，立刻 requestFocus 会落空。
+    //
+    // **只跑一次**（key 是 Unit）。二期加进来一个反例：语音「没听清」会展开气泡提示，
+    // 若监听 voiceState 就会在那时抢焦点、弹出键盘——用户刚说完话，屏幕上突然冒出
+    // 一半屏键盘。想打字的人自己点输入框，一步不多。
     LaunchedEffect(Unit) {
         delay(160)
         runCatching { focus.requestFocus() }
@@ -213,13 +274,37 @@ private fun BubbleCard(
                     ),
                     color = scheme.primary
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "⋯",
+                        style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp),
+                        color = scheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .pointerInput(Unit) { detectTapGestures { onMenu() } }
+                            .padding(horizontal = 8.dp)
+                    )
+                    Text(
+                        text = "收起",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        color = scheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.pointerInput(Unit) {
+                            detectTapGestures { onCollapse() }
+                        }
+                    )
+                }
+            }
+
+            // 瞬时提示（没权限 / 没听清 / 麦克风被占）。宿主 5 秒后清空，
+            // 但「没听清」这类提示用户可能正在读，所以不设自动消失的定时器在这里。
+            if (!notice.isNullOrBlank()) {
+                Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "收起",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                    color = scheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    modifier = Modifier.pointerInput(Unit) {
-                        detectTapGestures { onCollapse() }
-                    }
+                    text = notice,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 11.5.sp,
+                        lineHeight = 16.sp
+                    ),
+                    color = scheme.error
                 )
             }
 
@@ -245,13 +330,48 @@ private fun BubbleCard(
                 Spacer(Modifier.height(6.dp))
             }
 
-            if (sending) {
-                Text(
-                    text = "…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
-                Spacer(Modifier.height(4.dp))
+            // 一眼能看出「它现在在干什么」。三件事互斥，所以写成一条状态行，
+            // 不各占一行——气泡只有 296dp 宽，堆三行会把消息区挤没。
+            val capturing = voiceState is PetVoiceState.Arming ||
+                voiceState is PetVoiceState.Listening ||
+                voiceState is PetVoiceState.Transcribing
+            when {
+                voiceState is PetVoiceState.Arming -> {
+                    Text(
+                        text = "准备中…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
+                voiceState is PetVoiceState.Listening -> {
+                    // 有实时文本就显示它（用户能立刻看到「识别到了」），
+                    // 没有就显示省略号——部分引擎前几百毫秒什么都不给。
+                    Text(
+                        text = voiceState.partial.ifBlank { "在听…" },
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                        color = scheme.primary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
+                voiceState is PetVoiceState.Transcribing -> {
+                    Text(
+                        text = "识别中…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
+                sending -> {
+                    Text(
+                        text = "…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
             }
 
             Row(
@@ -280,7 +400,11 @@ private fun BubbleCard(
                         Box {
                             if (input.isEmpty()) {
                                 Text(
-                                    text = if (sending) "等它说完…" else "说点什么…",
+                                    text = when {
+                                        capturing -> "松手就发"
+                                        sending -> "等它说完…"
+                                        else -> "说点什么…"
+                                    },
                                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
                                     color = scheme.onSurfaceVariant.copy(alpha = 0.55f)
                                 )
@@ -289,7 +413,30 @@ private fun BubbleCard(
                         }
                     }
                 )
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(6.dp))
+                // 按住说话（与形象上的长按是同一条路）。正在请求时禁用：
+                // 二期不做「说话打断回答」，那是主应用的语义，桌宠的气泡只有一间房。
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (capturing) scheme.primary else scheme.surfaceVariant.copy(alpha = 0.95f)
+                        )
+                        .then(
+                            if (sending) Modifier
+                            else Modifier.holdToTalk(onVoiceStart, onVoiceStop, onVoiceCancel)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Mic,
+                        contentDescription = "按住说话",
+                        tint = if (capturing) scheme.onPrimary else scheme.onSurfaceVariant,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
                 val canSend = input.isNotBlank() && !sending
                 Box(
                     modifier = Modifier
@@ -396,13 +543,17 @@ private fun MenuRow(text: String, color: Color, onClick: () -> Unit) {
 private fun PetBody(
     sizeDp: Int,
     thinking: Boolean,
+    voiceState: PetVoiceState,
     onClick: () -> Unit,
-    onLongPress: () -> Unit,
     onDrag: (Float, Float) -> Unit,
-    onDragEnd: () -> Unit
+    onDragEnd: () -> Unit,
+    onVoiceStart: () -> Unit,
+    onVoiceStop: () -> Unit,
+    onVoiceCancel: () -> Unit
 ) {
     val scheme = MaterialTheme.colorScheme
-    val body = scheme.primary
+    val listening = voiceState is PetVoiceState.Arming || voiceState is PetVoiceState.Listening
+    val body = if (listening) scheme.primary.copy(alpha = 0.92f) else scheme.primary
     val eye = scheme.onPrimary
     val glow = scheme.primary.copy(alpha = 0.22f)
 
@@ -435,14 +586,34 @@ private fun PetBody(
         label = "blink"
     )
 
+    // 天线：在听时最快（300ms 一个来回，接近人紧张时的呼吸），思考时次之，空闲时最慢。
+    // 这是「收起态下唯一能表达『它在听』的东西」——气泡没展开时用户看不到任何文字。
     val antenna by transition.animateFloat(
         initialValue = 0.35f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(if (thinking) 520 else 1800, easing = LinearEasing),
+            animation = tween(
+                when {
+                    listening -> 300
+                    thinking -> 520
+                    else -> 1800
+                },
+                easing = LinearEasing
+            ),
             repeatMode = RepeatMode.Reverse
         ),
         label = "antenna"
+    )
+
+    // 在听时从身体向外扩散的圈。只在录音期间绘制，空闲时是纯计算不画。
+    val ripple by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1100, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "ripple"
     )
 
     Canvas(
@@ -451,9 +622,13 @@ private fun PetBody(
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { onClick() },
-                    onLongPress = { onLongPress() }
+                    // 长按已被「按住说话」占用。这里给空实现不是占位：
+                    // detectTapGestures **没有** onLongPress 时，长按后抬手会补发一次 onTap，
+                    // 结果是「按住说完话，顺手把气泡收起来」。空实现只负责吃掉那一次 tap。
+                    onLongPress = {}
                 )
             }
+            .holdToTalkIfIdle(thinking, onVoiceStart, onVoiceStop, onVoiceCancel)
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDrag = { change, amount ->
@@ -468,6 +643,18 @@ private fun PetBody(
         val w = size.width
         val h = size.height
         val lift = bob * h * 0.03f
+
+        // 录音圈：先画，被身体盖住一半才好看（像从身体后面散出来的）
+        if (listening) {
+            val cx = w / 2f
+            val cy = h * 0.58f
+            val r = w * (0.36f + 0.22f * ripple)
+            drawCircle(
+                color = scheme.primary.copy(alpha = 0.28f * (1f - ripple)),
+                radius = r,
+                center = Offset(cx, cy)
+            )
+        }
 
         val bodyW = w * 0.76f
         val bodyH = h * 0.62f
@@ -539,3 +726,70 @@ private fun PetBody(
         }
     }
 }
+
+/**
+ * 「按住说话」判定阈值。
+ *
+ * 这个数字同时承担两件事：区分「点一下」与「按住」，以及决定「说第一个字前要等多久」。
+ * 太小（<250ms）会把单击展开误判成录音，用户点一下桌宠就听到自己半句话被发出去；
+ * 太大（>600ms）会让每次说话都有明显迟滞感。
+ *
+ * 400ms 与 Android 系统长按阈值（500ms）接近但不相等——语音比长按菜单更常用，
+ * 值得快 100ms。
+ */
+private const val HOLD_MS = 400L
+
+/**
+ * 按住说话。形象与气泡里的麦克风按钮共用这一份实现。
+ *
+ * 为什么不用 `detectTapGestures(onLongPress = ...)`：那个回调**没有抬手事件**。
+ * 「按住开始、松手结束」这个语义必须自己等 up，否则松手后状态永远停在 Listening，
+ * 只有下一个 20 秒硬超时能救。
+ *
+ * 取消路径有两条，都必须处理：
+ *  - 抬手 → [onStop]，请引擎出最终结果；
+ *  - 被其他手势吃掉（拖动桌宠）→ `waitForUpOrCancellation()` 返回 null → [onCancel]，
+ *    丢弃已录内容。用户拖桌宠说明他不想说了，把拖动前那半句话发出去更奇怪。
+ */
+private fun Modifier.holdToTalk(
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onCancel: () -> Unit
+): Modifier = this.pointerInput(Unit) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        var holding = false
+        var up: PointerInputChange? = null
+        // coroutineScope 而不是 withTimeoutOrNull：需要「计时器」与「等抬手」赛跑，
+        // 且计时器要能在抬手时被取消。withTimeoutOrNull 只能超时、不能提前取消主流程。
+        coroutineScope {
+            val timer = launch {
+                delay(HOLD_MS)
+                holding = true
+                // 必须吞异常：`pointerInput` 的协程一旦抛出，这个手势处理器会**永久失效**
+                // ——桌宠从此点不动、拖不动，而屏幕上没有任何错误提示。相比之下
+                // 「这一次没录上」是可控的失败，下一次按还能用。
+                runCatching { onStart() }
+            }
+            up = waitForUpOrCancellation()
+            timer.cancel()
+        }
+        if (holding) {
+            runCatching { if (up != null) onStop() else onCancel() }
+        }
+    }
+}
+
+/**
+ * [holdToTalk] 的「正忙就不响应」版本。
+ *
+ * 为什么忙碌时要整条拆掉而不是在 onStart 里判断：留着它，用户按住 400ms 会看到天线
+ * 加速、形象发亮（那是「在听」的视觉），结果什么都没录——比没反应更让人困惑。
+ * 拆掉之后，忙碌时按下去是纯粹的「没反应」，而形象本来就在快速闪烁，语义是一致的。
+ */
+private fun Modifier.holdToTalkIfIdle(
+    busy: Boolean,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onCancel: () -> Unit
+): Modifier = if (busy) this else holdToTalk(onStart, onStop, onCancel)

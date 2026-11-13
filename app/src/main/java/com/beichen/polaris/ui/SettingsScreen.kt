@@ -1,6 +1,7 @@
 package com.beichen.polaris.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -331,12 +332,47 @@ fun SettingsScreen(
             val petEnabled by PetState.enabled.collectAsStateWithLifecycle()
             val petRunning by PetState.running.collectAsStateWithLifecycle()
             var petHasOverlay by remember { mutableStateOf(PetState.canDrawOverlays(context)) }
+            var petHasMic by remember { mutableStateOf(hasRecordAudioPermission(context)) }
             var awaitingOverlayGrant by remember { mutableStateOf(false) }
             LaunchedEffect(Unit) { PetState.sync(context) }
+
+            // 桌面助手真正起来的路径只有这一条：两个权限都问过 → 起服务。
+            // 抽成 lambda 是因为它要从两个地方进入（主开关直接点、麦克风申请回调里）。
+            val startPet: () -> Unit = {
+                if (PetState.canDrawOverlays(context)) {
+                    PetState.start(context)
+                } else {
+                    awaitingOverlayGrant = true
+                    PetState.openOverlaySettings(context)
+                }
+            }
+
+            /**
+             * 麦克风权限。
+             *
+             * 二期语音的前提，但**不是桌宠的前提**——拒了照样能开，只是气泡里少一个
+             * 按住说话的按钮。所以回调里无论授予与否都继续把桌宠开起来，
+             * 而不是像通知权限那样「拒了就回滚开关」。
+             */
+            val micPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                petHasMic = granted || hasRecordAudioPermission(context)
+                if (!granted) {
+                    Toast.makeText(
+                        context,
+                        "没有麦克风权限，桌面助手只能用文字对话",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                startPet()
+            }
+
             // 从系统「显示在其他应用上层」页返回：权限是异步写 AppOps 的，
             // 必须在 onResume 复查，不能信跳转前的判断。
             LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
                 petHasOverlay = PetState.canDrawOverlays(context)
+                petHasMic = hasRecordAudioPermission(context)
                 if (awaitingOverlayGrant && petHasOverlay) {
                     awaitingOverlayGrant = false
                     PetState.start(context)
@@ -350,7 +386,7 @@ fun SettingsScreen(
                     icon = Icons.Outlined.SmartToy,
                     title = "显示桌面助手",
                     description = when {
-                        petEnabled && petRunning -> "已开启：退到桌面也还在"
+                        petEnabled && petRunning -> "已开启：退到桌面也还在，按住它说话"
                         petEnabled -> "已开启，但当前没有运行（可能被系统清理了）"
                         else -> "关闭：需要时从对话页正常使用"
                     },
@@ -360,11 +396,9 @@ fun SettingsScreen(
                             onCheckedChange = { want ->
                                 when {
                                     !want -> PetState.stop(context)
-                                    PetState.canDrawOverlays(context) -> PetState.start(context)
-                                    else -> {
-                                        awaitingOverlayGrant = true
-                                        PetState.openOverlaySettings(context)
-                                    }
+                                    !petHasMic -> micPermissionLauncher
+                                        .launch(Manifest.permission.RECORD_AUDIO)
+                                    else -> startPet()
                                 }
                             }
                         )
@@ -386,6 +420,18 @@ fun SettingsScreen(
                         title = "重新启动悬浮窗",
                         description = "开关是开的，但服务没在跑",
                         onClick = { PetState.ensureRunning(context) }
+                    )
+                }
+                // 只在「已开启但没授权」时出现：没开桌宠的人不需要看到这一条，
+                // 而开了却拒过权限的人需要一个补授权的入口（否则只能卸载重装）。
+                if (petEnabled && !petHasMic) {
+                    AkListItem(
+                        icon = null,
+                        title = "语音输入需要麦克风权限",
+                        description = "点这里申请；不授权也能用文字对话",
+                        onClick = {
+                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
                     )
                 }
             }
@@ -902,3 +948,14 @@ private fun formatIdle(ms: Long): String = when {
     ms < 3_600_000L -> "${ms / 60_000L} 分钟"
     else -> "${ms / 3_600_000L} 小时"
 }
+
+/**
+ * 录音权限是否已授予。
+ *
+ * 抽成函数是因为它要在三处用（`remember` 初值、`ON_RESUME` 复查、申请回调）。
+ * 三处各写一遍 `checkSelfPermission(...) == PERMISSION_GRANTED` 的话，
+ * 将来漏改一处就会出现「设置页显示有权限、实际申请不到」。
+ */
+private fun hasRecordAudioPermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+        PackageManager.PERMISSION_GRANTED

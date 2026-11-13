@@ -20,10 +20,11 @@
 | `a1e25e4` | 语音仲裁：麦克风占用（`MicClaim`）+ 打断裁决（`InterruptPolicy`） |
 | `1939aa2` | 修两处 Android API 在 SDK stub 下的编译差异（CI 用） |
 
-**当前状态**：全量 QA `PASS=103 SKIP=38 XFAIL=0 FAIL=0`，门禁 6/6 全过。
+**当前状态**：桌宠一、二期都已落地（11-13 悬浮窗骨架 / 11-14 语音闭环）。
+全量 QA 与门禁以 `scripts/qa/run-all.sh` 的当前输出为准。
 
-**下一步**：桌宠一期的**真机验证**（代码已落地，见 §3）。
-之后是二期语音输入（`SpeechRecognizer` 快路 + 本地回落），三期唤醒词仍建议不做。
+**下一步**：桌宠的**真机验证**——`docs/ops/DEVICE-VERIFICATION-PENDING.md` 的
+P11（悬浮窗 10 条）+ P12（语音 9 条）。代码层面二期已闭环，三期唤醒词仍建议不做。
 
 ---
 
@@ -82,11 +83,11 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
 
 ---
 
-## 3. 桌宠一期（已落地 2026-11-13，等真机验证）
+## 3. 桌宠（一期 11-13 骨架 / 二期 11-14 语音，等真机验证）
 
 **完整设计在 [`docs/specs/desktop-pet-spec-v1.md`](docs/specs/desktop-pet-spec-v1.md)，先读它，别重新设计。**
-下面的「开工顺序」保留原文（它解释代码为什么长这样）；实际实现清单见 §3.3 的表，
-做的时候发现的四个坑见 spec §10。
+「开工顺序」保留原文（它解释代码为什么长这样）；一期实现见 §3.3 表 + spec §10，
+二期见 §3.6 + spec §11。
 
 ### 3.1 目标与验收
 
@@ -109,19 +110,22 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
 新增  app/.../pet/PetState.kt             开关意图 + 运行态（AppGraph 第 26 条）
       app/.../pet/PetOverlayService.kt    前台服务 + WindowManager（TYPE_APPLICATION_OVERLAY）
       app/.../pet/PetOverlay.kt           ComposeView + 手工挂三个 owner + 拖动吸附
-      app/.../pet/PetPanel.kt             形象（Canvas 自绘，无素材）+ 气泡 + 输入
+      app/.../pet/PetPanel.kt             形象（Canvas 自绘，无素材）+ 气泡 + 输入 + 按住说话
       app/.../pet/PetAgentSession.kt      独立轻量会话（最小只读工具表）
-      scripts/qa/run-desktop-pet-verification.sh   27 条守卫
+      app/.../pet/PetVoice.kt             语音输入（SpeechRecognizer 直连 + 仲裁 + 超时）
+      scripts/qa/run-desktop-pet-verification.sh   37 条守卫（A–H 八段）
 
 改动  AndroidManifest.xml                 注册 service（foregroundServiceType=specialUse）
-      app/ui/SettingsScreen.kt            「桌面助手」组：总开关 + 权限引导 + 未运行重试
+      app/ui/SettingsScreen.kt            「桌面助手」组：总开关 + 悬浮窗/麦克风引导 + 未运行重试
       app/AgentKitApplication.kt          PetState.sync（只读盘，不启服务）
       app/MainActivity.kt                 onResume 补启动
       app/AppGraph.kt                     登记 PetState
-复用  audio/AudioGraph.kt                 取进程级 TTS（`speaker(ctx)`）；**不要 new TextSpeaker**，
-                                       否则桌宠与主界面各有一个引擎，叠音且仲裁失效
+复用  audio/AudioGraph.kt                 取进程级 TTS（`speaker(ctx)`）与仲裁器（`arbiter(ctx)`）；
+                                       **不要 new TextSpeaker**，否则桌宠与主界面各有一个引擎，
+                                       叠音且「唯一持有者」失效
       core/agent/RealAgentLoop.kt         直接实例化
       core/AppScope.kt                    [io] 上下文
+      core/text/SpeechLogic.kt            识别结果清洗（与对话页共用同一套规则）
 ```
 
 ### 3.4 三条必须知道的约束
@@ -137,6 +141,33 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
    只动那一个 Composable，窗口与状态层不用改。
 2. **唤醒词**：一期二期都**不做**。常驻麦克风约 1–3% 电量/小时，先证明有人用。
 3. **历史是否互通**：**不通**。桌宠定位「随手问一句」，历史只在内存里，进程死了就没。
+
+### 3.6 二期语音（2026-11-14 落地）
+
+**手势变了**：长按形象从「弹菜单」改成「按住说话」，菜单挪到气泡标题栏的「⋯」。
+真机清单 P11-7 已同步改口。理由见 spec §11.3——「按住说话」就是长按，把它放进
+二级菜单会让主路径变成三步。
+
+**四个必须知道的约束**（都在 `PetVoice.kt` 的类注释里）：
+
+1. **只能在主线程**。`createSpeechRecognizer` / `startListening` 都要求主线程，
+   否则抛 `RuntimeException: SpeechRecognizer should be used only from the main thread`。
+2. **每次新建、用完 destroy**。复用实例在部分 ROM 上会出现「第二次录音零回调」的静默失败，
+   代价远高于每次多花 300ms。
+3. **必须有超时**。引擎的静音判定厂商各异，`EXTRA_SPEECH_INPUT_*_SILENCE_LENGTH_MILLIS`
+   经常被忽略。现在是 20s 硬上限 + 5s 结果等待。
+4. **必须走仲裁**。`beginCapture` 成功即意味着播报已停——不要自己先调 `stopSpeech()`，
+   互斥是仲裁的结果，不是调用方的义务。
+
+**没有做 whisper**。原计划「快路失败回落 whisper.cpp（tiny 75 MB）」，实际没做：
+NDK 编译会让 24 分钟的 CI 翻倍，APK 从 35 MB 涨到 110 MB，而收益只覆盖「没有识别服务」
+和「无网络」两种场景。回落点留在 `PetVoiceInput.start()` 里 `isRecognitionAvailable` 那个分支上，
+将来要做只换那一处。
+
+**一个将来必踩的坑**：`targetSdk = 28` 时 Android 14 的「前台服务类型必须匹配能力」检查
+不生效，所以 `specialUse` 却录音不会崩。**一旦 targetSdk 提到 34**，必须改 manifest 的
+`specialUse|microphone` + 动态 type（无 `RECORD_AUDIO` 时不能带 microphone 位，
+否则抛 `SecurityException`）。完整写法见 spec §11.5。
 
 ---
 
