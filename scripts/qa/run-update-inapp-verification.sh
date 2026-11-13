@@ -7,7 +7,7 @@
 #   这里守的是「容易在后续重构中被悄悄改回去」的几处关键约定：
 #     · 下载地址必须指向 CI 真正产出的资产名（曾经写死 app-debug.apk，CI 换名后 404）
 #     · 主路径必须留在应用内（不允许又出现「点更新 → 跳浏览器」）
-#     · 校验三层不能少（长度 / ZIP 魔数 / 包名+版本号）
+#     · 校验四层不能少（长度 / ZIP 魔数 / 包名+版本号 / SHA-256 来源认证）
 #     · FileProvider 路径必须与下载落盘目录一致（漏登记 = 安装器打不开 content://）
 set -uo pipefail
 cd "$(dirname "$0")/../.."
@@ -61,6 +61,19 @@ grep -q 'code != expectedVersionCode' "$APK_DL" && good "校验包内 versionCod
   || bad "缺少 versionCode 校验（可能复用错版本的缓存）"
 grep -q 'MIN_APK_BYTES' "$APK_DL" && good "拦截明显不完整的极小文件" \
   || bad "缺少最小体积下限"
+
+# 前四层都是「内容自证」：包名和 versionCode 用 apktool 就能改，镜像照样能全过。
+# 只有 SHA-256 能证明「这份字节就是 CI 发的那份」。
+grep -q 'optString("digest")' "$CHECKER" && good "从 Release 接口解析资产 digest" \
+  || bad "没解析 digest，无法做来源认证"
+grep -q 'substringAfter("sha256:"' "$CHECKER" && good "digest 按 sha256: 前缀解析" \
+  || bad "digest 格式解析缺失"
+grep -q 'MessageDigest.getInstance("SHA-256")' "$APK_DL" && good "下载时流式计算 SHA-256（不二次读盘）" \
+  || bad "没有计算 SHA-256"
+grep -q 'equals(expectedSha256' "$APK_DL" && good "哈希不符则拒绝并换源" \
+  || bad "缺少哈希比对（下载内容可被镜像替换）"
+grep -q 'else listOf("")' "$APK_DL" && good "无 digest 时只允许直连源（不走第三方镜像）" \
+  || bad "无 digest 时仍会用镜像，供应链风险未关闭"
 
 echo "[4] 失败可恢复"
 grep -q 'MIRROR_PREFIXES' "$APK_DL" && grep -q '"https://ghfast.top/"' "$APK_DL" \

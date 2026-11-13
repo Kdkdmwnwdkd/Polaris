@@ -16,6 +16,14 @@ data class UpdateInfo(
     val assetName: String,
     /** 资产字节数；接口没给时为 0（进度条退化成不确定态）。 */
     val assetSize: Long,
+    /**
+     * 资产内容的 SHA-256（hex 小写，不带 `sha256:` 前缀）；接口没给时为空串。
+     *
+     * GitHub 从 2025 年起在 Release assets 里返回 `digest`。这是**唯一**能证明
+     * 「这份字节就是 CI 发的那份」的东西——包名和 versionCode 都是攻击者可写的，
+     * 加速镜像也完全可以改包后重算这两个值。为空时下载器只允许走直连源。
+     */
+    val assetSha256: String,
     /** 官方下载地址（不含加速前缀，由 [ApkDownloader] 决定走哪条链路）。 */
     val downloadUrl: String
 ) {
@@ -89,6 +97,7 @@ object UpdateChecker {
 
                 var assetName = DEFAULT_ASSET
                 var assetSize = 0L
+                var assetSha256 = ""
                 val assets = json.optJSONArray("assets")
                 for (i in 0 until (assets?.length() ?: 0)) {
                     val a = assets!!.optJSONObject(i) ?: continue
@@ -96,6 +105,15 @@ object UpdateChecker {
                     if (name.endsWith(".apk", ignoreCase = true)) {
                         assetName = name
                         assetSize = a.optLong("size", 0L)
+                        // 形如 "sha256:abcd..."；老 Release 或接口降级时可能没有这个键。
+                        assetSha256 = a.optString("digest")
+                            .substringAfter("sha256:", "")
+                            .trim()
+                            .lowercase()
+                        // 只认 64 位 hex，格式不对一律当「没有」，免得拿一个畸形串去比对。
+                        if (assetSha256.length != 64 || assetSha256.any { it !in "0123456789abcdef" }) {
+                            assetSha256 = ""
+                        }
                         break
                     }
                 }
@@ -104,6 +122,7 @@ object UpdateChecker {
                     currentCode = currentCode,
                     assetName = assetName,
                     assetSize = assetSize,
+                    assetSha256 = assetSha256,
                     downloadUrl = officialUrl(assetName)
                 )
             } finally {

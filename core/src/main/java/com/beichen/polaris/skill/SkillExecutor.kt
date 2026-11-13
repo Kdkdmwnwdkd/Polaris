@@ -54,6 +54,16 @@ interface JsEngine {
 private const val SCRIPT_TIMEOUT_MS = 10_000L
 
 /**
+ * 脚本内**单次工具调用**的上限。
+ *
+ * 为什么和 [SCRIPT_TIMEOUT_MS] 分开：脚本自身的计算几乎不耗时，时间都花在工具上。
+ * 外层 15s 只是「不再等脚本」，`runBlocking` 并不会因此停下——如果工具是
+ * `shell_run` 跑一条 20 分钟的命令，这条 Rhino 线程就会被占到底，且取消无效。
+ * 60s 足够覆盖「读一个大文件再算」的正常用法，又能挡住把线程占死的长命令。
+ */
+private const val SCRIPT_TOOL_TIMEOUT_MS = 60_000L
+
+/**
  * 外层 `withTimeoutOrNull` 在脚本截止之上多等的宽限（毫秒）。
  *
  * 内层指令看门狗负责精确中断；外层只兜「卡在桥调用里」——那种情况脚本没在执行指令，
@@ -399,7 +409,14 @@ class SkillRuntimeBridge(
             }
         }
         val call = ToolCall(nextCallId(name), name, obj)
-        return runBlocking { executeWithJournal(call, obj) }
+        return runBlocking {
+            withTimeoutOrNull(SCRIPT_TOOL_TIMEOUT_MS) { executeWithJournal(call, obj) }
+                ?: ToolResult.fail(
+                    code = "tool_timeout",
+                    message = "⛔ 脚本内调用 $name 超过 ${SCRIPT_TOOL_TIMEOUT_MS / 1000} 秒未返回，已放弃这次调用。",
+                    hint = "把耗时操作拆小；长命令请在主对话里用 shell_background，不要塞进技能脚本。"
+                )
+        }
     }
 
     /**

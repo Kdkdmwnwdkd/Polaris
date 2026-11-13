@@ -2149,6 +2149,9 @@ private fun AttachImageButton(enabled: Boolean, onClick: () -> Unit) {
     }
 }
 
+/** 预览图长边上限：约等于常见手机屏幕宽度，再大也显示不出来。 */
+private const val PREVIEW_MAX_EDGE_PX = 1080
+
 /**
  * 功能四（P0-1/P0-2）：把 data URL 解码成缩略图位图。
  *
@@ -2158,7 +2161,9 @@ private fun decodeDataUrl(dataUrl: String): Bitmap? {
     val comma = dataUrl.indexOf(',')
     if (!dataUrl.startsWith("data:") || comma < 0) return null
     val bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT)
-    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    // 采样解码：这张图只用于界面预览（fillMaxWidth ≈ 1080px），
+    // 按原始尺寸解一张 4000×3000 就是 48MB 堆，连续几张直接 OOM。
+    return AttachmentIo.decodeSampled(bytes, PREVIEW_MAX_EDGE_PX)
 }
 
 /** 停止按钮：触控 48dp / 视觉 40dp，error 底 + 24dp on-error 停止图标；运行时常驻可点。 */
@@ -2507,7 +2512,7 @@ private fun DataImage(dataUrl: String) {
                 val comma = dataUrl.indexOf(',')
                 if (comma < 0 || !dataUrl.startsWith("data:image")) return@runCatching null
                 val bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT)
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                AttachmentIo.decodeSampled(bytes, PREVIEW_MAX_EDGE_PX)?.asImageBitmap()
             }.getOrNull()
         }
     }

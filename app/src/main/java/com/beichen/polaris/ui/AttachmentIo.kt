@@ -73,8 +73,28 @@ internal object AttachmentIo {
         return cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
     }
 
-    /** 长边超过 [maxEdge] 等比缩小（采样解码之后仍可能偏大，这一步把它压到目标尺寸）。 */
-    fun scaleDown(bitmap: Bitmap, maxEdge: Int): Bitmap {
+    /**
+     * 字节数组版本的两阶段采样解码——给「工具返回的图片」用。
+     *
+     * 这条路径以前是裸的 `BitmapFactory.decodeByteArray(bytes, 0, bytes.size)`：
+     * 一张 4000×3000 的截图按 ARGB_8888 解出来是 48MB，而界面上 `fillMaxWidth()`
+     * 只需要约 1080px 宽。连续几张工具返回图就能把中端机打挂。
+     *
+     * 与 URI 版本分开是因为这里拿不到可重开的流，但**两遍解析字节数组**比解一张
+     * 几百 MB 的位图便宜得多：第一遍 `inJustDecodeBounds` 不分配像素内存。
+     */
+    fun decodeSampled(bytes: ByteArray, maxEdge: Int): Bitmap? {
+        if (bytes.isEmpty()) return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxEdge) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    }
+
+    /** 长边超过 [maxEdge] 等比缩小（采样解码之后仍可能偏大，这一步把它压到目标尺寸）。 */    fun scaleDown(bitmap: Bitmap, maxEdge: Int): Bitmap {
         val max = maxOf(bitmap.width, bitmap.height)
         if (max <= maxEdge) return bitmap
         val ratio = maxEdge.toFloat() / max

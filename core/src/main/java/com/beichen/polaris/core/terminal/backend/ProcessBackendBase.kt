@@ -154,6 +154,10 @@ abstract class ProcessBackendBase(
             // `reader.read()` 上——那是 Dispatchers.IO 的一条线程，泄漏在这里就是真占资源。
             // 关流让阻塞中的 read 立刻抛异常 → finally 里 channel.close() → reader 收工。
             runCatching { p.destroy() }
+            // 补一刀 SIGKILL：`destroy()` 只是 SIGTERM，忽略它的进程（ffmpeg、`trap '' TERM`
+            // 的脚本、python 紧循环）会留在后台占 CPU 与文件锁。此时会话已从池里摘除，
+            // 没有别的路径会再回收它，所以这里必须确保进程真的没了。
+            runCatching { p.destroyForcibly() }
             runCatching { p.outputStream.close() }
             runCatching { p.inputStream.close() }
             runCatching { p.errorStream?.close() }

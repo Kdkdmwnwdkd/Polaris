@@ -610,20 +610,22 @@ class TerminalSessionPool(
         if (exitCode == null) {
             // W-46：超时不能只是「本次失败」——旧实现把命令丢在会话里继续跑，下一个命令
             // 排到它后面执行，哨兵匹配到旧退出码，**静默返回错位结果**。
-            // 处置：先 Ctrl-C 尽力中断（PTY 上等于用户按停止），再标脏；300ms 后仍活着就
-            // 直接关掉后端并摘除会话——宁可让调用方重开，也不留一条状态未知的 shell。
+            //
+            // 处置分两步：先 Ctrl-C 尽力中断（PTY 上等于用户按停止）；300ms 后仍活着，
+            // 说明这条命令不响应 SIGINT（`trap '' INT`、ffmpeg、python 紧循环）。
+            // 此时不能只标脏了事——标脏只是「不再复用这条会话」，进程照样占着 CPU、
+            // 文件锁和内存，而会话已经从池里摘除，再没人会管它。
+            // 直接关后端：proot 走 killProcessGroup，本机走 destroy（+ SIGKILL 兜底）。
             runCatching { entry.backend.send("\u0003") }
             delay(300)
-            if (!entry.alive) {
-                releaseEntry(entry)
-            } else {
-                entry.desynced = true
-            }
+            runCatching { entry.backend.close() }
+            releaseEntry(entry)
             return ExecResult.failure(
                 code = "timeout",
-                message = "命令在 ${limit}ms 内未完成（会话「${entry.handle}」），已中断并标记该会话不可复用。",
+                message = "命令在 ${limit}ms 内未完成（会话「${entry.handle}」），" +
+                    "已中断并回收该会话。",
                 hint = "把命令拆小、补非交互参数（如 -y），或改装 shell_background 跑长命令；" +
-                    "继续操作前请用 shell_close 关闭该句柄，再不带 session 重新开辟。"
+                    "下次调用不要带 session，会重新开辟。"
             )
         }
 
@@ -712,9 +714,9 @@ class TerminalSessionPool(
         /**
          * W-46：输出边界已不可信（上一条命令超时被中断，哨兵可能永远等不到）。
          *
-         * 为什么要单独标：超时只是「本次判定失败」，但会话里的 shell 仍可能停在半条命令上。
-         * 若下一个 run 直接复用，新命令会排在旧命令之后执行、哨兵匹配到的是旧退出码——
-         * **返回结果与命令错位，而且是静默的**。标脏后由 [run] 显式拒绝，逼调用方重开会话。
+         * 当前超时路径已经直接回收会话（[execute] 里 close + 摘表），所以正常流程走不到
+         * 这里。保留这个标志是为了兼容「会话被外部标脏但还没摘除」的旧路径——例如后端
+         * 自己检测到流断裂。判据仍是：宁可让调用方重开，也不返回错位结果。
          */
         @Volatile
         var desynced: Boolean = false

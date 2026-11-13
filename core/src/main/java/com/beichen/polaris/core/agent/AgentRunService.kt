@@ -49,8 +49,11 @@ class AgentRunService : Service() {
      * 前台服务只保证「进程有通知、不被随手回收」，**不保证 CPU 不睡**。
      * 锁屏后 CPU 进入 suspend，流式响应和容器命令会被挂起，用户看到的是「任务卡住不动」。
      *
-     * 上限 15 分钟：够覆盖绝大多数 Agent 任务；万一某个任务卡死，
-     * 超时后系统自动回收，不会把电池耗干（`setReferenceCounted(false)` 保证只释放一次）。
+     * 上限 35 分钟：`RealAgentLoop.turnBudgetMs` 是 30 分钟，原来写 15 分钟——
+     * 后半个回合在锁屏状态下会被 CPU 休眠拖住，用户看到的是「任务突然变慢」
+     * 而不是「被杀」，比直接失败更难判断。多给 5 分钟收尾余量。
+     * 仍是有限时长：万一任务卡死，超时后系统自动回收，不会把电池耗干
+     * （`setReferenceCounted(false)` 保证只释放一次）。
      */
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -60,7 +63,7 @@ class AgentRunService : Service() {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Polaris:run").apply {
                 setReferenceCounted(false)
-                acquire(15 * 60 * 1000L)
+                acquire(35 * 60 * 1000L)
             }
         }.onFailure {
             // 拿不到锁不该让任务失败：最坏情况是锁屏后变慢，不是不能跑。

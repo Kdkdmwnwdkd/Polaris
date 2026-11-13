@@ -123,7 +123,13 @@
 # "有没有新函数"而不是文件总行数——这轮新增的函数只有 Editorial.kt 里的
 # 六个排版原语（独立文件，398 行，见 app/src/main/java/com/beichen/polaris/ui/Editorial.kt）。
 lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3588
-lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3148
+lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3153
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1503
 lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1535
+
+# 2026-11-13 上调（ChatScreen +5）：工具返回的图片改成采样解码。
+# decodeDataUrl / DataImage 原来直接 decodeByteArray 全尺寸解码，一张 4000×3000
+# 就是 48MB 堆；现在统一走 AttachmentIo.decodeSampled(bytes, 1080)。
+# 新增的 5 行是常量 PREVIEW_MAX_EDGE_PX 与它上面那行说明——不是新逻辑，
+# 但「为什么是 1080」必须写在调用点旁边，否则后人会随手改成 -1（原始尺寸）。

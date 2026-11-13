@@ -196,7 +196,13 @@ private sealed interface UpdateState {
     data object Idle : UpdateState
     data object Checking : UpdateState
     data object Latest : UpdateState
-    data class HasUpdate(val latest: Int, val size: Long, val assetName: String) : UpdateState
+    data class HasUpdate(
+        val latest: Int,
+        val size: Long,
+        val assetName: String,
+        /** Release 接口给的 SHA-256；空串表示接口没给，此时下载器只走直连。 */
+        val sha256: String
+    ) : UpdateState
     data class Downloading(val done: Long, val total: Long) : UpdateState
     data class Ready(val apk: DownloadedApk) : UpdateState
     data class NeedPermission(val apk: DownloadedApk) : UpdateState
@@ -244,7 +250,9 @@ private fun UpdateRow() {
             UpdateChecker.check(currentCode).fold(
                 onSuccess = { info ->
                     state = if (info.hasUpdate) {
-                        UpdateState.HasUpdate(info.latestCode, info.assetSize, info.assetName)
+                        UpdateState.HasUpdate(
+                            info.latestCode, info.assetSize, info.assetName, info.assetSha256
+                        )
                     } else {
                         UpdateState.Latest
                     }
@@ -256,7 +264,7 @@ private fun UpdateRow() {
         }
     }
 
-    fun startDownload(latest: Int, size: Long, assetName: String) {
+    fun startDownload(latest: Int, size: Long, assetName: String, sha256: String) {
         if (state is UpdateState.Downloading) return
         state = UpdateState.Downloading(0L, size)
         speed = 0L
@@ -268,6 +276,7 @@ private fun UpdateRow() {
                     context = ctx,
                     officialUrl = UpdateChecker.officialUrl(assetName),
                     expectedVersionCode = latest,
+                    expectedSha256 = sha256,
                     expectedSize = size
                 ) { done, total ->
                     main.post {
@@ -290,7 +299,7 @@ private fun UpdateRow() {
                     UpdateInstaller.Result.FAILED -> UpdateState.Failed("安装器没能打开，点「安装」重试")
                 }
             } catch (ce: CancellationException) {
-                state = UpdateState.HasUpdate(latest, size, assetName)
+                state = UpdateState.HasUpdate(latest, size, assetName, sha256)
                 throw ce
             } catch (t: Throwable) {
                 state = UpdateState.Failed(t.message ?: "下载失败")
@@ -335,7 +344,7 @@ private fun UpdateRow() {
                 UpdateState.Latest -> AkTextButton(text = "重新检查", onClick = { startCheck() })
                 is UpdateState.HasUpdate -> AkTextButton(
                     text = "立即更新",
-                    onClick = { startDownload(s.latest, s.size, s.assetName) }
+                    onClick = { startDownload(s.latest, s.size, s.assetName, s.sha256) }
                 )
                 is UpdateState.Downloading -> AkTextButton(
                     text = "取消",
