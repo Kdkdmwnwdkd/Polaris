@@ -79,9 +79,9 @@ for c in chunks:
 
 print(f"\n[A] 清单本体（解析到 {len(entries)} 条）")
 
-# 25 = 24 + 1：音频层进程化引入 AudioGraph（TTS 引擎 + MicClaim 的唯一实例）。
+# 26 = 25 + 1：桌面助手引入 PetState（设置页开关 ↔ 悬浮窗 Service 的启停）。
 # 数字变化必须有对应新增，不能为了让它变绿而调数字。
-check("A1 清单条数为 25", len(entries) == 25, f"实际 {len(entries)}")
+check("A1 清单条数为 26", len(entries) == 26, f"实际 {len(entries)}")
 
 names = [e["name"] for e in entries]
 dups = sorted({n for n in names if names.count(n) > 1})

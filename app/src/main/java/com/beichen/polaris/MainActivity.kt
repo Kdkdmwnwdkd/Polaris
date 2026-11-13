@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.beichen.polaris.browser.BrowserHost
+import com.beichen.polaris.pet.PetState
 import com.beichen.polaris.ui.AgentKitTheme
 import com.beichen.polaris.ui.AppearanceState
 import com.beichen.polaris.ui.AppScaffold
@@ -77,6 +78,19 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         // 前台时点通知：不重建 Activity，靠这个状态触发执行
         pendingWorkflowId.value = intent.getStringExtra(WorkflowNotifier.EXTRA_WORKFLOW_ID)
+    }
+
+    /**
+     * 桌面助手的「补启动」时机。
+     *
+     * 用户开了开关、但服务在上次进程里被系统杀了（省电策略 / 一键清理），
+     * 回到 App 就是唯一无争议的补救窗口——此时 `startForegroundService` 不会撞上
+     * Android 12+ 的后台启动限制。放在 `onResume` 而不是 `onCreate`：从悬浮窗
+     * 点「打开主应用」回来时 Activity 不会重建，onCreate 不会跑。
+     */
+    override fun onResume() {
+        super.onResume()
+        runCatching { PetState.ensureRunning(this) }
     }
 
     override fun onDestroy() {

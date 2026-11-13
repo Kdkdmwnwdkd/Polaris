@@ -1,9 +1,10 @@
 # 桌宠（悬浮助手）设计草案 v1
 
-> 状态：**待实现**（2026-11-13 立案，未动一行代码）
+> 状态：**一期已实现**（2026-11-13 立案并当天落地骨架；二期语音、三期唤醒词未动）
 > 定位：把 App 从「打开一个应用才存在的助手」变成「一直在桌面上的一个小东西」。
 > 读者：将来动手的人（可能是几周后的我）。
 > 结论先行：**能做，底座齐了，但要分三期；三个门槛里只有一个真正需要决策（唤醒词）。**
+> 一期实现纪要见 §10。
 
 ---
 
@@ -158,19 +159,23 @@
 
 ---
 
-## 8. 动手清单（一期）
+## 8. 动手清单（一期，已按实际实现更新）
 
 ```
 新增
-  app/src/main/java/com/beichen/polaris/pet/PetOverlayService.kt   前台服务 + WindowManager
-  app/src/main/java/com/beichen/polaris/pet/PetOverlay.kt          ComposeView + LifecycleOwner 样板
+  app/src/main/java/com/beichen/polaris/pet/PetState.kt            开关意图 + 运行态（AppGraph 第 26 条）
+  app/src/main/java/com/beichen/polaris/pet/PetOverlayService.kt   前台服务（specialUse）
+  app/src/main/java/com/beichen/polaris/pet/PetOverlay.kt          WindowManager + ComposeView + 三个 owner
+  app/src/main/java/com/beichen/polaris/pet/PetPanel.kt            形象（Canvas 自绘）+ 气泡 + 输入
   app/src/main/java/com/beichen/polaris/pet/PetAgentSession.kt     独立轻量会话（驱动 RealAgentLoop）
-  app/src/main/res/drawable/pet_*.xml                              形象矢量图
+  scripts/qa/run-desktop-pet-verification.sh                       26 条守卫（服务/状态/工具边界/窗口语义）
 
 改动
   AndroidManifest.xml                    注册 service（foregroundServiceType=specialUse）
-  app/ui/SettingsScreen.kt               总开关 + 悬浮窗权限引导（参考 PermissionFacade 现有写法）
-  core/agent/AgentRunService.kt          复用其前台服务模式，或让桌宠服务复用同一通知渠道
+  app/ui/SettingsScreen.kt               「桌面助手」组：总开关 + 权限引导 + 未运行重试
+  app/AgentKitApplication.kt             PetState.sync(只读盘)
+  app/MainActivity.kt                    onResume 补启动（服务被系统杀了能自己回来）
+  app/AppGraph.kt                        登记 PetState
 
 复用
   audio/AudioGraph.kt                    取进程级 TTS / 仲裁器（`speaker(ctx)` / `arbiter(ctx)`）
@@ -183,6 +188,10 @@
 **起步顺序**：先做「能显示、能拖、能关」，确认悬浮窗在真机上不被杀；再接 Agent；最后接语音。
 别一上来就写语音，那部分最容易卡住且最不影响骨架验证。
 
+**形象**：原计划用 `res/drawable/pet_*.xml`，实际改成 `PetPanel.kt` 里的 Canvas 自绘
+（84dp 圆角身体 + 眨眼 + 呼吸 + 思考时的嘴型，零素材零依赖）。换正式美术资源时只动这一个
+Composable，窗口与状态层不用改。
+
 ---
 
 ## 9. 与现有文档的关系
@@ -193,3 +202,25 @@
 ---
 
 *2026-11-13 立案。当时 App 处于 run 711，应用内更新刚在真机闭环。*
+*2026-11-13 晚：一期骨架落地（§8 清单 + §10 纪要），守卫 `run-desktop-pet-verification.sh` 26 条。*
+
+---
+
+## 10. 一期实现纪要（2026-11-13）
+
+做完之后值得记下来的四条，都是「做的时候才发现」的：
+
+**① 窗口宽度必须跟着展开态变。** 最初想用一个固定宽度（气泡那么宽）的窗口，靠透明区域
+「看不见就不挡事」。实际不行：`TYPE_APPLICATION_OVERLAY` 在**整个矩形范围**内拦截触摸，
+透明像素一样吃事件。所以收起态窗口宽度 = 形象宽度（84dp），展开才撑到 296dp。
+
+**② 焦点标志和窗口尺寸必须一起改。** 展开时不去掉 `FLAG_NOT_FOCUSABLE`，输入框点不出键盘；
+去掉了不补 `FLAG_NOT_TOUCH_MODAL`，整个屏幕都点不动。两个标志是同一个动作的两半。
+
+**③ 时间不能写进 systemPrompt。** `RealAgentLoop` 的 systemPrompt 是构造参数，只取一次。
+桌宠会连续活几小时，写死的时间会让「现在几点」答出启动时的钟点。改成每条用户消息前缀
+`[2026-11-13 22:50 周四]`，模型按系统提示去读它。
+
+**④ 工具集是审批缺失的补偿，不是省事。** 桌宠没有界面弹审批卡片，所以 `approval` 只能是
+null；那么工具就必须全是只读的（算数 / 搜索 / 读文件 / 查记忆 / 朗读）。守卫 D1 把「白名单外
+的工具」变成硬失败——将来要加写工具，必须先把审批通道做出来，不能只往 registry 里补一行。

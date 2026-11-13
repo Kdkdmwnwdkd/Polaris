@@ -1,0 +1,541 @@
+package com.beichen.polaris.pet
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+/**
+ * 桌宠的全部视觉：一个会呼吸的小方块，加一个点开才出现的对话气泡。
+ *
+ * ## 为什么形象是画的
+ *
+ * spec §4 给了三条路（矢量素材 / Lottie / 序列帧）。这里走第四条：**Canvas 直接画**。
+ * 理由是体积与可动性——一个 84dp 的圆角身体 + 两只眼睛 + 一根天线，代码不到 60 行，
+ * 零素材、零依赖，而且「眨眼」「呼吸」「思考时上下浮动」都是几个数字，改起来不用重新导出。
+ *
+ * 代价是它只能长这样了：真要一个像样的角色，还是得有美术资源。等形象定了再换，
+ * 现在这版的作用是**证明窗口能活、能拖、能对话**，不是定稿。
+ *
+ * ## 交互
+ *
+ * - 点形象：展开 / 收起气泡
+ * - 拖形象：移动；松手由 [PetOverlayHost.snapToEdge] 吸附到左右边缘
+ * - 长按：弹出「打开主应用 / 关闭桌面助手」
+ *
+ * 收起气泡时故意不销毁输入框所在的 composition 之外的协程作用域——
+ * [rememberCoroutineScope] 挂在 [PetPanel] 上，用户收起气泡不影响正在跑的那一轮。
+ */
+@Composable
+fun PetPanel(
+    expanded: Boolean,
+    petSize: Int,
+    bubbleWidth: Int,
+    /** true = 贴在屏幕右侧。形象跟着贴边方向排，展开时它才不会从边上「跳」到中间。 */
+    alignEnd: Boolean,
+    ask: suspend (String) -> PetReply,
+    onExpandedChange: (Boolean) -> Unit,
+    onClose: () -> Unit,
+    onOpenApp: () -> Unit,
+    onReply: (PetReply) -> Unit,
+    onDrag: (Float, Float) -> Unit,
+    onDragEnd: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var messages by remember { mutableStateOf<List<PetBubble>>(emptyList()) }
+    var input by remember { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier.width(if (expanded) bubbleWidth.dp else petSize.dp),
+        horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start
+    ) {
+        if (expanded) {
+            BubbleCard(
+                messages = messages,
+                input = input,
+                onInputChange = { input = it },
+                sending = sending,
+                onSend = {
+                    val text = input.trim()
+                    if (text.isNotEmpty() && !sending) {
+                        input = ""
+                        messages = messages + PetBubble(text, mine = true)
+                        sending = true
+                        scope.launch {
+                            val reply = ask(text)
+                            sending = false
+                            if (!reply.silent) {
+                                messages = messages + PetBubble(reply.text, mine = false, failed = reply.failed)
+                            }
+                            onReply(reply)
+                        }
+                    }
+                },
+                onCollapse = { onExpandedChange(false) }
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+
+        if (menuOpen) {
+            MenuCard(
+                onOpenApp = {
+                    menuOpen = false
+                    onOpenApp()
+                },
+                onClose = {
+                    menuOpen = false
+                    onClose()
+                }
+            )
+            Spacer(Modifier.height(6.dp))
+        }
+
+        PetBody(
+            sizeDp = petSize,
+            thinking = sending,
+            onClick = {
+                if (menuOpen) {
+                    menuOpen = false
+                } else {
+                    onExpandedChange(!expanded)
+                }
+            },
+            onLongPress = { menuOpen = !menuOpen },
+            onDrag = onDrag,
+            onDragEnd = onDragEnd
+        )
+    }
+}
+
+/** 气泡里的一条。 */
+private data class PetBubble(val text: String, val mine: Boolean, val failed: Boolean = false)
+
+@Composable
+private fun BubbleCard(
+    messages: List<PetBubble>,
+    input: String,
+    onInputChange: (String) -> Unit,
+    sending: Boolean,
+    onSend: () -> Unit,
+    onCollapse: () -> Unit
+) {
+    val listState = rememberLazyListState()
+    val focus = remember { FocusRequester() }
+    val scheme = MaterialTheme.colorScheme
+
+    // 展开时自动聚焦输入框：桌宠的主要用法是「点开就说」，
+    // 还要用户再点一下输入框是多余的一步。延迟是因为窗口刚去掉
+    // FLAG_NOT_FOCUSABLE，系统还没把焦点给到窗口，立刻 requestFocus 会落空。
+    LaunchedEffect(Unit) {
+        delay(160)
+        runCatching { focus.requestFocus() }
+    }
+
+    // 新消息到达时滚到底
+    LaunchedEffect(messages.size, sending) {
+        if (messages.isNotEmpty()) runCatching { listState.animateScrollToItem(messages.lastIndex) }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = scheme.surface.copy(alpha = 0.97f),
+        tonalElevation = 3.dp,
+        shadowElevation = 6.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "北辰",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp
+                    ),
+                    color = scheme.primary
+                )
+                Text(
+                    text = "收起",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    color = scheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.pointerInput(Unit) {
+                        detectTapGestures { onCollapse() }
+                    }
+                )
+            }
+
+            if (messages.isEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "问点什么。答案会念出来。",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                    color = scheme.onSurfaceVariant.copy(alpha = 0.75f)
+                )
+                Spacer(Modifier.height(8.dp))
+            } else {
+                Spacer(Modifier.height(6.dp))
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 208.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(messages) { m -> BubbleRow(m) }
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+
+            if (sending) {
+                Text(
+                    text = "…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(scheme.surfaceVariant.copy(alpha = 0.55f))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                BasicTextField(
+                    value = input,
+                    onValueChange = onInputChange,
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(focus),
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 13.sp,
+                        color = scheme.onSurface
+                    ),
+                    cursorBrush = SolidColor(scheme.primary),
+                    maxLines = 3,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { onSend() }),
+                    decorationBox = { inner ->
+                        Box {
+                            if (input.isEmpty()) {
+                                Text(
+                                    text = if (sending) "等它说完…" else "说点什么…",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
+                                    color = scheme.onSurfaceVariant.copy(alpha = 0.55f)
+                                )
+                            }
+                            inner()
+                        }
+                    }
+                )
+                Spacer(Modifier.width(8.dp))
+                val canSend = input.isNotBlank() && !sending
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (canSend) scheme.primary else scheme.onSurface.copy(alpha = 0.12f)
+                        )
+                        .pointerInput(canSend) {
+                            if (canSend) detectTapGestures { onSend() }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "↑",
+                        style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp),
+                        color = if (canSend) scheme.onPrimary else scheme.onSurface.copy(alpha = 0.4f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BubbleRow(bubble: PetBubble) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = if (bubble.mine) Arrangement.End else Arrangement.Start
+    ) {
+        Box(
+            Modifier
+                .bubbleMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(
+                    when {
+                        bubble.mine -> scheme.primary.copy(alpha = 0.14f)
+                        bubble.failed -> scheme.errorContainer.copy(alpha = 0.5f)
+                        else -> scheme.surfaceVariant.copy(alpha = 0.6f)
+                    }
+                )
+                .padding(horizontal = 10.dp, vertical = 7.dp)
+        ) {
+            Text(
+                text = bubble.text,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, lineHeight = 19.sp),
+                color = if (bubble.failed) scheme.error else scheme.onSurface,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/**
+ * 气泡单条的最大宽度：86% 留出「谁在说」的左右错位空间。
+ *
+ * 不叫 `widthIn()`：那会与 `androidx.compose.foundation.layout.widthIn` 同名，
+ * 后来的人 import 一下就成了另一件事。
+ */
+private fun Modifier.bubbleMaxWidth(): Modifier = this.fillMaxWidth(0.86f)
+
+@Composable
+private fun MenuCard(onOpenApp: () -> Unit, onClose: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = scheme.surface.copy(alpha = 0.97f),
+        tonalElevation = 3.dp,
+        shadowElevation = 6.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(vertical = 4.dp)) {
+            MenuRow("打开主应用", scheme.onSurface, onOpenApp)
+            MenuRow("关闭桌面助手", scheme.error, onClose)
+        }
+    }
+}
+
+@Composable
+private fun MenuRow(text: String, color: Color, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .pointerInput(Unit) { detectTapGestures { onClick() } }
+            .padding(horizontal = 14.dp, vertical = 11.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
+            color = color
+        )
+    }
+}
+
+/**
+ * 形象本体。
+ *
+ * 三个动画叠在一起：整体上下浮动（呼吸）、眼睛定时闭合（眨眼）、
+ * 思考时头顶那根天线的光点加快闪烁。都是 `rememberInfiniteTransition`，
+ * 没有一处依赖业务状态——除了 `thinking`。
+ */
+@Composable
+private fun PetBody(
+    sizeDp: Int,
+    thinking: Boolean,
+    onClick: () -> Unit,
+    onLongPress: () -> Unit,
+    onDrag: (Float, Float) -> Unit,
+    onDragEnd: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    val body = scheme.primary
+    val eye = scheme.onPrimary
+    val glow = scheme.primary.copy(alpha = 0.22f)
+
+    val transition = rememberInfiniteTransition(label = "pet")
+
+    val bob by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "bob"
+    )
+
+    // 眨眼：4.2 秒一轮，闭合只占 250ms。用 keyframes 而不是「随机」，
+    // 因为 Random 会让每帧都重组，且动画不再可预测。
+    val blink by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = keyframes {
+                durationMillis = 4200
+                1f at 0
+                1f at 3700
+                0.06f at 3820
+                1f at 3980
+            }
+        ),
+        label = "blink"
+    )
+
+    val antenna by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(if (thinking) 520 else 1800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "antenna"
+    )
+
+    Canvas(
+        modifier = Modifier
+            .size(sizeDp.dp)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { onClick() },
+                    onLongPress = { onLongPress() }
+                )
+            }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDrag = { change, amount ->
+                        change.consume()
+                        onDrag(amount.x, amount.y)
+                    },
+                    onDragEnd = { onDragEnd() },
+                    onDragCancel = { onDragEnd() }
+                )
+            }
+    ) {
+        val w = size.width
+        val h = size.height
+        val lift = bob * h * 0.03f
+
+        val bodyW = w * 0.76f
+        val bodyH = h * 0.62f
+        val left = (w - bodyW) / 2f
+        val top = h * 0.28f - lift
+
+        // 天线
+        val antennaX = w / 2f
+        val antennaTop = top - h * 0.14f
+        drawLine(
+            color = body.copy(alpha = 0.85f),
+            start = Offset(antennaX, top),
+            end = Offset(antennaX, antennaTop),
+            strokeWidth = w * 0.022f
+        )
+        drawCircle(
+            color = body.copy(alpha = antenna),
+            radius = w * 0.045f,
+            center = Offset(antennaX, antennaTop)
+        )
+
+        // 落地光晕
+        drawOval(
+            color = glow,
+            topLeft = Offset(left - w * 0.02f, top + bodyH + h * 0.03f),
+            size = Size(bodyW + w * 0.04f, h * 0.08f)
+        )
+
+        // 身体
+        drawRoundRect(
+            color = body,
+            topLeft = Offset(left, top),
+            size = Size(bodyW, bodyH),
+            cornerRadius = CornerRadius(bodyH * 0.42f, bodyH * 0.42f)
+        )
+
+        // 眼睛
+        val eyeW = bodyW * 0.12f
+        val eyeH = bodyH * 0.2f * blink
+        val eyeY = top + bodyH * 0.42f - eyeH / 2f
+        val eyeGap = bodyW * 0.2f
+        drawRoundRect(
+            color = eye,
+            topLeft = Offset(w / 2f - eyeGap - eyeW / 2f, eyeY),
+            size = Size(eyeW, eyeH.coerceAtLeast(bodyH * 0.02f)),
+            cornerRadius = CornerRadius(eyeW / 2f, eyeW / 2f)
+        )
+        drawRoundRect(
+            color = eye,
+            topLeft = Offset(w / 2f + eyeGap - eyeW / 2f, eyeY),
+            size = Size(eyeW, eyeH.coerceAtLeast(bodyH * 0.02f)),
+            cornerRadius = CornerRadius(eyeW / 2f, eyeW / 2f)
+        )
+
+        // 嘴：思考时是一条扁椭圆（像在出声），闲置时是一条短线
+        if (thinking) {
+            drawOval(
+                color = eye.copy(alpha = 0.9f),
+                topLeft = Offset(w / 2f - bodyW * 0.08f, top + bodyH * 0.66f),
+                size = Size(bodyW * 0.16f, bodyH * 0.09f)
+            )
+        } else {
+            drawLine(
+                color = eye.copy(alpha = 0.55f),
+                start = Offset(w / 2f - bodyW * 0.06f, top + bodyH * 0.7f),
+                end = Offset(w / 2f + bodyW * 0.06f, top + bodyH * 0.7f),
+                strokeWidth = bodyH * 0.018f
+            )
+        }
+    }
+}

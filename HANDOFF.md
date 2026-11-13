@@ -22,8 +22,8 @@
 
 **当前状态**：全量 QA `PASS=103 SKIP=38 XFAIL=0 FAIL=0`，门禁 6/6 全过。
 
-**下一步**：桌宠悬浮窗一期。设计已定稿，见 [`docs/specs/desktop-pet-spec-v1.md`](docs/specs/desktop-pet-spec-v1.md)，
-**没有动过一行代码**——这是留给你的活。
+**下一步**：桌宠一期的**真机验证**（代码已落地，见 §3）。
+之后是二期语音输入（`SpeechRecognizer` 快路 + 本地回落），三期唤醒词仍建议不做。
 
 ---
 
@@ -82,10 +82,11 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
 
 ---
 
-## 3. 下一步：桌宠一期（可以直接开工）
+## 3. 桌宠一期（已落地 2026-11-13，等真机验证）
 
 **完整设计在 [`docs/specs/desktop-pet-spec-v1.md`](docs/specs/desktop-pet-spec-v1.md)，先读它，别重新设计。**
-下面只写「开工顺序」和「容易踩的地方」。
+下面的「开工顺序」保留原文（它解释代码为什么长这样）；实际实现清单见 §3.3 的表，
+做的时候发现的四个坑见 spec §10。
 
 ### 3.1 目标与验收
 
@@ -105,13 +106,18 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
 ### 3.3 要新增/改动什么
 
 ```
-新增  app/.../pet/PetOverlayService.kt    前台服务 + WindowManager（TYPE_APPLICATION_OVERLAY）
-      app/.../pet/PetOverlay.kt           ComposeView + 手工挂 LifecycleOwner/SavedStateRegistryOwner
-      app/.../pet/PetAgentSession.kt      独立轻量会话
-      app/src/main/res/drawable/pet_*.xml 形象矢量图
+新增  app/.../pet/PetState.kt             开关意图 + 运行态（AppGraph 第 26 条）
+      app/.../pet/PetOverlayService.kt    前台服务 + WindowManager（TYPE_APPLICATION_OVERLAY）
+      app/.../pet/PetOverlay.kt           ComposeView + 手工挂三个 owner + 拖动吸附
+      app/.../pet/PetPanel.kt             形象（Canvas 自绘，无素材）+ 气泡 + 输入
+      app/.../pet/PetAgentSession.kt      独立轻量会话（最小只读工具表）
+      scripts/qa/run-desktop-pet-verification.sh   26 条守卫
 
 改动  AndroidManifest.xml                 注册 service（foregroundServiceType=specialUse）
-      app/ui/SettingsScreen.kt            总开关 + 悬浮窗权限引导
+      app/ui/SettingsScreen.kt            「桌面助手」组：总开关 + 权限引导 + 未运行重试
+      app/AgentKitApplication.kt          PetState.sync（只读盘，不启服务）
+      app/MainActivity.kt                 onResume 补启动
+      app/AppGraph.kt                     登记 PetState
 复用  audio/AudioGraph.kt                 取进程级 TTS（`speaker(ctx)`）；**不要 new TextSpeaker**，
                                        否则桌宠与主界面各有一个引擎，叠音且仲裁失效
       core/agent/RealAgentLoop.kt         直接实例化
@@ -125,12 +131,12 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
 - **桌宠与主界面是两份独立会话历史**。一期不做同步（做同步要多 2 天，还要处理并发写）。
 - **`SYSTEM_ALERT_WINDOW` 已声明但无实现**（`AndroidManifest.xml:31`），只需引导用户手动开启，不要新增权限申请。
 
-### 3.5 需要你拍板的三件事（spec §4，动手前定）
+### 3.5 三个拍板事项的结论（spec §4）
 
-1. **形象**：矢量自绘（零依赖、能动）/ Lottie（好看、要素材）/ 序列帧（灵活、占体积）。
-   建议先矢量，一期验收后再换。
-2. **唤醒词做不做**：一期二期都**不做**。常驻麦克风约 1–3% 电量/小时，先证明桌宠有人用。
-3. **历史是否互通**：建议不通。
+1. **形象**：已定——矢量自绘（`PetPanel.kt` 里 Canvas 画，84dp，零素材）。要换正式美术资源时
+   只动那一个 Composable，窗口与状态层不用改。
+2. **唤醒词**：一期二期都**不做**。常驻麦克风约 1–3% 电量/小时，先证明有人用。
+3. **历史是否互通**：**不通**。桌宠定位「随手问一句」，历史只在内存里，进程死了就没。
 
 ---
 

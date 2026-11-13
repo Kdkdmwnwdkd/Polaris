@@ -144,6 +144,20 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- 桌面助手（桌宠）：悬浮窗活在 Service 里，没有 Activity。
+             必须常驻前台，否则 App 退到后台几分钟就被回收、悬浮窗跟着消失。
+             specialUse 是 Android 14 对「不属于其它任何已定义类型」的前台服务的分类；
+             targetSdk=28 时系统不会强制校验类型，但声明了才能在未来升级 targetSdk 后继续用。
+             exported=false：只由本 App 内部启动（PetState.start / ensureRunning）。 -->
+        <service
+            android:name=".pet.PetOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="用户主动开启的桌面常驻助手悬浮窗，可随时在设置或桌宠菜单里关闭" />
+        </service>
+
         <!-- W-13：Shizuku 提供者（权限/服务发现） -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

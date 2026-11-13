@@ -5,6 +5,7 @@ import android.app.Application
 import android.os.Bundle
 import com.beichen.polaris.core.CompletionNotifier
 import com.beichen.polaris.core.lifecycle.AppBackgroundHooks
+import com.beichen.polaris.pet.PetState
 import com.beichen.polaris.startup.BootSequence
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -25,6 +26,8 @@ class AgentKitApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         BootSequence.run(this)
+        // 桌面助手开关：只读盘、不启服务（服务可能先于 Activity 被 START_STICKY 拉起）
+        runCatching { PetState.sync(this) }
         // 3.2：把「App 是否在前台」装进 core 的完成提醒。方向是 app → core，
         // core 不再 import 本类（原来那处是 core 唯一离不开 app 壳的硬依赖）。
         CompletionNotifier.foregroundProbe = { isAppInForeground() }

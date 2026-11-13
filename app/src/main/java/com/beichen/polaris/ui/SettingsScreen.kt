@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
@@ -62,9 +63,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import android.widget.Toast
 import com.beichen.polaris.core.agent.ApprovalTier
 import com.beichen.polaris.core.agent.SurvivalCheckService
+import com.beichen.polaris.pet.PetState
 import com.beichen.polaris.runtime.lease.LeaseRegistry
 import com.beichen.polaris.runtime.lease.LeaseSnapshot
 import com.beichen.polaris.ui.contract.SettingsScreenContract
@@ -315,6 +319,74 @@ fun SettingsScreen(
                             Spacer(Modifier.height(AgentSpacing.space1))
                         }
                     }
+                }
+            }
+
+            // —— 桌面助手（桌宠一期）——
+            //
+            // 开关直接读写 PetState，与 AppearanceState 同纪律：它是进程级单例，
+            // 设置页只是观察者。不走 ViewModel 的理由很实在——桌宠活在 Service 里，
+            // 比任何 ViewModel 都活得久，状态寄在 ViewModel 上会出现
+            // 「服务在跑、开关却显示关」的错位，用户点一下「开启」反而把已开的重启一遍。
+            val petEnabled by PetState.enabled.collectAsStateWithLifecycle()
+            val petRunning by PetState.running.collectAsStateWithLifecycle()
+            var petHasOverlay by remember { mutableStateOf(PetState.canDrawOverlays(context)) }
+            var awaitingOverlayGrant by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) { PetState.sync(context) }
+            // 从系统「显示在其他应用上层」页返回：权限是异步写 AppOps 的，
+            // 必须在 onResume 复查，不能信跳转前的判断。
+            LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                petHasOverlay = PetState.canDrawOverlays(context)
+                if (awaitingOverlayGrant && petHasOverlay) {
+                    awaitingOverlayGrant = false
+                    PetState.start(context)
+                }
+            }
+            AkGroup(
+                title = "桌面助手",
+                description = "常驻桌面角落的小浮球，点开问一句，答案会念出来"
+            ) {
+                AkListItem(
+                    icon = Icons.Outlined.SmartToy,
+                    title = "显示桌面助手",
+                    description = when {
+                        petEnabled && petRunning -> "已开启：退到桌面也还在"
+                        petEnabled -> "已开启，但当前没有运行（可能被系统清理了）"
+                        else -> "关闭：需要时从对话页正常使用"
+                    },
+                    trailing = {
+                        AkSwitch(
+                            checked = petEnabled,
+                            onCheckedChange = { want ->
+                                when {
+                                    !want -> PetState.stop(context)
+                                    PetState.canDrawOverlays(context) -> PetState.start(context)
+                                    else -> {
+                                        awaitingOverlayGrant = true
+                                        PetState.openOverlaySettings(context)
+                                    }
+                                }
+                            }
+                        )
+                    }
+                )
+                if (!petHasOverlay) {
+                    AkListItem(
+                        icon = null,
+                        title = "需要「显示在其他应用上层」权限",
+                        description = "点这里去系统设置里打开；回来后会自动生效",
+                        onClick = {
+                            awaitingOverlayGrant = true
+                            PetState.openOverlaySettings(context)
+                        }
+                    )
+                } else if (petEnabled && !petRunning) {
+                    AkListItem(
+                        icon = null,
+                        title = "重新启动悬浮窗",
+                        description = "开关是开的，但服务没在跑",
+                        onClick = { PetState.ensureRunning(context) }
+                    )
                 }
             }
 
