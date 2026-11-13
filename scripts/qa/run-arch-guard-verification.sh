@@ -154,6 +154,27 @@ else
 fi
 
 say ""
+say "[F] 单点：持久化存储必须走 AtomicJsonFile"
+
+# 与 [E] 同源的病：同一条保证散在多处实现，靠人记就会漏。
+# AtomicJsonFile 的 KDoc 明确写着「全仓唯一实现」，但仍出现过三份手写副本：
+#   WriteFileTool（同文件的 edit_file 早已原子写，只有它漏了）
+#   BuildStore / MediaTaskStore（各自写 writeText → renameTo，都没有 fd.sync）
+# 后果链也一样：写坏的不是「一次更新」，而是「整份状态解析失败后按空处理，
+# 下一次写入把历史覆盖成一条」。规则：*Store.kt / *Repository.kt 一律走统一入口。
+STORE_HITS=$(grep -rn --include=*Store.kt --include=*Repository.kt -E '\.writeText\(' \
+  core/src/main/java app/src/main/java 2>/dev/null \
+  | grep -vE ':[0-9]+:[[:space:]]*(//|\*)' || true)
+
+if [ -n "$STORE_HITS" ]; then
+  n_store=$(printf '%s\n' "$STORE_HITS" | wc -l | tr -d ' ')
+  bad "发现 ${n_store} 处存储类直接 writeText，必须改走 AtomicJsonFile："
+  printf '%s\n' "$STORE_HITS" | head -5 | sed 's/^/        /'
+else
+  good "存储类无裸写：均经 AtomicJsonFile（tmp → fsync → rename）"
+fi
+
+say ""
 if [ "$fail" -eq 0 ]; then
   echo "架构守卫：$npass 通过 / 0 失败"
   echo "FAIL=0"

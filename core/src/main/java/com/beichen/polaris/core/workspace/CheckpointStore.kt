@@ -2,6 +2,7 @@ package com.beichen.polaris.core.workspace
 
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.io.AtomicJsonFile
 import java.io.File
 
 /**
@@ -45,9 +46,12 @@ object CheckpointStore {
                 dst.parentFile?.mkdirs()
                 src.copyTo(dst, overwrite = true)
             }
-            // 写入 meta
-            File(root(context), "$id.meta").writeText(
-                "label=$safeLabel\ntimeMs=$ts\nfileCount=${entries.size}\nsizeBytes=$size\n"
+            // 写入 meta。走原子写：写坏一行，[list] 就解析不出这条，
+            // 而快照文件其实还在——用户看到的是「检查点凭空少了一个」。
+            AtomicJsonFile.write(
+                File(root(context), "$id.meta"),
+                "label=$safeLabel\ntimeMs=$ts\nfileCount=${entries.size}\nsizeBytes=$size\n",
+                keepBackup = false
             )
         }.onFailure { AgentLogger.e(TAG, "创建检查点失败：${it.message}") }.isSuccess
         if (!ok) return null

@@ -1,5 +1,6 @@
 package com.beichen.polaris.core.workspace
 
+import com.beichen.polaris.core.io.AtomicJsonFile
 import java.io.File
 
 /**
@@ -106,14 +107,18 @@ class FileBackupStore(
             File(root, id).mkdirs()
         }
 
-        File(root, "$id.meta").writeText(
+        // 原子写：meta 写坏 = [list] 里少一条备份，而备份文件本身还在，
+        // 用户看到的是「这条改动的备份没了」。备份是回滚的唯一依据，不能靠运气。
+        AtomicJsonFile.write(
+            File(root, "$id.meta"),
             buildString {
                 appendLine("relPath=$safeRel")
                 appendLine("timeMs=$ts")
                 appendLine("seq=$seq")
                 appendLine("existedBefore=$existed")
                 appendLine("sizeBytes=$size")
-            }
+            },
+            keepBackup = false
         )
         id
     }.onFailure { onError("备份失败（不阻断写入）：${it.message}") }.getOrNull()

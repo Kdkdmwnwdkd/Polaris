@@ -1,6 +1,7 @@
 package com.beichen.polaris.skill
 
 import android.content.Context
+import com.beichen.polaris.core.io.AtomicJsonFile
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -167,7 +168,9 @@ class ImportedSkillRepository(private val context: Context) {
                 if (k == "trust") put(k, JsonPrimitive(trust)) else put(k, v)
             }
         }
-        file.writeText(prettyJson.encodeToString(JsonObject.serializer(), newObj))
+        // 原子写：skill.json 写一半被杀 = 整个技能加载不出来。用户看到的是
+        // 「我刚导入的技能不见了」，而目录其实还在，只是 json 成了半截。
+        AtomicJsonFile.write(file, prettyJson.encodeToString(JsonObject.serializer(), newObj))
     }
 
     /**

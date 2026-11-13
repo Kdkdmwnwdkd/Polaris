@@ -2,6 +2,7 @@ package com.beichen.polaris.core.workspace
 
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.io.AtomicJsonFile
 import java.io.File
 
 /**
@@ -150,14 +151,21 @@ object WorkspaceStore {
             .getOrNull()
     }
 
-    /** 写入（覆盖，自动建父目录）；返回是否成功。 */
+    /**
+     * 写入（覆盖，自动建父目录）；返回是否成功。
+     *
+     * 走 [AtomicJsonFile]：`writeText` 是「截断 + 写入」两步，保存时进程被杀就留下
+     * 半截文件。编辑器里改的通常正是要推给 CI 的源码——半截文件推上去，用户看到的是
+     * 「构建失败：编译错误」，根因却在本地这次保存。
+     *
+     * `tmpSuffix = ".akitmp"` 与 [dir] 文件列表的跳过规则一致：崩溃残留的临时文件
+     * 不能出现在用户的工作区里。不留 `.bak`——编辑器有自己的撤销，工作区不该占双倍空间。
+     */
     fun write(context: Context, path: String, content: String): Boolean {
         val n = WorkspacePaths.safeRelPath(path) ?: return false
         val f = File(dir(context), n)
-        return runCatching {
-            f.parentFile?.mkdirs()
-            f.writeText(content, Charsets.UTF_8)
-        }.onFailure { AgentLogger.e(TAG, "写入 $n 失败：${it.message}") }.isSuccess
+        return AtomicJsonFile.write(f, content, keepBackup = false, tmpSuffix = ".akitmp")
+            .also { ok -> if (!ok) AgentLogger.e(TAG, "写入 $n 失败") }
     }
 
     /** 删除文件（幂等）；删空的父目录。 */

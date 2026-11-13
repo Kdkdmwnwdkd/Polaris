@@ -1,5 +1,6 @@
 package com.beichen.polaris.core.agent
 
+import com.beichen.polaris.core.io.AtomicJsonFile
 import com.beichen.polaris.core.llm.primOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -24,10 +25,15 @@ class TodoStore(private val file: File) {
     fun write(conversationId: String, markdown: String): Boolean = runCatching {
         val map = readMap().toMutableMap()
         if (markdown.isBlank()) map.remove(conversationId) else map[conversationId] = markdown
-        file.parentFile?.mkdirs()
         val obj = JsonObject(map.mapValues { JsonPrimitive(it.value) })
-        file.writeText(json.encodeToString(JsonObject.serializer(), obj))
-        true
+        // 走唯一原子写实现：清单丢一次不算大事，但「写一半被杀」会让整份 todos.json
+        // 解析失败，readMap 静默返回空——所有会话的清单一起消失，且没有任何提示。
+        // 高频小文件，不留 .bak。
+        AtomicJsonFile.write(
+            file,
+            json.encodeToString(JsonObject.serializer(), obj),
+            keepBackup = false
+        )
     }.getOrDefault(false)
 
     fun read(conversationId: String): String? = runCatching {

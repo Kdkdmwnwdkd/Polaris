@@ -2,6 +2,7 @@ package com.beichen.polaris.core.build
 
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.io.AtomicJsonFile
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -103,26 +104,24 @@ object BuildStore {
     private fun file(context: Context): File =
         File(File(context.filesDir, "builds"), "builds.json")
 
+    /**
+     * 读历史；主文件不可用时由 [AtomicJsonFile.readWithBackupOrNull] 回退 `.bak`。
+     *
+     * 归零的后果不止「看不见记录」——下一次 [upsert] 会把整份历史覆盖成一条。
+     */
     fun list(context: Context): List<BuildTask> = synchronized(lock) {
-        val primary = readFile(file(context))
-        val tasks = primary ?: readFile(bakFile(context))?.also {
-            // 主文件坏了（写到一半被杀 / 手改坏了）：回退上一次的备份，别让历史归零。
-            // 归零的后果不止「看不见记录」——下一次 upsert 会把整份历史覆盖成一条。
-            AgentLogger.w("BuildStore", "builds.json 损坏，已回退 .bak（${it.size} 条）")
-        } ?: emptyList()
-        tasks.sortedByDescending { it.createdAt }
+        val text = AtomicJsonFile.readWithBackupOrNull(file(context)) { decodeOrNull(it) != null }
+            ?: return@synchronized emptyList()
+        decodeOrNull(text).orEmpty().sortedByDescending { it.createdAt }
     }
 
-    /** 读一份构建历史；文件不存在或解析失败返回 null（由调用方决定回退还是按空处理）。 */
-    private fun readFile(f: File): List<BuildTask>? {
-        if (!f.exists()) return null
-        return runCatching {
-            json.decodeFromString(ListSerializer(BuildTask.serializer()), f.readText())
-        }.getOrElse { e ->
-            AgentLogger.e("BuildStore", "${f.name} 解析失败：${e.message}")
-            null
-        }
-    }
+    /** 解析失败返回 null（不抛：调用方拿 null 判断「这份内容不可用」）。 */
+    private fun decodeOrNull(text: String): List<BuildTask>? =
+        runCatching { json.decodeFromString(ListSerializer(BuildTask.serializer()), text) }
+            .getOrElse { e ->
+                AgentLogger.e("BuildStore", "builds.json 解析失败：${e.message}")
+                null
+            }
 
     fun upsert(context: Context, task: BuildTask) = synchronized(lock) {
         val all = (list(context).filter { it.id != task.id } + task.copy(updatedAt = System.currentTimeMillis()))
@@ -162,35 +161,18 @@ object BuildStore {
         }
     }
 
-    private fun bakFile(context: Context): File =
-        File(File(context.filesDir, "builds"), "builds.json.bak")
-
     /**
-     * 原子写：先落 `.tmp`，再把旧的挪成 `.bak`，最后 rename 覆盖。
+     * 落盘走 [AtomicJsonFile]（全仓唯一原子写实现）。
      *
-     * 直接 `writeText` 是「截断 + 写入」两步，进程在这中间被杀（本模块存在的理由就是
-     * 后台构建会被系统杀掉）就留下半截 JSON；下一次 [list] 解析失败按空处理，
-     * 再 `upsert` 一次，整份构建历史就变成一条。
+     * 此前这里是手写的 `writeText → rename`，漏了 `fd.sync()`：`writeText` 返回只代表
+     * 数据进了页缓存，rename 是元数据操作，两者落盘顺序不保证。断电后可能出现
+     * 「rename 生效、文件长度 0」——而本模块的前提正是「后台构建会被系统杀掉」。
      */
     private fun writeAll(context: Context, tasks: List<BuildTask>) {
-        val f = file(context)
-        f.parentFile?.mkdirs()
         val text = json.encodeToString(ListSerializer(BuildTask.serializer()), tasks)
-        runCatching {
-            val tmp = File(f.parentFile, "${f.name}.tmp")
-            tmp.writeText(text)
-            // 备份也用 rename，不 copy：copy 途中被杀会得到半截 .bak，
-            // 而 rename 要么是旧文件要么不存在，不会是坏文件。
-            if (f.exists()) {
-                val bak = bakFile(context)
-                bak.delete()
-                f.renameTo(bak)
-            }
-            // 同目录 rename 在 POSIX 上是原子的，且能覆盖已存在的目标
-            if (!tmp.renameTo(f)) {
-                f.delete()
-                if (!tmp.renameTo(f)) error("rename 失败")
-            }
-        }.onFailure { AgentLogger.e("BuildStore", "写 builds.json 失败：${it.message}") }
+        // encodeDefaults 保证 stage 的默认值也写进 JSON，旧版才不会因缺字段解析失败
+        if (!AtomicJsonFile.write(file(context), text)) {
+            AgentLogger.e("BuildStore", "写 builds.json 失败")
+        }
     }
 }

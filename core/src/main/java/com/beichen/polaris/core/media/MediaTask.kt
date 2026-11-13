@@ -4,6 +4,7 @@ import com.beichen.polaris.core.llm.LlmHttp
 import com.beichen.polaris.core.llm.runCancellable
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.io.AtomicJsonFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -133,34 +134,23 @@ object MediaTaskStore {
     fun newId(): String = UUID.randomUUID().toString()
 
     /**
-     * 全量落盘：**先写临时文件再改名**，不做原地覆盖。
+     * 全量落盘，走 [AtomicJsonFile]（tmp → fsync → rename）。
      *
      * 原地 `writeText` 写到一半被杀（长任务常伴随后台被杀/断电），留下的是半截 JSON，
      * 下次启动就走进 [readAll] 的解析失败分支——那条分支再干净也只能保住历史，
-     * 保不住「这次写的内容」。先写 `tasks.json.tmp` 再 rename，同目录内 rename 是原子的：
-     * 要么旧文件完整，要么新文件完整，不存在中间态。
+     * 保不住「这次写的内容」。
      */
     private fun writeAll(context: Context, tasks: List<MediaTask>) {
-        val f = file(context)
-        f.parentFile?.mkdirs()
         val text = runCatching {
             json.encodeToString(ListSerializer(MediaTask.serializer()), tasks)
         }.getOrElse { e ->
             AgentLogger.e("MediaTaskStore", "序列化 tasks 失败，本次不写：${e.message}")
             return
         }
-        val tmp = File(f.parentFile, "tasks.json.tmp")
-        runCatching {
-            tmp.writeText(text)
-            if (!tmp.renameTo(f)) {
-                // 部分文件系统上目标已存在时 renameTo 会失败：删掉再改，仍比原地覆写安全。
-                if (!(f.delete() && tmp.renameTo(f))) {
-                    throw IOException("rename 失败：${tmp.name} -> ${f.name}")
-                }
-            }
-        }.onFailure {
-            AgentLogger.e("MediaTaskStore", "写 tasks.json 失败：${it.message}")
-            runCatching { tmp.delete() }
+        // 走 [AtomicJsonFile]：手写版缺 fd.sync()，断电后可能「rename 生效、文件长度 0」。
+        // 读路径仍保留 [readAll] 的坏文件隔离——那份语义比通用回退更细，不在本次收口范围。
+        if (!AtomicJsonFile.write(file(context), text)) {
+            AgentLogger.e("MediaTaskStore", "写 tasks.json 失败")
         }
     }
 

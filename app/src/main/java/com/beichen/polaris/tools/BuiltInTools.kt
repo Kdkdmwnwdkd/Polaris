@@ -452,7 +452,11 @@ class WriteFileTool(
             val content = args["content"]?.primOrNull()?.contentOrNull ?: ""
             // B 批：覆盖写之前先备份旧内容（新文件则记录「此前不存在」），可一键回滚。
             backupHook?.backupBeforeWrite(path)
-            resolve(path).writeText(content)
+            // W-20 漏网：同文件的 edit_file 早就走 atomicWriteText，只有这里还是裸 writeText。
+            // 「截断 + 写入」两步，进程在中间被杀就留下半截源码——而工作区正是要推给
+            // GitHub 编译的那份文件，半截 Kotlin 推上去的表现是「构建失败：编译错误」，
+            // 用户不会想到是本地写坏的。
+            resolve(path).atomicWriteText(content)
             ToolResult.ok(
                 code = "write_ok",
                 message = "已写入 ${content.length} 字符到 $path"
