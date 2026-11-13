@@ -1,5 +1,8 @@
 # docs/ 目录说明
 
+> 想知道**现在做到哪、下一步做什么**：看仓库根的 [`../HANDOFF.md`](../HANDOFF.md)。
+> 本目录是**资料**（为什么这样设计），HANDOFF 是**状态**（此刻在哪、接下来动哪里）。
+
 这个目录同时是 **GitHub Pages 站点根**（<https://kdkdmwnwdkd.github.io/Polaris/>）。
 所以 `.html` 是站点资产，移动会改变线上 URL；`.md` 按下面分类存放，根目录只留少数几个入口文件。
 

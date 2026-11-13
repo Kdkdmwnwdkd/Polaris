@@ -1,5 +1,9 @@
 # 北辰 · Polaris
 
+> **接手这个仓库？先读 [`HANDOFF.md`](HANDOFF.md)。**
+> 那里写清了：现在做到哪、下一步做什么（桌宠一期）、代码红线、环境坑、怎么跑验证。
+> 不要凭 README 描述猜进度——README 讲能力，HANDOFF 讲状态。
+
 Android 本地 AI Agent —— Kotlin / Jetpack Compose，原创实现，四层分离架构。
 
 一个跑在手机上的 AI 助手：多轮工具调用、三家大模型协议原生适配、屏幕理解与操控、
@@ -8,9 +12,9 @@ Android 本地 AI Agent —— Kotlin / Jetpack Compose，原创实现，四层�
 > 产品名**北辰**（Polaris）。工程内部沿用的 `AgentKit` 与包名 `com.beichen.polaris` 是历史代号，
 > 不出现在桌面、系统设置或 App 内任何位置，仅为兼容已装应用升级链而保留。
 
-> 规模：Kotlin 源码 **354 文件 / 85,274 行** ｜ 源码级 QA **101 个 Kotlin harness + 143 个 shell 校验** ｜ 版本号 = CI 构建号（`1.N`）
+> 规模：Kotlin 源码 **360 文件 / 86,759 行**（`app/src/main` + `core/src/main`）｜ QA runner **141 个**（其中 Kotlin harness 103 个）｜ 版本号 = CI 构建号（`1.N`）
 >
-> 上面这两个数字会随提交漂移，别当契约看：`find app/src/main core/src/main -name '*.kt' | wc -l` 自己数一遍更快。
+> 数字按 2026-11-13 的 `1939aa2` 统计，会随提交漂移，别当契约看：`find app/src/main core/src/main -name '*.kt' | wc -l` 自己数一遍更快。
 >
 > 工程是两个 Gradle 模块：`:core`（内核：Agent 循环 / 工具协议 / 会话存储 / 终端 / 模型客户端 / 技能执行）
 > 与 `:app`（界面与装配）。`:core` 不依赖 Compose，也不 import `ui` / `tools`——这条边界由编译器守，
