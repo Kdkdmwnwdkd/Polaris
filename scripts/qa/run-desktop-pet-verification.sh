@@ -244,6 +244,17 @@ else
   good "F3 桌宠没有自己 new TTS 引擎"
 fi
 
+# 踩过一次：`core.lifecycle.launchAppIntentForNotification` 是 internal，
+# core 模块内部（AgentRunService）能用，app 模块调用直接编译失败。
+# 这不是桌宠特有的坑，但桌宠是唯一需要「从 Service 拉起 App」的地方，
+# 所以钉在这里：以后有人图省事再 import 回来，本地就会红，不必等 24 分钟 CI。
+if grep -n 'launchAppIntentForNotification' "$SERVICE" 2>/dev/null \
+    | grep -qvE '^[0-9]+:[[:space:]]*(\*|//)'; then
+  bad "F4 PetOverlayService 引用了 core 的 internal 函数（跨模块编译不过），用 packageManager.getLaunchIntentForPackage"
+else
+  good "F4 拉起主应用走 packageManager，没有跨模块引用 internal"
+fi
+
 say ""
 
 # ---------------------------------------------------------------- G 范围控制

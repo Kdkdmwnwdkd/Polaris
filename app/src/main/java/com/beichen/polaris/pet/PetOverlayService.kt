@@ -12,7 +12,6 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.beichen.polaris.core.AgentLogger
-import com.beichen.polaris.core.lifecycle.launchAppIntentForNotification
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -111,11 +110,24 @@ class PetOverlayService : Service() {
     }
 
     private fun openMainApp() {
-        runCatching {
-            startActivity(
-                launchAppIntentForNotification(this).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        }.onFailure { AgentLogger.w(TAG, "打开主应用失败：${it.message}") }
+        runCatching { startActivity(mainAppIntent()) }
+            .onFailure { AgentLogger.w(TAG, "打开主应用失败：${it.message}") }
+    }
+
+    /**
+     * 回到主应用的 Intent。
+     *
+     * 不用 `core.lifecycle.launchAppIntentForNotification`：它是 `internal`，
+     * core 模块内部（`AgentRunService`）能用，跨模块调会编译失败。这里只需要
+     * 「launcher intent + NEW_TASK」，两行就够，不值得为它去放开 core 的可见性。
+     */
+    private fun mainAppIntent(): Intent {
+        val launch = packageManager.getLaunchIntentForPackage(packageName)
+            ?: Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                setPackage(packageName)
+            }
+        return launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 
     private fun startAsForeground() {
@@ -154,7 +166,7 @@ class PetOverlayService : Service() {
         val pending = PendingIntent.getActivity(
             this,
             0,
-            launchAppIntentForNotification(this),
+            mainAppIntent(),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)

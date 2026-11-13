@@ -111,7 +111,7 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
       app/.../pet/PetOverlay.kt           ComposeView + 手工挂三个 owner + 拖动吸附
       app/.../pet/PetPanel.kt             形象（Canvas 自绘，无素材）+ 气泡 + 输入
       app/.../pet/PetAgentSession.kt      独立轻量会话（最小只读工具表）
-      scripts/qa/run-desktop-pet-verification.sh   26 条守卫
+      scripts/qa/run-desktop-pet-verification.sh   27 条守卫
 
 改动  AndroidManifest.xml                 注册 service（foregroundServiceType=specialUse）
       app/ui/SettingsScreen.kt            「桌面助手」组：总开关 + 权限引导 + 未运行重试
