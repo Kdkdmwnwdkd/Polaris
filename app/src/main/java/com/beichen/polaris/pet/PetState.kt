@@ -96,12 +96,16 @@ object PetState {
     }.onFailure { AgentLogger.w(TAG, "打不开悬浮窗授权页：${it.message}") }.getOrDefault(false)
 
     /**
-     * 用户打开开关。
+     * 用户打开开关（或磁贴要求「叫它出来听一句」）。
      *
+     * @param action 随启动意图带给 [PetOverlayService] 的动作。为空是普通的「开桌宠」；
+     *        传 `PetOverlayService.ACTION_LISTEN` 表示「起来之后直接开始听」——
+     *        磁贴走这条路。**不要用「先 start 再补一条带 action 的 intent」**：
+     *        两次启动请求之间服务可能已经判定自己该退出（权限被收回），第二条就石沉大海。
      * @return false = 没有悬浮窗权限，什么都没做（调用方应引导授权）。
      *         返回 true 只代表**已请求启动**，服务是否起来看 [running]。
      */
-    fun start(context: Context): Boolean {
+    fun start(context: Context, action: String? = null): Boolean {
         val app = context.applicationContext
         if (!canDrawOverlays(app)) {
             AgentLogger.w(TAG, "未授予悬浮窗权限，不启动桌面助手")
@@ -109,7 +113,7 @@ object PetState {
         }
         _enabled.value = true
         persist(app, true)
-        launchService(app)
+        launchService(app, action)
         return true
     }
 
@@ -160,8 +164,9 @@ object PetState {
         }.onFailure { AgentLogger.w(TAG, "开关落盘失败：${it.message}") }
     }
 
-    private fun launchService(context: Context) {
+    private fun launchService(context: Context, action: String? = null) {
         val intent = Intent(context, PetOverlayService::class.java)
+        if (action != null) intent.action = action
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ContextCompat.startForegroundService(context, intent)

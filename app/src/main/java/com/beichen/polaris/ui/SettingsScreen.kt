@@ -1,9 +1,12 @@
 package com.beichen.polaris.ui
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.drawable.Icon as AndroidIcon
 import android.os.Build
+import android.service.quicksettings.TileService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -70,6 +73,7 @@ import android.widget.Toast
 import com.beichen.polaris.core.agent.ApprovalTier
 import com.beichen.polaris.core.agent.SurvivalCheckService
 import com.beichen.polaris.pet.PetState
+import com.beichen.polaris.pet.PetTileService
 import com.beichen.polaris.runtime.lease.LeaseRegistry
 import com.beichen.polaris.runtime.lease.LeaseSnapshot
 import com.beichen.polaris.ui.contract.SettingsScreenContract
@@ -378,6 +382,39 @@ fun SettingsScreen(
                     PetState.start(context)
                 }
             }
+            /**
+             * 把「北辰」添加到下拉快捷设置。
+             *
+             * Android 13 起有官方 API 会弹系统确认框（用户点「添加」才生效，不能静默塞）。
+             * 13 以下没有这条路，只能告诉用户手动加——不要伪造一个「已添加」的假成功。
+             */
+            val addPetTile: () -> Unit = {
+                val added = runCatching {
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                        false
+                    } else {
+                        TileService.requestAddTileService(
+                            ComponentName(context, PetTileService::class.java),
+                            "北辰",
+                            AndroidIcon.createWithResource(
+                                context,
+                                android.R.drawable.ic_btn_speak_now
+                            ),
+                            java.util.concurrent.Executor { it.run() },
+                            null
+                        )
+                        true
+                    }
+                }.getOrDefault(false)
+                if (!added) {
+                    Toast.makeText(
+                        context,
+                        "请在系统快捷设置（下拉通知栏 → 编辑）里手动添加「北辰」",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+
             AkGroup(
                 title = "桌面助手",
                 description = "常驻桌面角落的小浮球，点开问一句，答案会念出来"
@@ -422,6 +459,15 @@ fun SettingsScreen(
                         onClick = { PetState.ensureRunning(context) }
                     )
                 }
+                // 唤醒词的替代入口：不常驻监听（省电），但给一个「下拉点一下」的快捷方式。
+                // 放在权限判据之外——磁贴本身不需要悬浮窗权限也能加到面板上，
+                // 点它时才去要权限（PetTileService 里那一步会给授权页）。
+                AkListItem(
+                    icon = Icons.Outlined.Bolt,
+                    title = "加到快捷设置",
+                    description = "下拉通知栏点「北辰」，不必回桌面找它",
+                    onClick = addPetTile
+                )
                 // 只在「已开启但没授权」时出现：没开桌宠的人不需要看到这一条，
                 // 而开了却拒过权限的人需要一个补授权的入口（否则只能卸载重装）。
                 if (petEnabled && !petHasMic) {

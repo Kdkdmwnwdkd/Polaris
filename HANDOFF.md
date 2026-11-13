@@ -20,11 +20,13 @@
 | `a1e25e4` | 语音仲裁：麦克风占用（`MicClaim`）+ 打断裁决（`InterruptPolicy`） |
 | `1939aa2` | 修两处 Android API 在 SDK stub 下的编译差异（CI 用） |
 
-**当前状态**：桌宠一、二期都已落地（11-13 悬浮窗骨架 / 11-14 语音闭环）。
-全量 QA 与门禁以 `scripts/qa/run-all.sh` 的当前输出为准。
+**当前状态**：桌宠一期（悬浮窗）、二期（语音闭环）、三期（一键唤起：磁贴 + 通知按钮）
+都已落地。全量 QA 与门禁以 `scripts/qa/run-all.sh` 的当前输出为准。
 
 **下一步**：桌宠的**真机验证**——`docs/ops/DEVICE-VERIFICATION-PENDING.md` 的
-P11（悬浮窗 10 条）+ P12（语音 9 条）。代码层面二期已闭环，三期唤醒词仍建议不做。
+P11（悬浮窗 10 条）+ P12（语音 9 条）+ P13（一键唤起 9 条）。
+代码层面已闭环；**唤醒词仍然建议不做**（spec §12.1 的账：1–3% 电量/小时 ×
+未知用量），磁贴是它的替代入口。
 
 ---
 
@@ -83,11 +85,11 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
 
 ---
 
-## 3. 桌宠（一期 11-13 骨架 / 二期 11-14 语音，等真机验证）
+## 3. 桌宠（一期 11-13 骨架 / 二期 11-14 语音 / 三期 11-14 一键唤起，等真机验证）
 
 **完整设计在 [`docs/specs/desktop-pet-spec-v1.md`](docs/specs/desktop-pet-spec-v1.md)，先读它，别重新设计。**
 「开工顺序」保留原文（它解释代码为什么长这样）；一期实现见 §3.3 表 + spec §10，
-二期见 §3.6 + spec §11。
+二期见 §3.6 + spec §11，三期见 §3.7 + spec §12。
 
 ### 3.1 目标与验收
 
@@ -174,6 +176,36 @@ NDK 编译会让 24 分钟的 CI 翻倍，APK 从 35 MB 涨到 110 MB，而收�
 不生效，所以 `specialUse` 却录音不会崩。**一旦 targetSdk 提到 34**，必须改 manifest 的
 `specialUse|microphone` + 动态 type（无 `RECORD_AUDIO` 时不能带 microphone 位，
 否则抛 `SecurityException`）。完整写法见 spec §11.5。
+
+### 3.7 三期「一键唤起」（2026-11-14 落地，替代唤醒词）
+
+**唤醒词没做，而且建议继续不做。** 账很简单：常驻麦克风 + 关键词检测 1–3% 电量/小时，
+模型给 APK 加 42 MB（Vosk 中文）或要自己训练（Porcupine 中文词），还要解决麦克风独占；
+换来的只是「不用点两下」。真实用量为零之前，这笔投入注定是负资产。
+
+**替代方案**：把「叫它出来」摊到三个入口——桌面上的小球（一期就有）、
+通知栏的「说一句」、快捷设置的「北辰」磁贴。零常驻、零新权限、零依赖。
+
+关键实现四处：
+
+| 位置 | 做了什么 | 为什么不能省 |
+|---|---|---|
+| `PetTileService` | 磁贴；锁屏走 `unlockAndRun` | 锁屏上直接开麦等于绕过用户确认 |
+| `PetOverlayService.ACTION_LISTEN` | 唯一入口，`listen()` 统一收口 | 三条入口各自拼启动逻辑迟早分叉 |
+| `PetState.start(ctx, action)` | action 随启动意图一起下去 | 先 start 再补一条 intent，中间服务可能已自退 |
+| `PetOverlayHost.beginVoice()` | 空闲→展开+听；在听→收尾 | 语义与气泡里的麦克风按钮完全一致 |
+
+**三个「看起来做了、其实没做」的坑**（守卫 `[I]` 段 12 条钉住）：
+
+1. **只把桌宠叫出来、没开始听**（I8）。漏传 action 时磁贴会把小球叫到桌面上，
+   然后一声不响地等着——用户张着嘴以为坏了。
+2. **系统重建服务时偷偷开麦**（I7b）。`START_STICKY` 重建的 `intent` 是 null，
+   若在 `onCreate` 里无条件 `beginVoice()`，用户从没点过任何东西也会开始录音。
+3. **展开就弹键盘**（I10）。二期那句「`LaunchedEffect(Unit)` 只跑一次不会抢焦点」是错的：
+   收起态压根不组合 `BubbleCard`，展开是全新组合。现在由 `autoFocusInput` 受控。
+
+**一个刻意的设计**：关掉桌宠开关后点磁贴会把它重新打开。磁贴的语义是「叫它出来」，
+不是「开关」。想彻底安静，把磁贴从面板上移除。
 
 ---
 
@@ -262,6 +294,40 @@ exec java -cp "$CP" "$MAIN" -kotlin-home "$BASE" "$@"
   但同样需要 token。
 - 注意：用 API 重建提交会让 SHA 变化。**判断「有没有传上去」要比对树对象**
   （`git rev-parse HEAD^{tree}` vs `origin/main^{tree}`），不要看 SHA。
+
+### 5.6 坑四：沙箱清理后 45 个 runner 集体 SKIP
+
+症状：`run-all.sh` 汇总变成 `PASS=97 SKIP=45`（本该是 `PASS=104 SKIP=38`），
+一个 FAIL 都没有。看起来「环境干净、一切正常」，实际是**编译型验证整体消失**——
+比报红更危险，因为门禁照样绿。
+
+根因：这些 runner 的 `[B] 行为` 段要真编真跑，靠 `scripts/qa/lib/deps.sh` 从
+`$QA_GRADLE_CACHE`（默认 `~/.gradle/caches/modules-2/files-2.1`）里找
+`kotlin-compiler-embeddable` / `kotlin-stdlib` / `kotlinx-coroutines-core-jvm`。
+沙箱重建后这个缓存是空的，`COROUTINES` 解析为空串 → 脚本 `exit 3` 自述 SKIP。
+注意 `KOTLINC/STDLIB` 有 `$KC_HOME/lib` 回落，**`COROUTINES` 没有**，所以光设
+`KC_HOME=/tmp/kotlinc` 不解决问题。
+
+修法：造一个 maven 布局的假缓存，把 `/tmp/kotlinc/lib` 的 jar 拷进去：
+
+```bash
+C=/tmp/qacache
+for p in org.jetbrains.kotlin/kotlin-compiler-embeddable:kotlin-compiler-embeddable-1.9.25 \
+         org.jetbrains.kotlin/kotlin-stdlib:kotlin-stdlib-1.9.25 \
+         org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm:kotlinx-coroutines-core-jvm-1.8.1 \
+         org.jetbrains.intellij.deps/trove4j:trove4j-1.0.20200330 \
+         org.jetbrains/annotations:annotations-13.0 ; do
+  d=${p%%:*}; f=${p##*:}
+  mkdir -p "$C/$d"; cp -L "/tmp/kotlinc/lib/${f%%-[0-9]*}.jar" "$C/$d/$f" 2>/dev/null || true
+done
+# 然后：AGENTKIT_GRADLE_CACHE=/tmp/qacache bash scripts/qa/run-all.sh
+```
+
+**必须用 `cp`，不能用 `ln -s`**：`deps.sh` 里是 `find "$dir" -type f`，软链不是 `-type f`，
+会被悄悄跳过——症状与「没建缓存」一模一样，白折腾一轮。（这一条是实测踩出来的。）
+
+判据：`PASS` 回到 104 左右，且 `run-voice-arbiter-verification.sh` 的 `[B]` 段
+能打出 `B1…B22` 那 22 条，而不是一行 `KS_HARNESS_SKIP`。
 
 ---
 

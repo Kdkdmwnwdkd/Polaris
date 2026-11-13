@@ -110,6 +110,19 @@ class PetOverlayHost(
         private set
 
     /**
+     * 展开后要不要把焦点塞进输入框。
+     *
+     * 默认 true（点一下形象展开，用户多半是想打字）。两类情况必须为 false：
+     * - **语音唤起**：用户张着嘴准备说话，屏幕上却弹起半屏键盘，遮挡的正是他自己的
+     *   视线；声音一进来还可能被键盘的提示音盖住。
+     * - **瞬时提示**：只为了让用户看见一句话而展开，抢焦点纯属打扰。
+     *
+     * 注意这不是「能不能打字」的开关——窗口照样可获焦，用户想打字点输入框即可。
+     */
+    var autoFocusInput: Boolean by mutableStateOf(true)
+        private set
+
+    /**
      * 语音识别出的待发送文本。
      *
      * 为什么要绕这一道：`send` 是 [PetPanel] 的内部闭包（它要改 messages / sending 这些
@@ -168,8 +181,9 @@ class PetOverlayHost(
                         voiceState = voiceState,
                         notice = notice,
                         voicePrompt = voicePrompt,
+                        autoFocusInput = autoFocusInput,
                         onVoicePromptConsumed = ::consumeVoicePrompt,
-                        onExpandedChange = ::applyExpanded,
+                        onExpandedChange = { applyExpanded(it) },
                         onReply = onReply,
                         onClose = {
                             onClose()
@@ -223,12 +237,45 @@ class PetOverlayHost(
         view = null
         params = null
         expanded = false
+        // 下次展开默认回到「点开就能打字」的行为，别把这一次的语音意图留在状态里
+        autoFocusInput = true
         owner.detach()
     }
 
     /** PetPanel 消费完一条语音结果后调用。 */
     fun consumeVoicePrompt() {
         voicePrompt = null
+    }
+
+    /**
+     * 从外部叫它听一句（磁贴 / 通知按钮 / 以后的任何入口）。
+     *
+     * 语义是「按一下麦克风」而不是「开始一段新录音」：
+     * - 空闲时 → 展开气泡并开始听；
+     * - 已经在听 → 当作「我说完了」，让引擎尽快出结果（与气泡里那个麦克风按钮同一行为）。
+     *
+     * 展开时**不抢输入焦点**（[autoFocusInput] = false）：用户张着嘴，屏幕上弹半屏键盘
+     * 既挡视线又盖住声音反馈。窗口本身仍可获焦，想打字点一下输入框就行。
+     */
+    fun beginVoice() {
+        if (view == null) {
+            AgentLogger.w(TAG, "悬浮窗未就绪，忽略聆听请求")
+            return
+        }
+        val v = voice ?: run {
+            showNotice("语音还没准备好，稍等一下再说")
+            return
+        }
+        if (voiceState !is PetVoiceState.Idle) {
+            // 正在听（或正在出结果）：stop 是「说完了」，Transcribing 下它是空操作
+            v.stop()
+            return
+        }
+        applyExpanded(true, focusInput = false)
+        if (!v.start()) {
+            // start() 失败时已经通过 onProblem → showNotice 给了可执行的原因，这里不重复
+            AgentLogger.i(TAG, "聆听请求未被接受")
+        }
     }
 
     /**
@@ -240,7 +287,8 @@ class PetOverlayHost(
      */
     private fun showNotice(text: String) {
         notice = text
-        applyExpanded(true)
+        // 只为让人看一眼文字而展开，不该顺手弹出键盘
+        applyExpanded(true, focusInput = false)
         mainHandler.removeCallbacks(clearNotice)
         mainHandler.postDelayed(clearNotice, NOTICE_MS)
     }
@@ -248,14 +296,22 @@ class PetOverlayHost(
     /**
      * 展开 / 收起：窗口宽度与焦点标志一起改，缺一样都会出问题。
      *
+     * @param focusInput 展开后是否让 [PetPanel] 把焦点塞进输入框。点形象展开用 true；
+     *        语音唤起与瞬时提示用 false（理由见 [autoFocusInput]）。
+     *
      * 名字故意不是 `setExpanded`：`expanded` 是 `var ... private set`，Kotlin 会为它
      * 生成 `setExpanded(Z)V`，同名函数在 JVM 层直接签名冲突（CI 第一次就是这么挂的：
      * `Platform declaration clash: setExpanded(Z)V`）。本地没有 Android SDK，
      * 这类只在字节码层暴露的冲突靠肉眼看不出来。
      */
-    private fun applyExpanded(value: Boolean) {
-        if (expanded == value) return
+    private fun applyExpanded(value: Boolean, focusInput: Boolean = true) {
+        if (expanded == value) {
+            // 已经展开：只更新焦点意图，宽度不用再动
+            if (value) autoFocusInput = focusInput
+            return
+        }
         expanded = value
+        if (value) autoFocusInput = focusInput
         val lp = params ?: return
         val screen = screenSize()
         lp.width = px(if (value) BUBBLE_WIDTH_DP else PET_SIZE_DP)

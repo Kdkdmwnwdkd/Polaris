@@ -102,6 +102,13 @@ fun PetPanel(
     notice: String?,
     /** 语音识别出的待发送文本。非空即发送，发完回调 [onVoicePromptConsumed]。 */
     voicePrompt: String?,
+    /**
+     * 展开后是否自动把焦点给输入框。
+     *
+     * 语音唤起与瞬时提示传 false：用户正在说话，弹起半屏键盘既挡视线也盖住反馈。
+     * 详见 `PetOverlayHost.autoFocusInput`。
+     */
+    autoFocusInput: Boolean,
     onVoicePromptConsumed: () -> Unit,
     onExpandedChange: (Boolean) -> Unit,
     onClose: () -> Unit,
@@ -162,6 +169,7 @@ fun PetPanel(
                 sending = sending,
                 notice = notice,
                 voiceState = voiceState,
+                autoFocusInput = autoFocusInput,
                 onSend = { send(input) },
                 onCollapse = { onExpandedChange(false) },
                 onMenu = {
@@ -217,6 +225,7 @@ private fun BubbleCard(
     sending: Boolean,
     notice: String?,
     voiceState: PetVoiceState,
+    autoFocusInput: Boolean,
     onSend: () -> Unit,
     onCollapse: () -> Unit,
     onMenu: () -> Unit,
@@ -227,14 +236,19 @@ private fun BubbleCard(
     val focus = remember { FocusRequester() }
     val scheme = MaterialTheme.colorScheme
 
-    // 展开时自动聚焦输入框：桌宠的主要用法是「点开就说」，
-    // 还要用户再点一下输入框是多余的一步。延迟是因为窗口刚去掉
-    // FLAG_NOT_FOCUSABLE，系统还没把焦点给到窗口，立刻 requestFocus 会落空。
+    // 展开时自动聚焦输入框：点形象展开的人多半是来打字的，还要他再点一下输入框
+    // 是多余的一步。延迟是因为窗口刚去掉 FLAG_NOT_FOCUSABLE，系统还没把焦点给到
+    // 窗口，立刻 requestFocus 会落空。
     //
-    // **只跑一次**（key 是 Unit）。二期加进来一个反例：语音「没听清」会展开气泡提示，
-    // 若监听 voiceState 就会在那时抢焦点、弹出键盘——用户刚说完话，屏幕上突然冒出
-    // 一半屏键盘。想打字的人自己点输入框，一步不多。
-    LaunchedEffect(Unit) {
+    // **不能无条件跑**。语音唤起（磁贴 / 通知按钮）与「没听清」提示也会展开气泡，
+    // 那两种场景下弹出半屏键盘是纯粹的破坏：用户正张着嘴，键盘挡住他自己的视线，
+    // 还可能盖住声音反馈。所以 key 取 autoFocusInput，false 时直接不抢焦点。
+    //
+    // （早先这里写的是 `LaunchedEffect(Unit)`，注释还断言「只跑一次不会抢焦点」——
+    //   那是错的：收起态不组合 BubbleCard，展开时是全新组合，Unit 照样会跑一遍。
+    //   二期「没听清」时莫名其妙弹键盘就是这么来的。）
+    LaunchedEffect(autoFocusInput) {
+        if (!autoFocusInput) return@LaunchedEffect
         delay(160)
         runCatching { focus.requestFocus() }
     }

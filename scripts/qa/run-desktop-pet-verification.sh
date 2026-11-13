@@ -17,6 +17,7 @@
 #   F  单点复用   自己 new TextSpeaker → 与主界面叠音（AudioGraph 的 KDoc 写了原因）
 #   G  范围控制   出现 AudioRecord 就是手搓录音（识别该交给系统服务）
 #   H  语音闭环   二期：不弹系统页、走仲裁、销毁引擎、有超时、错误可执行
+#   I  一键唤起   三期替代：磁贴/通知按钮直达「在听」，且绝不做常驻监听
 #
 # 退出码：0 通过 / 1 有违规。
 set -uo pipefail
@@ -37,6 +38,7 @@ SESSION=app/src/main/java/com/beichen/polaris/pet/PetAgentSession.kt
 OVERLAY=app/src/main/java/com/beichen/polaris/pet/PetOverlay.kt
 PANEL=app/src/main/java/com/beichen/polaris/pet/PetPanel.kt
 VOICE=app/src/main/java/com/beichen/polaris/pet/PetVoice.kt
+TILE=app/src/main/java/com/beichen/polaris/pet/PetTileService.kt
 SETTINGS=app/src/main/java/com/beichen/polaris/ui/SettingsScreen.kt
 GRAPH=app/src/main/java/com/beichen/polaris/AppGraph.kt
 APP=app/src/main/java/com/beichen/polaris/AgentKitApplication.kt
@@ -382,6 +384,107 @@ if grep -q 'voicePrompt' "$PANEL" && grep -q 'voicePrompt' "$OVERLAY"; then
   good "H9 语音结果经 voicePrompt 回到 PetPanel 的统一发送路径"
 else
   bad "H9 语音结果没有走统一发送路径 —— 会出现「发了但没回答」"
+fi
+
+say ""
+
+# ---------------------------------------------------------------- I 一键唤起
+#
+# 这一段的由来：不做唤醒词（spec §2.1：常驻监听 1–3% 电量/小时，而用量还没数据），
+# 但「每次都要回桌面找小球」太深。磁贴 + 通知按钮是这条缝里最省的入口。
+# 静态断言拦的是「看起来做了、实际点了没反应」的三类写法。
+say "[I] 一键唤起（磁贴 / 通知按钮）"
+
+if [ ! -f "$TILE" ]; then
+  bad "I0 缺少 PetTileService.kt —— 一键唤起的入口没落地"
+else
+  good "I0 磁贴服务独立成文件"
+
+  # I1 没有这条权限，系统根本不会绑定 TileService：磁贴不出现在可选列表里，
+  # 用户「添加了怎么没有」是最难查的一类反馈（无异常、无日志、无红字）。
+  tile_block=$(awk '/\.pet\.PetTileService/{f=1} f{print} f&&/<\/service>/{exit}' "$MANI")
+  if printf '%s' "$tile_block" | grep -q 'BIND_QUICK_SETTINGS_TILE'; then
+    good "I1 磁贴声明 BIND_QUICK_SETTINGS_TILE（否则系统静默不绑定）"
+  else
+    bad "I1 缺少 BIND_QUICK_SETTINGS_TILE —— 磁贴加不上去，且没有任何报错"
+  fi
+
+  # I2/I3 绑定方是系统 UI。exported=false 会让系统绑不上；action 写错则列表里没有。
+  if printf '%s' "$tile_block" | grep -q 'android:exported="true"'; then
+    good "I2 磁贴 exported=true（绑定方是系统 UI）"
+  else
+    bad "I2 磁贴 exported 不是 true —— 系统绑不上这个服务"
+  fi
+
+  if printf '%s' "$tile_block" | grep -q 'android.service.quicksettings.action.QS_TILE'; then
+    good "I3 声明了 QS_TILE intent-filter"
+  else
+    bad "I3 缺少 QS_TILE action —— 快捷设置里找不到「北辰」"
+  fi
+
+  # I4 磁贴只发意图。一旦它自己开录音/建识别器，就会出现「两份引擎抢麦克风」，
+  # 而这正是 AudioGraph 与 PetVoice 存在的理由。
+  if grep -qE 'createSpeechRecognizer|AudioRecord' "$TILE"; then
+    bad "I4 磁贴里直接碰录音/识别 —— 引擎只能由 PetVoice 持有"
+  else
+    good "I4 磁贴只发意图，不持有录音与识别引擎"
+  fi
+
+  # I5 入口必须收口到服务里那一个方法。磁贴自己拼 startService 会绕过
+  # 「先确认能画悬浮窗」这一步，表现为点了磁贴、服务秒退。
+  if grep -q 'PetOverlayService.listen' "$TILE"; then
+    good "I5 磁贴经 PetOverlayService.listen 统一收口"
+  else
+    bad "I5 磁贴自己拼启动逻辑 —— 会与服务里的真实行为分叉"
+  fi
+
+  # I6 磁贴不能直接拉 Activity：Android 14 起会拦后台启动，表现是「点了毫无反应」。
+  if grep -q 'startActivity(' "$TILE"; then
+    bad "I6 磁贴里出现 startActivity —— Android 14 起会被拦，且用户看不到任何反馈"
+  else
+    good "I6 磁贴不直接拉起 Activity"
+  fi
+fi
+
+# I7 服务只认显式 action。START_STICKY 重建时 intent 为 null，
+# 若在 onCreate 里无条件开始听，就是「系统替你打开了麦克风」。
+sc_block=$(awk '/override fun onStartCommand/,/^    }/' "$SERVICE")
+if printf '%s' "$sc_block" | grep -q 'ACTION_LISTEN'; then
+  good "I7 服务处理 ACTION_LISTEN"
+else
+  bad "I7 服务不处理 ACTION_LISTEN —— 磁贴与通知按钮点了没反应"
+fi
+
+oc_block=$(awk '/override fun onCreate/,/^    }/' "$SERVICE")
+if printf '%s' "$oc_block" | grep -q 'beginVoice'; then
+  bad "I7b onCreate 里就开始听 —— 系统重建服务会未经同意打开麦克风"
+else
+  good "I7b 只有显式 ACTION_LISTEN 才开始听"
+fi
+
+# I8 listen() 必须把 action 一路带进启动意图。少了这一句，磁贴只会「把桌宠叫出来」，
+# 用户张着嘴等半天没反应——功能看起来是好的，实际差了最关键的一步。
+listen_block=$(awk '/fun listen\(/,/^        }/' "$SERVICE")
+if printf '%s' "$listen_block" | grep -q 'ACTION_LISTEN'; then
+  good "I8 listen() 把 ACTION_LISTEN 一并交给服务"
+else
+  bad "I8 listen() 没传 ACTION_LISTEN —— 点磁贴只是「打开桌宠」，不会开始听"
+fi
+
+# I9 通知按钮走 getService。用 getBroadcast 要新增一个接收器与清单项，
+# 而通知只在服务运行时存在，广播回来还得再找服务——白绕一圈。
+if grep -q 'PendingIntent.getService' "$SERVICE" && ! grep -q 'PendingIntent.getBroadcast' "$SERVICE"; then
+  good "I9 通知按钮用 getService（不引入额外接收器）"
+else
+  bad "I9 通知按钮不是 getService —— 要么没做「说一句」，要么多了一个接收器"
+fi
+
+# I10 语音唤起不抢输入焦点。抢了就会弹半屏键盘，挡住用户自己的视线，
+# 还可能盖住声音反馈——二期「没听清」时踩过一次，别再踩。
+if grep -q 'focusInput = false' "$OVERLAY" && grep -q 'LaunchedEffect(autoFocusInput)' "$PANEL"; then
+  good "I10 语音唤起 / 瞬时提示的展开不抢输入焦点"
+else
+  bad "I10 展开无条件聚焦输入框 —— 磁贴叫它说话时会弹出键盘挡住视线"
 fi
 
 say ""

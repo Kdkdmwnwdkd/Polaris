@@ -158,6 +158,22 @@
                 android:value="用户主动开启的桌面常驻助手悬浮窗，可随时在设置或桌宠菜单里关闭" />
         </service>
 
+        <!-- 快捷设置磁贴：唤醒词的替代入口。
+             「不做常驻监听」是有意的（spec §2.1：1–3% 电量/小时，而用量尚无数据），
+             但「每次都要回桌面找小球」又太深，所以给一个零成本的一键入口。
+             BIND_QUICK_SETTINGS_TILE 由系统授予，用户不授权也只在磁贴里看不到它。
+             exported=true 是必需的：绑定方是系统 UI，不是本应用。 -->
+        <service
+            android:name=".pet.PetTileService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_btn_speak_now"
+            android:label="北辰"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <!-- W-13：Shizuku 提供者（权限/服务发现） -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

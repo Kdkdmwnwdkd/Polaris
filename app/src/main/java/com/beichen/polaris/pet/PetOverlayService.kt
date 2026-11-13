@@ -94,6 +94,11 @@ class PetOverlayService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        // 只有显式带上 ACTION_LISTEN 才算「叫它听一句」：START_STICKY 被系统重建时
+        // intent 为 null，那时绝不能顺手开始录音——用户没叫它。
+        if (intent?.action == ACTION_LISTEN) {
+            overlay?.beginVoice()
+        }
         return START_STICKY
     }
 
@@ -178,8 +183,30 @@ class PetOverlayService : Service() {
             .setSilent(true)
             .setShowWhen(false)
             .setContentIntent(pending)
+            .addAction(
+                android.R.drawable.ic_btn_speak_now,
+                "说一句",
+                listenPendingIntent()
+            )
             .build()
     }
+
+    /**
+     * 通知上的「说一句」。
+     *
+     * 走 `getService` 而不是 `getBroadcast` + 静态接收器：服务本来就在跑（通知只在
+     * 运行时存在），多一个接收器只是多一处要维护的清单项。
+     *
+     * `requestCode` 必须与 contentIntent 的 0 不同，否则两个 PendingIntent 会
+     * 撞成同一个（`Intent.filterEquals` 不同的只有 action，但仍按 requestCode 区分，
+     * 显式给不同值最稳妥）。
+     */
+    private fun listenPendingIntent(): PendingIntent = PendingIntent.getService(
+        this,
+        REQ_LISTEN,
+        Intent(this, PetOverlayService::class.java).setAction(ACTION_LISTEN),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
 
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -199,9 +226,39 @@ class PetOverlayService : Service() {
         )
     }
 
-    private companion object {
-        const val TAG = "PetService"
-        const val CHANNEL_ID = "agentkit_pet_overlay"
-        const val NOTIFICATION_ID = 0x5045 // 'PE'
+    companion object {
+        private const val TAG = "PetService"
+        private const val CHANNEL_ID = "agentkit_pet_overlay"
+        private const val NOTIFICATION_ID = 0x5045 // 'PE'
+
+        /** 通知按钮专用 requestCode（与 contentIntent 的 0 区分开）。 */
+        private const val REQ_LISTEN = 1
+
+        /**
+         * 「请开始听」。
+         *
+         * 刻意做成服务自己的 action 而不是广播：这条路径要求「窗已经在、麦克风还能用」，
+         * 而这两件事只有服务自己知道。广播出去还得回服务里判断一遍，白绕一层。
+         */
+        private const val ACTION_LISTEN = "com.beichen.polaris.pet.action.LISTEN"
+
+        /**
+         * 磁贴 / 通知共用的入口：确保桌宠在运行，然后让它听一句。
+         *
+         * @return true = 已发出启动或聆听请求（服务是否真的起来看 [PetState.running]）；
+         *         false = 没有悬浮窗权限，什么都没做。
+         *
+         * **不要在这里判断「服务是否已在跑」**：`start` 本身是幂等的，
+         * 而多一条 `if (running)` 分支就多一处会与真实状态不同步的判断。
+         */
+        fun listen(context: Context): Boolean {
+            val app = context.applicationContext
+            PetState.sync(app)
+            if (!PetState.canDrawOverlays(app)) {
+                AgentLogger.w(TAG, "没有悬浮窗权限，无法开始聆听")
+                return false
+            }
+            return PetState.start(app, ACTION_LISTEN)
+        }
     }
 }
