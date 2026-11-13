@@ -263,10 +263,17 @@ fun ChatScreen(
      * 用系统的 [RecognizerIntent]（各家 ROM 自带识别服务），不自己录音——
      * 自己录音要申请 RECORD_AUDIO、要处理采样率/降噪，收益远不如直接借系统。
      * 识别结果经 [SpeechLogic.cleanResult] 清洗后**追加**到已有输入，不覆盖用户已打的字。
+     *
+     * 2026-11-13：启动前先过声音仲裁（[ChatViewModel.beginVoiceCapture]）。
+     * 改造前这里只 launch，播报仍在继续，录音把 AI 自己的声音也收进去——
+     * 识别结果是一团乱码，而用户完全不知道发生了什么。现在拿到麦克风即意味着播报已停。
      */
     val voiceLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        // 三条路径（拿到结果 / 取消 / 出错）都必须释放：漏一条，麦克风就被永久占住，
+        // 下次点麦克风会被自己判成 busy——而那种状态只能杀掉 App 才恢复。
+        vm.endVoiceCapture()
         if (result.resultCode == Activity.RESULT_OK) {
             val spoken = result.data
                 ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
@@ -280,17 +287,25 @@ fun ChatScreen(
         }
     }
     val startVoiceInput: () -> Unit = {
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-            )
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.getDefault().toString())
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "说出你要问的内容")
-        }
-        val launched = runCatching { voiceLauncher.launch(intent) }
-        if (launched.isFailure) {
-            Toast.makeText(ctx, "本机没有可用的语音识别服务", Toast.LENGTH_SHORT).show()
+        val denied = vm.beginVoiceCapture()
+        if (denied != null) {
+            // 被拒的原因是「别的应用在录音」「通话中」这类，必须原样告诉用户，
+            // 否则他会以为语音按钮坏了。
+            Toast.makeText(ctx, denied, Toast.LENGTH_SHORT).show()
+        } else {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                )
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.getDefault().toString())
+                putExtra(RecognizerIntent.EXTRA_PROMPT, "说出你要问的内容")
+            }
+            val launched = runCatching { voiceLauncher.launch(intent) }
+            if (launched.isFailure) {
+                vm.endVoiceCapture()
+                Toast.makeText(ctx, "本机没有可用的语音识别服务", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -1906,8 +1921,20 @@ private fun ChatInputBar(
                 }
                 Spacer(Modifier.width(AgentSpacing.space2))
                 if (running) {
-                    // T05：运行中按钮位升级为「停止」——点它取消 runJob，
-                    // AgentLoop ≤1 轮内退出并闭合所有待决 ToolResult（无未闭合 tool_call）
+                    // 运行中：输入框有内容时**同时**给出发送键。
+                    //
+                    // 改造前这里只有「停止」——用户在等回答时想改口，必须先点停止、再点发送，
+                    // 而他不知道要这么做（发送键压根不在）。现在按发送 = 打断并发送
+                    // （仲裁在 ChatViewModel.send 里，这里只负责让按钮够得着）。
+                    // 输入为空时仍然只有停止键：那是「我不想等了」的最常见形态。
+                    if (text.isNotBlank()) {
+                        ChatSendButton(
+                            enabled = true,
+                            interrupting = true,
+                            onClick = onSend
+                        )
+                        Spacer(Modifier.width(AgentSpacing.space1))
+                    }
                     ChatStopButton(onClick = onStop)
                 } else {
                     ChatSendButton(
@@ -2204,9 +2231,15 @@ private fun ChatStopButton(onClick: () -> Unit) {
     }
 }
 
-/** 发送按钮：触控 48dp / 视觉 40dp，primary 底 + 24dp on-primary 发送图标；输入为空 38% alpha 禁用。 */
+/**
+ * 发送按钮：触控 48dp / 视觉 40dp，primary 底 + 24dp on-primary 发送图标；输入为空 38% alpha 禁用。
+ *
+ * @param interrupting true = 此刻正有一轮在跑，按下去会先打断它再发送。图标不变
+ *   （用户看到的仍是「发出去」），但 contentDescription 换成「打断并发送」——
+ *   读屏用户不会被告知一个不存在的行为，也不会被漏掉一个真实后果。
+ */
 @Composable
-private fun ChatSendButton(enabled: Boolean, onClick: () -> Unit) {
+private fun ChatSendButton(enabled: Boolean, interrupting: Boolean = false, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
@@ -2240,7 +2273,7 @@ private fun ChatSendButton(enabled: Boolean, onClick: () -> Unit) {
         ) {
             Icon(
                 imageVector = Icons.Outlined.Send,
-                contentDescription = "发送",
+                contentDescription = if (interrupting) "打断并发送" else "发送",
                 tint = MaterialTheme.colorScheme.onPrimary,
                 modifier = Modifier.size(24.dp)
             )

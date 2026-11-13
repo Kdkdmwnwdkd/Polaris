@@ -122,8 +122,8 @@
 # 判定口径没变：新增的是**排版分支**，没有新增业务判断；真要复核，看的是
 # "有没有新函数"而不是文件总行数——这轮新增的函数只有 Editorial.kt 里的
 # 六个排版原语（独立文件，398 行，见 app/src/main/java/com/beichen/polaris/ui/Editorial.kt）。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3588
-lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3153
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3625
+lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3186
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1532
 lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1535
@@ -147,3 +147,25 @@ lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1535
 # 守卫链在 ToolGuard.kt（约 150 行）、拒绝落地在 SeamDeny.kt（39 行），
 # 三者都可独立编译、有各自的行为断言。这里只留「在正确的位置调用一次」。
 # 再压缩只能删注释，而删掉的那几句正是「为什么不能那么写」的理由。
+
+# ——— 2026-11-13 语音仲裁（MicClaim + InterruptPolicy）———————————————
+#
+# ChatViewModel 3588 → 3625（+37）：
+#   ① `voiceArbiter` + `captureLease` 两个字段（12 行，含「它知道谁在占着」的说明）；
+#   ② `beginVoiceCapture` / `endVoiceCapture` / `stopSpeaking` 三个覆写（18 行）——
+#     把 ClaimResult 翻译成「一句话或 null」，界面层只负责弹提示；
+#   ③ `send()` 的仲裁分支（33 行）：判 → 等收尾 → 停播报 → 提示 → 递归重入。
+#     这段不能挪走：它必须在**读 input 之前**决定要不要打断，而 input 的读取
+#     就在下一行。挪进辅助函数只是把同一段代码搬个位置，反而多一层跳转。
+#   ④ `stop()` +3（停回合要把播报一起停，否则「点了停止还在念」）、
+#     `onCleared` +2（先关仲裁器再关引擎）、`INTERRUPT_WAIT_MS` 常量 +9（含 4 秒的取舍）；
+#   ⑤ `beginVoiceCapture` 开头的兜底 `endVoiceCapture()` +3（识别器被杀 / 用户按 Home 时
+#     上一次收不到回调，不释放就是「语音按钮从此没反应」）、仲裁器日志装配 +2。
+#   语义实现一行都不在这里：仲裁状态机在 core/voice/MicClaim.kt（245 行）、
+#   规则表在 core/voice/InterruptPolicy.kt（180 行）、Android 装配在 VoiceArbiter.kt（243 行）。
+#
+# ChatScreen 3153 → 3186（+33）：
+#   ① 语音输入前过仲裁（+18，含「三条路径都必须释放」的注释）；
+#   ② 运行中输入非空时同时给出发送键（+10）—— 不这么做的话「发送即打断」
+#     在界面上根本按不到，仲裁逻辑等于没有入口；
+#   ③ ChatSendButton 的 interrupting 参数与无障碍文案（+5）。

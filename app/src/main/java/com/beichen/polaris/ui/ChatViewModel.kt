@@ -136,6 +136,13 @@ import com.beichen.polaris.skill.market.MarketUiItem
 import com.beichen.polaris.skill.checkCapabilityGate
 import com.beichen.polaris.memory.MemoryItem
 import com.beichen.polaris.audio.TextSpeaker
+import com.beichen.polaris.audio.VoiceArbiter
+import com.beichen.polaris.core.voice.Activity
+import com.beichen.polaris.core.voice.AudioLease
+import com.beichen.polaris.core.voice.ClaimResult
+import com.beichen.polaris.core.voice.InterruptDecision
+import com.beichen.polaris.core.voice.InterruptPolicy
+import com.beichen.polaris.core.voice.RequestSource
 import com.beichen.polaris.memory.MemoryAutoCapture
 import com.beichen.polaris.memory.MemoryStore
 import com.beichen.polaris.memory.MemoryForgetTool
@@ -601,6 +608,19 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 系统 TTS（W-16）；onCleared 释放引擎。 */
     private val speaker = TextSpeaker(app)
 
+    /**
+     * 声音仲裁器：麦克风与扬声器只能有一个持有者。
+     *
+     * 它知道「谁在占着」，所以播报与录音不会同时进行——这是「播报中点麦克风会录到
+     * 自己声音」那个缺陷的根治位置。它也负责探测别的应用是否在录音（API 29+）。
+     */
+    private val voiceArbiter = VoiceArbiter(app, speaker, viewModelScope) {
+        AgentLogger.i("Voice", it)
+    }
+
+    /** 当前语音输入持有的麦克风租约（null = 没在录）。 */
+    private var captureLease: AudioLease? = null
+
     // —— 本地 llama.cpp 推理（九步第 3 步）————————————————————————
 
     /**
@@ -845,8 +865,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         register(MemorySearchTool(memoryStore))
         register(MemoryListTool(memoryStore))
         register(MemoryForgetTool(memoryStore))
-        // W-16：系统 TTS 朗读
-        register(SpeakTool(speaker))
+        // W-16：系统 TTS 朗读（经仲裁器：用户说话时模型不能插播）
+        register(SpeakTool(voiceArbiter))
         // W-18：会话检索 + 计算器
         register(ConversationSearchTool(conversationStore))
         // W-RT6：本地知识库检索。目录固定 files/knowledge/，用户把 .txt/.md 放进去即可；
@@ -1075,6 +1095,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      */
     override fun onCleared() {
         runCatching { terminalPool.releaseAllAsync() }
+        // 声音仲裁器先关：它会停播报、注销录音探测，再释放 TTS 引擎
+        runCatching { voiceArbiter.close() }
         // W-16：释放 TTS 引擎（不释放会一直占着音频焦点）
         runCatching { speaker.shutdown() }
         // W-25：唤醒挂起中的提问/计划，避免 deferred 悬着（协程随 ViewModel 取消）
@@ -1474,6 +1496,35 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         PlanBroker.cancel()
         // Phase 2 DoD③/T05：取消立即清「正在恢复」——不等协程收到取消再清，UI 即刻复原
         _retryState.value = null
+        // 停止回合时把播报一起停掉：回答都被取消了，它的朗读没有归属。
+        // 不停的话用户点了「停止」，机器还在念上一句——这是「停不下来」的典型投诉。
+        voiceArbiter.stopSpeech()
+    }
+
+    // —— 语音仲裁（MicClaim）——
+
+    override fun beginVoiceCapture(): String? {
+        // 兜底释放：上一次可能没走到 endVoiceCapture（识别器进程被杀、用户按 Home）。
+        // 不释放的话麦克风会被永久占住，表现为「语音按钮从此没反应」。
+        endVoiceCapture()
+        // 不需要先停播报：Capture 的优先级高于 Speak，请求成功即抢占，
+        // 抢占事件由 VoiceArbiter 自己翻译成 speaker.stop()。
+        // 在这里多写一次 stop 只会让「谁负责停」有两个答案。
+        return when (val r = voiceArbiter.beginCapture("语音输入")) {
+            is ClaimResult.Granted -> {
+                captureLease = r.lease
+                null
+            }
+            is ClaimResult.Denied -> {
+                AgentLogger.i("Chat", "语音输入被拒：${r.code} / ${r.message}")
+                r.message
+            }
+        }
+    }
+
+    override fun endVoiceCapture() {
+        captureLease?.let { voiceArbiter.endCapture(it) }
+        captureLease = null
     }
 
     // —— Phase 2 DoD②：消息分支（重新生成 / 左右切换 / 从中间轮重新发问）——
@@ -2388,6 +2439,15 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         const val MAX_EDGE = 1024
 
         /**
+         * 「发送打断上一轮」时等旧回合收尾的上限。
+         *
+         * 4 秒是权衡：太短会把正常收尾（落盘 + 重建消息列表）判成卡死，用户点两次发送
+         * 才成功；太长则「按了发送没反应」超过人的耐心阈值。超时后不开始新一轮，
+         * 只提示重试——两轮重叠的代价（运行态被旧轮抹掉）远大于让用户多点一次。
+         */
+        const val INTERRUPT_WAIT_MS = 4_000L
+
+        /**
          * W-46：喂给模型的历史最多回看多少轮。
          *
          * 只是**构造阶段的粗暴上限**，真正的体积控制交给 `ContextBudget`（按 token 预算整段丢）。
@@ -2543,7 +2603,50 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     override fun send() {
         val text = input.value.trim()
-        if (text.isBlank() || isRunning.value) return
+        if (text.isBlank()) return
+        if (isRunning.value) {
+            // 打断仲裁（core/voice/InterruptPolicy）。
+            //
+            // 改造前这里是 `if (text.isBlank() || isRunning.value) return` —— 用户在等回答时
+            // 想改口，唯一的办法是先点「停止」再点「发送」，而且他不知道要先点停止
+            // （发送键是灰的）。语音场景更糟：模型念着，用户说话，麦克风按钮根本不显示。
+            //
+            // 现在：发送即打断。用户明确按了发送，这是他能给出的最高意图表达，
+            // 把旧回答跑完只是浪费他的时间与 token。
+            val decision = InterruptPolicy.decide(
+                Activity(turnRunning = true, speaking = speaker.speaking.value),
+                RequestSource.Text,
+            )
+            when (decision) {
+                is InterruptDecision.AcceptAfter -> {
+                    viewModelScope.launch {
+                        AgentLogger.i("Chat", "发送触发打断：stop=${decision.stop}")
+                        // 必须先真的等旧一轮收尾（见 cancelAndWait 的注释），
+                        // 否则旧轮的 finish 会抹掉新一轮的运行态。
+                        val ok = generation.cancelAndWait(INTERRUPT_WAIT_MS)
+                        if (!ok) {
+                            // 超时说明旧回合连取消都不响应。此时开始新一轮会造成两轮重叠，
+                            // 宁可让用户再点一次——这是可控的失败。
+                            _interruptedNotice.value = "上一轮还在收尾，请稍后再发一次"
+                            return@launch
+                        }
+                        voiceArbiter.stopSpeech()
+                        if (decision.notice.isNotBlank()) _interruptedNotice.value = decision.notice
+                        // 递归：此刻 isRunning 已为 false（join 保证 finish 已执行），走正常路径。
+                        // 重新读 input.value 是有意的——用户在这几秒里改了字，发改后的。
+                        send()
+                    }
+                    return
+                }
+
+                is InterruptDecision.Reject -> {
+                    _interruptedNotice.value = decision.message
+                    return
+                }
+
+                InterruptDecision.Accept -> Unit // isRunning=true 时不可能，继续走下面
+            }
+        }
         // W-8 P1-C：新回合重置截图批准缓存——上个回合批准过不算数，本回合首次截图仍询问
         screenshotApprovedThisTurn = false
         // 功能四（P0-2）/ 功能五（P1-4）：先摘走待发附件并清空，避免本轮发出后仍留在输入区

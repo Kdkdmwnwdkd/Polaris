@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 一轮生成的全部**运行态**：在跑没跑、归属哪个会话、流式草稿攒到哪、收尾怎么做。
@@ -218,6 +219,29 @@ internal class GenerationRunController(
         j.cancel()
         job = null
         return true
+    }
+
+    /**
+     * 取消并**等它真的收尾完**，供「新输入打断旧回合」使用。
+     *
+     * 为什么不能只调 [cancel]：`cancel()` 只是发出取消信号，`finish()` 要等协程调度到
+     * `finally` 才执行。在这段窗口里 `owner` 还是旧值、`_running` 还是 true——
+     * 此时若直接 `start` 新一轮，旧轮的 `finish()` 会紧接着把**新一轮**的 owner 与
+     * running 全部抹掉（它是无条件清理的），结果是界面卡在「运行中」或者两条回答写串会话。
+     *
+     * 返回 false = 超时没等到。**调用方此时必须放弃**，不能开始新一轮——
+     * 那正是上面描述的重叠场景。返回 true 时 `job` 必为 null（由 `finish` 置），可以安全开新轮。
+     *
+     * @param timeoutMs 上限。用 4 秒而不是无限等：卡住的回合若连取消都不响应，
+     *   继续等只会让用户以为「按了发送没反应」。
+     */
+    suspend fun cancelAndWait(timeoutMs: Long): Boolean {
+        val j = job ?: return true
+        j.cancel()
+        return withTimeoutOrNull(timeoutMs) {
+            j.join()
+            true
+        } ?: false
     }
 }
 

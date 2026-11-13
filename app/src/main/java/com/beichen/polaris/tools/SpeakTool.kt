@@ -1,7 +1,8 @@
 package com.beichen.polaris.tools
 
 import com.beichen.polaris.core.llm.primOrNull
-import com.beichen.polaris.audio.TextSpeaker
+import com.beichen.polaris.audio.VoiceArbiter
+import com.beichen.polaris.audio.VoiceDenied
 import com.beichen.polaris.core.AgentTool
 import com.beichen.polaris.core.JsonSchema
 import com.beichen.polaris.core.ToolResult
@@ -14,8 +15,14 @@ import kotlinx.serialization.json.jsonPrimitive
  *
  * 典型场景：用户在开车/做饭，要求「念给我听」；或长回答只想听结论。
  * 与对话界面的文字输出互补——工具只负责「出声」，内容仍会留在聊天记录里。
+ *
+ * ## 为什么经 [VoiceArbiter] 而不是直连 TextSpeaker（2026-11-13）
+ *
+ * 直连意味着模型可以在**用户正在说话**的时候开口——麦克风会把播报声录进去，
+ * 识别结果是一团乱码，而用户完全不知道发生了什么。仲裁器会在这种情况下明确拒绝，
+ * 并给出「稍后再读」的说明，模型据此能自己改写策略（比如改用文字回复）。
  */
-class SpeakTool(private val speaker: TextSpeaker) : AgentTool {
+class SpeakTool(private val voice: VoiceArbiter) : AgentTool {
 
     override val name = "speak"
 
@@ -41,7 +48,7 @@ class SpeakTool(private val speaker: TextSpeaker) : AgentTool {
         }
         val language = args["language"]?.primOrNull()?.contentOrNull ?: "auto"
         val rate = args["rate"]?.primOrNull()?.contentOrNull?.toFloatOrNull() ?: 1.0f
-        return speaker.speak(text, language, rate).fold(
+        return voice.speak(text, language, rate).fold(
             onSuccess = {
                 ToolResult.ok(
                     code = "speak_started",
@@ -50,11 +57,21 @@ class SpeakTool(private val speaker: TextSpeaker) : AgentTool {
                 )
             },
             onFailure = { e ->
-                ToolResult.fail(
-                    code = "speak_failed",
-                    message = "朗读失败：${e.message}",
-                    hint = "设备可能没有语音引擎或缺少对应语言包；改把内容用文字回复给用户，不要反复重试。"
-                )
+                // 被仲裁拒绝和引擎故障要分开：前者是「等一下就好」，后者是「这台机器不行」。
+                // 混成一句会让模型在设备没有语音引擎时反复重试。
+                if (e is VoiceDenied) {
+                    ToolResult.fail(
+                        code = e.code,
+                        message = e.message,
+                        hint = "现在不是出声的时候。把内容用文字回复给用户，不要重试、不要改成别的朗读方式。"
+                    )
+                } else {
+                    ToolResult.fail(
+                        code = "speak_failed",
+                        message = "朗读失败：${e.message}",
+                        hint = "设备可能没有语音引擎或缺少对应语言包；改把内容用文字回复给用户，不要反复重试。"
+                    )
+                }
             }
         )
     }

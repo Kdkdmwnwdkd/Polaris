@@ -77,6 +77,22 @@ interface ChatTurnActions {
 
     /** 以第 [turnIndex] 轮的用户文本为起点重新提问（会截断其后内容）。 */
     fun reaskFromTurn(turnIndex: Int, text: String)
+
+    /**
+     * 语音输入前申请麦克风。
+     *
+     * 返回 **null = 拿到**，非 null = 被拒的原因（直接给用户看）。
+     *
+     * 为什么是「返回一句话」而不是抛异常或返回布尔：调用点在 Compose 的按钮回调里，
+     * 那里唯一能做的就是弹个提示。让 UI 去分辨 `ClaimResult` 的类型、再拼一句人话，
+     * 等于把仲裁的语义又摊回界面层——那正是这次要收掉的东西。
+     *
+     * 成功时**播报已经被自动停掉**（Capture 抢占 Speak），调用方不需要先调停播报。
+     */
+    fun beginVoiceCapture(): String?
+
+    /** 语音输入结束（拿到结果、取消、失败都要调，否则麦克风会被永久占住）。 */
+    fun endVoiceCapture()
 }
 
 /** 审批 / 计划的四种答复 + 追问选择。 */
