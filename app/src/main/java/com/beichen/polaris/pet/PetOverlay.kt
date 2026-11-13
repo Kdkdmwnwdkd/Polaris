@@ -88,7 +88,7 @@ class PetOverlayHost(
     var snappedLeft: Boolean by mutableStateOf(false)
         private set
 
-    /** Compose 读这个值决定渲染气泡还是只渲染形象。改动只走 [setExpanded]。 */
+    /** Compose 读这个值决定渲染气泡还是只渲染形象。改动只走 [applyExpanded]。 */
     var expanded: Boolean by mutableStateOf(false)
         private set
 
@@ -132,7 +132,7 @@ class PetOverlayHost(
                         bubbleWidth = BUBBLE_WIDTH_DP,
                         alignEnd = !snappedLeft,
                         ask = ask,
-                        onExpandedChange = ::setExpanded,
+                        onExpandedChange = ::applyExpanded,
                         onReply = onReply,
                         onClose = {
                             onClose()
@@ -165,8 +165,15 @@ class PetOverlayHost(
         owner.detach()
     }
 
-    /** 展开 / 收起：窗口宽度与焦点标志一起改，缺一样都会出问题。 */
-    private fun setExpanded(value: Boolean) {
+    /**
+     * 展开 / 收起：窗口宽度与焦点标志一起改，缺一样都会出问题。
+     *
+     * 名字故意不是 `setExpanded`：`expanded` 是 `var ... private set`，Kotlin 会为它
+     * 生成 `setExpanded(Z)V`，同名函数在 JVM 层直接签名冲突（CI 第一次就是这么挂的：
+     * `Platform declaration clash: setExpanded(Z)V`）。本地没有 Android SDK，
+     * 这类只在字节码层暴露的冲突靠肉眼看不出来。
+     */
+    private fun applyExpanded(value: Boolean) {
         if (expanded == value) return
         expanded = value
         val lp = params ?: return
