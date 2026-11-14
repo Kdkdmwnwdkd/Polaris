@@ -156,6 +156,9 @@ import com.beichen.polaris.core.agent.AskUserBroker
 import com.beichen.polaris.core.agent.AgentRunService
 import com.beichen.polaris.core.agent.AgentRunState
 import com.beichen.polaris.core.agent.AgentRunStateStore
+import com.beichen.polaris.core.agent.AutoResumeDecision
+import com.beichen.polaris.core.agent.AutoResumeInput
+import com.beichen.polaris.core.agent.AutoResumePolicy
 import com.beichen.polaris.core.agent.ApprovalGrant
 import com.beichen.polaris.core.agent.ApprovalGrouping
 import com.beichen.polaris.core.agent.ApprovalTier
@@ -378,6 +381,18 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private val agentRunStateStore = AgentRunStateStore(File(app.filesDir, "agent_run_state.json"))
 
     /**
+     * 冷启动对账的结论，交给类体**末尾**的 init 去做自动续跑。
+     *
+     * 为什么要绕这一道：对账写在上面那个 init 里、跑在 IO 线程，而自动续跑要用
+     * `_activeConversationId`（本类第 1150 行才初始化）和 [modelReady]。在那个 init 里
+     * 直接跑，低端机上 IO 协程会抢在属性初始化之前执行——2026-11-09 模拟器上
+     * 就是这么 NPE 的。用一个 Deferred 把「结果」和「执行」拆开，时序问题就没了。
+     *
+     * 必定 complete（含异常路径），否则末尾的 await 会永远挂着，功能静默失效。
+     */
+    private val runStateReady = CompletableDeferred<AgentRunState?>()
+
+    /**
      * R1：回合日志。目录 `filesDir/run-journal`，只保留最近 20 个回合。
      *
      * 与 [agentRunStateStore] 的分工：那个记「整个任务跑到第几步」，给用户看进度；
@@ -430,6 +445,41 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      */
     private fun advanceRunState(toolName: String) {
         runCatching { agentRunStateStore.advance(toolName) }
+    }
+
+    /**
+     * 自动续跑：冷启动发现上次任务被系统中断时，替用户发一句「继续」。
+     *
+     * 判定全交给 [AutoResumePolicy]（纯函数，能被 harness 逐条断言），这里只做
+     * 「取状态 → 执行」。执行方式刻意**复用 [send]**：把「继续」放进输入框、走正常
+     * 发送路径，于是续跑上下文拼接、历史构造、前台服务、运行态落盘、打断仲裁
+     * 全都不用重写一遍——那五件事任何一处抄错，都比功能本身更难查。
+     *
+     * 代价是界面上会多一条用户气泡「继续」。它确实是应用替用户表达的意思，
+     * 而且上面那条提示会同时写着「已自动继续」，不会被误认为是自己打的。
+     */
+    private fun autoResumeIfPossible(state: AgentRunState) {
+        val verdict = AutoResumePolicy.decide(
+            AutoResumeInput(
+                state = state,
+                nowMs = System.currentTimeMillis(),
+                activeSessionId = _activeConversationId.value,
+                sessionExists = runCatching { conversationStore.load(state.sessionId) != null }
+                    .getOrDefault(false),
+                enabled = settingsFacade.autoResume.value,
+                hasModel = modelReady.value,
+                isRunning = isRunning.value,
+            )
+        )
+        if (verdict.message.isNotBlank()) _interruptedNotice.value = verdict.message
+        if (verdict.decision != AutoResumeDecision.RESUME) {
+            AgentLogger.i("Chat", "自动续跑未执行：${verdict.reason}")
+            return
+        }
+        agentRunStateStore.markAutoResumeAttempt()
+        AgentLogger.i("Chat", "自动续跑：会话 ${state.sessionId.take(8)} 第 ${state.stepIndex} 步")
+        input.value = AUTO_RESUME_TEXT
+        send()
     }
 
     /**
@@ -995,9 +1045,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // 结果只用于一条中断提示。原来同步跑在构造线程上，冷启动首帧要等这几份 JSON 读完。
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { jobStore.reconcile(System.currentTimeMillis()) }
-            runCatching {
-                agentRunStateStore.reconcile()?.let { _interruptedNotice.value = it.note }
-            }
+            // 结论一定要交出去（异常也算交），否则末尾那个 await 会挂死，自动续跑永远不触发。
+            val interrupted = runCatching {
+                agentRunStateStore.reconcile()?.also { _interruptedNotice.value = it.note }
+            }.getOrNull()
+            runStateReady.complete(interrupted)
             runCatching { recoverInterruptedJournal() }
         }
         if (skillsSnapshot.isNotEmpty()) {
@@ -1243,6 +1295,12 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     /** 设置页开关：写回 ConfigStore（即时生效 + 跨启动保持）。 */
     override fun setCompletionNotifyEnabled(enabled: Boolean) = settingsFacade.setCompletionNotifyEnabled(enabled)
+
+    /** 自动续跑开关（进程被杀后冷启动替用户接着做）。 */
+    override val autoResume: StateFlow<Boolean> get() = settingsFacade.autoResume
+
+    /** 设置页开关：自动续跑。 */
+    override fun setAutoResume(enabled: Boolean) = settingsFacade.setAutoResume(enabled)
 
     /** 对话页背景图（SAF content:// 字符串；null = 无背景）。 */
     override val chatBackgroundUri: StateFlow<String?> get() = appearanceFacade.chatBackgroundUri
@@ -2464,6 +2522,16 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         const val INTERRUPT_NOTICE_MS = 5_000L
 
         /**
+         * 自动续跑时代用户发出的那句话。
+         *
+         * 必须落在 `isResumeIntent` 的白名单里，否则续跑上下文不会拼进请求，
+         * 「自动续跑」就退化成「把用户的话重复发一遍」。
+         * 用最短的「继续」而不是「继续上次的任务」：前者在所有白名单文本里最不像
+         * 用户可能误读的一句话，而且长度不会撞上 12 字上限。
+         */
+        const val AUTO_RESUME_TEXT = "继续"
+
+        /**
          * W-46：喂给模型的历史最多回看多少轮。
          *
          * 只是**构造阶段的粗暴上限**，真正的体积控制交给 `ContextBudget`（按 token 预算整段丢）。
@@ -2765,7 +2833,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                         status = AgentRunState.STATUS_RUNNING,
                         startedAt = priorState?.startedAt?.takeIf { it > 0 } ?: System.currentTimeMillis(),
                         updatedAt = System.currentTimeMillis(),
-                        doneTools = priorState?.doneTools ?: emptyList()
+                        doneTools = priorState?.doneTools ?: emptyList(),
+                        // 熔断计数必须随状态一起搬过去：这行 save 会整体覆盖磁盘上的状态，
+                        // 不带这个字段就等于每轮自动续跑都把计数清零，熔断永远不生效，
+                        // 一个「一跑就被杀」的任务会无限自动重试。
+                        autoResumeAttempts = priorState?.autoResumeAttempts ?: 0
                     )
                 )
                 // W-19：MCP 工具启动后异步注册；首条消息最多等 8 秒，避免模型看不到 MCP 工具。
@@ -3637,5 +3709,12 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      */
     init {
         viewModelScope.launch(Dispatchers.IO) { runCatching { refreshWorkflows() } }
+        // 自动续跑：等冷启动对账出结论再决定（时序理由见 [runStateReady]）。
+        // 挂在这一段而不是前面那个 init：这里所有字段都已初始化，读 _activeConversationId /
+        // modelReady / configStore 才是安全的。
+        viewModelScope.launch {
+            val interrupted = runStateReady.await() ?: return@launch
+            autoResumeIfPossible(interrupted)
+        }
     }
 }

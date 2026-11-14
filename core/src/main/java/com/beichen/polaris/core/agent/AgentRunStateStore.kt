@@ -43,7 +43,15 @@ data class AgentRunState(
     /** 已完成的工具调用摘要（工具名列表，够用户看懂进度）。 */
     val doneTools: List<String> = emptyList(),
     /** 恢复提示：被中断时给用户的一句话。 */
-    val note: String = ""
+    val note: String = "",
+    /**
+     * 已自动续跑过的次数（熔断用，见 [AutoResumePolicy]）。
+     *
+     * 默认 0 是**前向兼容**的落点：更早版本写下的状态没有这个字段，反序列化后即 0，
+     * 语义正好是「还没自动续过」。反过来若给它一个非零默认值，老数据一读出来就
+     * 直接撞上熔断上限，功能对老用户等于没做。
+     */
+    val autoResumeAttempts: Int = 0
 ) {
     companion object {
         const val STATUS_RUNNING = "running"
@@ -191,4 +199,26 @@ class AgentRunStateStore(private val file: File) {
         save(state.copy(status = AgentRunState.STATUS_RUNNING, note = "", updatedAt = System.currentTimeMillis()))
         true
     }.getOrDefault(false)
+
+    /**
+     * 记一次**自动**续跑尝试（熔断计数）。
+     *
+     * 只对 interrupted 生效：已经跑起来或已完成的任务不该再涨。
+     * 这个计数不会自己清零，要等任务真正正常结束——那时 `save()` 会写一份新的
+     * running 状态，调用方须显式把本字段带过去（见 `ChatViewModel.send` 里的
+     * `priorState?.autoResumeAttempts`）。不带走的话，计数每轮复位，
+     * 熔断形同虚设：一个「一跑就被杀」的任务会被无限自动续跑。
+     *
+     * @return 更新后的状态；无可续跑状态返回 null
+     */
+    fun markAutoResumeAttempt(): AgentRunState? {
+        val state = load() ?: return null
+        if (state.status != AgentRunState.STATUS_INTERRUPTED) return null
+        val updated = state.copy(
+            autoResumeAttempts = state.autoResumeAttempts + 1,
+            updatedAt = System.currentTimeMillis()
+        )
+        save(updated)
+        return updated
+    }
 }

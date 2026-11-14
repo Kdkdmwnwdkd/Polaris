@@ -26,6 +26,9 @@ interface AppSettingsContract {
     /** 计划模式：先出方案待批，再执行。 */
     val planMode: StateFlow<Boolean>
 
+    /** 自动续跑：冷启动发现上次任务被系统中断时，替用户发一句「继续」。 */
+    val autoResume: StateFlow<Boolean>
+
     /**
      * 审批档位（W-RT3）：`STRICT` / `STANDARD` / `AUTO`。
      *
@@ -44,6 +47,9 @@ interface AppSettingsContract {
     fun setAutomationEnabled(v: Boolean)
     fun setCompletionNotifyEnabled(enabled: Boolean)
     fun setPlanMode(enabled: Boolean)
+
+    /** 切换自动续跑。 */
+    fun setAutoResume(enabled: Boolean)
 
     /** 切换审批档位；传非法值按 `STANDARD` 处理（归一化在规则层）。 */
     fun setApprovalTier(mode: String)

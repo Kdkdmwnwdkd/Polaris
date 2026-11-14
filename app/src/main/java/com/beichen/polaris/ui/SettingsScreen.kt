@@ -211,6 +211,7 @@ fun SettingsScreen(
                 ThemeMode.DARK -> "深色"
             }
             val planMode by vm.planMode.collectAsStateWithLifecycle()
+            val autoResume by vm.autoResume.collectAsStateWithLifecycle()
             AkGroup(
                 title = "通用",
                 description = "界面、通知与执行方式"
@@ -269,6 +270,21 @@ fun SettingsScreen(
                         AkSwitch(
                             checked = planMode,
                             onCheckedChange = { vm.setPlanMode(it) }
+                        )
+                    }
+                )
+                AkListItem(
+                    icon = Icons.Outlined.Refresh,
+                    title = "自动续跑",
+                    description = if (autoResume) {
+                        "已开启：任务被系统回收后，回来自动接着做"
+                    } else {
+                        "已关闭：只提示中断进度，由你说「继续」"
+                    },
+                    trailing = {
+                        AkSwitch(
+                            checked = autoResume,
+                            onCheckedChange = { vm.setAutoResume(it) }
                         )
                     }
                 )

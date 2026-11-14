@@ -328,6 +328,9 @@ class ConfigStore(context: Context) {
         // hotfix32：聊天背景图（URI + 不透明度）
         private const val KEY_CHAT_BG_URI = "chat_bg_uri"
         private const val KEY_CHAT_BG_ALPHA = "chat_bg_alpha"
+
+        /** 自动续跑开关（默认开，见 [isAutoResumeEnabled]）。 */
+        private const val KEY_AUTO_RESUME = "auto_resume_enabled"
     }
 
     /** 功能五（P1-10）：回答完成提醒是否开启（默认 false）。 */
@@ -345,6 +348,20 @@ class ConfigStore(context: Context) {
     /** W-25：写任务模式（设置页开关即时生效，落盘供下次启动读取）。 */
     fun setPlanModeEnabled(enabled: Boolean) {
         sp.edit().putBoolean(KEY_PLAN_MODE, enabled).apply()
+    }
+
+    /**
+     * 自动续跑：冷启动发现上次任务被系统中断时，要不要替用户发一句「继续」。
+     *
+     * 默认 **true**。功能的价值就是「不用记着手动接着做」，默认关等于没做。
+     * 但它会实打实花一次请求，所以必须可关——开关在 设置 → 通用 → 对话。
+     * 关掉之后行为退回改造前：只提示「可以说继续」，不自动发。
+     */
+    fun isAutoResumeEnabled(): Boolean = sp.getBoolean(KEY_AUTO_RESUME, true)
+
+    /** 写自动续跑开关。 */
+    fun setAutoResumeEnabled(enabled: Boolean) {
+        sp.edit().putBoolean(KEY_AUTO_RESUME, enabled).apply()
     }
 
     /**

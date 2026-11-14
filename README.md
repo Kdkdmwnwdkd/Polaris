@@ -12,7 +12,7 @@ Android 本地 AI Agent —— Kotlin / Jetpack Compose，原创实现，四层�
 > 产品名**北辰**（Polaris）。工程内部沿用的 `AgentKit` 与包名 `com.beichen.polaris` 是历史代号，
 > 不出现在桌面、系统设置或 App 内任何位置，仅为兼容已装应用升级链而保留。
 
-> 规模：Kotlin 源码 **360 文件 / 86,759 行**（`app/src/main` + `core/src/main`）｜ QA runner **141 个**（其中 Kotlin harness 103 个）｜ 版本号 = CI 构建号（`1.N`）
+> 规模：Kotlin 源码 **369 文件 / 89,998 行**（`app/src/main` + `core/src/main`）｜ QA runner **142 个**（其中 Kotlin harness 104 个）｜ 版本号 = CI 构建号（`1.N`）
 >
 > 数字按 2026-11-13 统计，会随提交漂移，别当契约看：`find app/src/main core/src/main -name '*.kt' | wc -l` 自己数一遍更快。
 >
@@ -45,7 +45,7 @@ Android 本地 AI Agent —— Kotlin / Jetpack Compose，原创实现，四层�
 - **外观**：主题三选 + Material You 动态取色 + **全局照片背景**（浓度 5%–100% 自调，全 App 生效）
 - **系统能力**：屏幕捕捉（真机实证）、shell 终端、无障碍 App 控制、本地模型推理、全局备份/恢复（含提示词库）
 - **运行成本**：57 个工具**按组加载**——默认只带 `file` 组 3 个，模型用 `__use_tools` 自己开组、开过就一直开着（粘性）；设置页「工具范围」可手动关闭。全量 22360 字符 ≈ 10055 token，默认面 1243 字符 ≈ 525 token（省 94%）
-- **稳定性**：JSON 空值安全化、429 专用退避（尊重 `Retry-After`）、断网自动恢复、崩溃日志留存
+- **稳定性**：JSON 空值安全化、429 专用退避（尊重 `Retry-After`）、断网自动恢复、崩溃日志留存、**后台任务自动续跑**（进程被系统回收后，冷启动自己把上次没做完的接着做完；判定表在 core，可测；熔断上限 2 次、窗口 24 小时、设置里可关）
 
 ---
 

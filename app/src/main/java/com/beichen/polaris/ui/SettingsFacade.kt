@@ -40,6 +40,15 @@ internal class SettingsFacade(
     val planMode: StateFlow<Boolean> = _planMode.asStateFlow()
 
     /**
+     * 自动续跑：进程被杀后，冷启动替用户发一句「继续」。
+     *
+     * 默认开（见 `ConfigStore.isAutoResumeEnabled`）。它每触发一次就是一次真实请求，
+     * 所以必须让用户能关；关掉之后行为退回改造前——只提示，不自动发。
+     */
+    private val _autoResume = MutableStateFlow(configStore.isAutoResumeEnabled())
+    val autoResume: StateFlow<Boolean> = _autoResume.asStateFlow()
+
+    /**
      * W-RT3：审批档位。
      *
      * 读盘先过 [ApprovalTier.normalize]：旧版本残留、手改数据一律退回「常规」。
@@ -71,6 +80,13 @@ internal class SettingsFacade(
         _planMode.value = enabled
         configStore.setPlanModeEnabled(enabled)
         AgentLogger.i("Chat", "任务模式切换为 ${if (enabled) "先计划后执行" else "自动执行"}")
+    }
+
+    /** 设置页开关：自动续跑（即时生效 + 跨启动保持）。 */
+    fun setAutoResume(enabled: Boolean) {
+        _autoResume.value = enabled
+        configStore.setAutoResumeEnabled(enabled)
+        AgentLogger.i("Chat", "自动续跑切换为 ${if (enabled) "开" else "关"}")
     }
 
     /** 切换审批档位：即时生效（下一个审批点就按新档判）+ 落盘。 */
