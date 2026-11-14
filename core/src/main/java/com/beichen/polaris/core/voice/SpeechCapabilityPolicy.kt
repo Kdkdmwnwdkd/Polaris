@@ -30,6 +30,16 @@ enum class SpeechRemedy {
     /** 换系统语言，或在识别服务的设置里下载对应语言的识别包。 */
     ChangeLanguage,
 
+    /**
+     * 换一个识别服务（或给它下语言包）。
+     *
+     * 与 [ChangeLanguage] 分开：这是**换引擎**，不是换系统语言。
+     * 真机上「不支持当前语言」绝大多数是当前默认引擎的问题——
+     * 设备上往往还装着另一个认中文的引擎，换过去就好了。
+     * 而换系统语言要把整台手机的所有应用都变一种语言，代价完全不对等。
+     */
+    SwitchEngine,
+
     /** 检查网络后重试。 */
     CheckNetwork,
 
@@ -179,7 +189,8 @@ object SpeechCapabilityPolicy {
 
     /** 语言不受支持时的提示。 */
     const val MSG_LANGUAGE_UNSUPPORTED =
-        "语音识别服务不支持当前语言，换个系统语言试试"
+        "当前的语音识别服务不支持中文。到系统设置 → 默认应用 → 语音识别 换一个服务，" +
+            "或给现在这个服务下载中文语言包"
 
     /** 没有 App 能处理系统识别 Intent 时的提示。 */
     const val MSG_NO_SYSTEM_PAGE =
@@ -266,7 +277,7 @@ object SpeechCapabilityPolicy {
             return SpeechCapability.LanguageUnsupported(
                 "language_unsupported",
                 MSG_LANGUAGE_UNSUPPORTED,
-                SpeechRemedy.ChangeLanguage,
+                SpeechRemedy.SwitchEngine,
             )
         }
         return SpeechCapability.Available
@@ -369,10 +380,11 @@ object SpeechCapabilityPolicy {
         ErrorCode.RECOGNIZER_BUSY -> ErrorSpec("识别服务正忙，等一下再试", SpeechRemedy.Retry)
         ErrorCode.INSUFFICIENT_PERMISSIONS -> ErrorSpec(MSG_NO_PERMISSION, SpeechRemedy.GrantMicPermission)
         ErrorCode.SERVER_DISCONNECTED -> ErrorSpec("识别服务断开了，稍后再试", SpeechRemedy.Retry)
-        ErrorCode.LANGUAGE_NOT_SUPPORTED -> ErrorSpec(MSG_LANGUAGE_UNSUPPORTED, SpeechRemedy.ChangeLanguage)
+        ErrorCode.LANGUAGE_NOT_SUPPORTED -> ErrorSpec(MSG_LANGUAGE_UNSUPPORTED, SpeechRemedy.SwitchEngine)
         ErrorCode.LANGUAGE_UNAVAILABLE -> ErrorSpec(
-            "当前语言的识别包没装，在语音识别服务的设置里下载后再试",
-            SpeechRemedy.ChangeLanguage,
+            "当前语言的识别包没装。到系统设置 → 默认应用 → 语音识别，给这个服务下载中文包，" +
+                "或换一个已经支持中文的服务",
+            SpeechRemedy.SwitchEngine,
         )
         else -> ErrorSpec("识别失败（错误码 $code）", SpeechRemedy.ReportErrorCode)
     }

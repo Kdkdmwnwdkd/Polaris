@@ -252,6 +252,11 @@ fun ChatScreen(
     val ctx = LocalContext.current
     // 语音能力探测。与桌宠共用同一个实现——两条路必须给出同一个结论。
     val speechProbe = remember(ctx) { SpeechProbe(ctx) }
+    // 进页面就探一次「哪个引擎认当前语言」，结果进进程级缓存。
+    // 不探的话，只用聊天页、从没开过桌宠的用户永远拿不到这个结论：
+    // 点麦克风 → 系统识别页弹出 → 说完什么都没发生，因为默认引擎不认中文。
+    // 空回调即可——探测结果由 SpeechProbe 自己缓存，判定时读。
+    LaunchedEffect(speechProbe) { speechProbe.probeEngines { } }
     // 功能五（P1-2）：TTS 朗读（离开对话页即 shutdown，防系统绑定泄漏）
     val tts = remember { TtsController(ctx) }
     DisposableEffect(Unit) { onDispose { tts.shutdown() } }

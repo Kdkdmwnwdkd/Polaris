@@ -244,10 +244,25 @@ class PetOverlayHost(
                 // Kotlin 编译器会在生成可调用引用上崩（ICE）——已复现。
                 showNotice(
                     message,
-                    if (remedy == SpeechRemedy.GrantMicPermission) ::openAppPermissionSettings else null,
+                    when (remedy) {
+                        // 缺权限：直达本应用的权限页。
+                        SpeechRemedy.GrantMicPermission -> ({ openAppPermissionSettings() })
+                        // 换引擎：直达系统「语音输入」设置。
+                        // 这是「不支持当前语言」唯一能当场解决的出路——
+                        // 设备上往往就装着另一个认中文的引擎，换过去就好了。
+                        SpeechRemedy.SwitchEngine,
+                        SpeechRemedy.SelectDefaultEngine,
+                        -> ({ openVoiceInputSettings() })
+                        else -> null
+                    },
                 )
             }
         )
+
+        // 起来就问一遍「哪个引擎认中文」，把能用的那个接上。
+        // 真机上最常见的失败不是没装引擎，而是装了好几个、默认那个不认中文
+        // （Google TTS 自带的识别服务要单独下中文离线包）。探测到就不去麻烦用户。
+        voice?.refreshEngine()
 
         compose.post { snapToEdge() }
     }
@@ -337,6 +352,34 @@ class PetOverlayHost(
                 AgentLogger.w(TAG, "打开应用权限页失败：${it.message}")
                 showNotice("打不开系统权限页，请手动到系统设置里给「北辰」打开麦克风")
             }
+    }
+
+    /**
+     * 跳到系统的「语音输入」设置。
+     *
+     * 这是「识别服务不支持当前语言」的出路：换一个服务，或给现在的下语言包。
+     * 桌宠没有 Activity、也不能替用户改系统设置，所以只能把人送到那一页。
+     *
+     * 两个候选按顺序试：
+     * 1. `ACTION_VOICE_INPUT_SETTINGS`——就是语音输入设置，但**不是所有 ROM 都有**
+     *    （AOSP 有，部分定制 ROM 删掉了）。
+     * 2. 本应用的详情页——兜底。至少用户能在附近找到权限项，
+     *    比点了没反应强。
+     */
+    private fun openVoiceInputSettings() {
+        val candidates = listOf(
+            Intent(android.provider.Settings.ACTION_VOICE_INPUT_SETTINGS),
+            Intent(
+                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                android.net.Uri.fromParts("package", context.packageName, null),
+            ),
+        )
+        for (intent in candidates) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (runCatching { context.startActivity(intent) }.isSuccess) return
+        }
+        AgentLogger.w(TAG, "打不开语音输入设置页")
+        showNotice("打不开系统设置，请手动到 系统设置 → 默认应用 → 语音识别 里换一个服务")
     }
 
     private fun showNotice(text: String, action: (() -> Unit)? = null) {

@@ -9,6 +9,7 @@ import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import androidx.core.content.ContextCompat
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.voice.EngineSelector
 import com.beichen.polaris.core.voice.SpeechCapability
 import com.beichen.polaris.core.voice.VoicePath
 
@@ -97,17 +98,49 @@ object VoiceDiagnostics {
             "系统默认识别引擎：${defaultEngine ?: "未设置 ← 引擎装了也不认，系统设置 → 默认应用 → 语音识别 里选一个"}"
         )
 
+        val probe = SpeechProbe(app)
+
         // —— 语言 ——
         val locale = java.util.Locale.getDefault()
-        sb.appendLine("系统语言：${locale.toLanguageTag()}（BCP-47）")
-        sb.appendLine("语言包：${if (defaultEngine != null) "随引擎而定" else "未知"}")
+        val languageTag = locale.toLanguageTag()
+        sb.appendLine("系统语言：$languageTag（BCP-47）")
+
+        // —— 各引擎对当前语言的支持 ——
+        //
+        // 这一段的由来：2026-11-14 的真机日志里，设备上有两个识别服务、
+        // 系统也选定了默认引擎，可桌宠每次录音都拿到 code=12（不支持当前语言）——
+        // 因为默认那个是 Google TTS 自带的，要单独下中文离线包。
+        // 光看「识别服务 2 个」「引擎已选」看不出问题，必须逐个引擎问。
+        //
+        // 结果来自进程级缓存：桌宠启动时会探一次。用户先开一次桌宠再点诊断，
+        // 这里就有内容；没探过就直说「未探测」，并告诉他怎么让它有值——
+        // 比留空或编一个结论诚实。
+        val engines = probe.cachedEngines()
+        sb.appendLine("")
+        sb.appendLine("—— 各引擎对 $languageTag 的支持 ——")
+        if (engines == null) {
+            sb.appendLine("  未探测。先长按一次桌宠说句话，再回来生成报告就能看到")
+        } else if (engines.isEmpty()) {
+            sb.appendLine("  探测不可用（系统版本低于 13，或查询不到识别服务）")
+        } else {
+            engines.forEach { e ->
+                val fit = EngineSelector.fit(e)
+                val mark = if (e.isDefault) "[系统默认] " else ""
+                sb.appendLine("  · $mark${e.component}")
+                sb.appendLine("      ${EngineSelector.describe(fit)}")
+            }
+            val chosen = EngineSelector.pick(engines)
+            sb.appendLine(
+                "  当前应使用：${chosen?.let { "${it.component}（${EngineSelector.describe(EngineSelector.fit(it))}）" }
+                    ?: "没有能用的 ← ${EngineSelector.MSG_NO_ENGINE_FOR_LANGUAGE}"}"
+            )
+        }
 
         // —— 结论：两条路分开说 ——
         //
         // 为什么分开：两条路的前置条件不同（谁来录音），
         // 合成一句「语音可用/不可用」会把「桌宠能用但聊天页不能用」这种
         // 最常见的情况说成「全都不能用」，用户就没法判断该修哪边。
-        val probe = SpeechProbe(app)
         sb.appendLine("")
         sb.appendLine("结论（桌宠 · 自己录音）：${describe(probe.check(VoicePath.SelfRecorded))}")
         sb.appendLine("结论（聊天页 · 系统识别页）：${describe(probe.check(VoicePath.SystemPage))}")

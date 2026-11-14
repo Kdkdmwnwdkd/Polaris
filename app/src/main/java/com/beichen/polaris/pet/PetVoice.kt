@@ -1,5 +1,6 @@
 package com.beichen.polaris.pet
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -14,6 +15,7 @@ import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.text.SpeechLogic
 import com.beichen.polaris.core.voice.AudioLease
 import com.beichen.polaris.core.voice.ClaimResult
+import com.beichen.polaris.core.voice.EngineSelector
 import com.beichen.polaris.core.voice.SpeechCapability
 import com.beichen.polaris.core.voice.SpeechCapabilityPolicy
 import com.beichen.polaris.core.voice.SpeechRemedy
@@ -244,7 +246,7 @@ class PetVoiceInput(
             }
         }
 
-        val rec = runCatching { SpeechRecognizer.createSpeechRecognizer(app) }.getOrNull()
+        val rec = createRecognizer()
         if (rec == null) {
             releaseLease("创建识别器失败")
             onProblem("语音识别服务启动失败，请稍后再试")
@@ -265,6 +267,74 @@ class PetVoiceInput(
         }
         handler.postDelayed(hardTimeout, HARD_TIMEOUT_MS)
         return true
+    }
+
+    /**
+     * 选定的识别引擎，`包名/类名`；null = 用系统默认。
+     *
+     * 为什么需要它：真机上「语音用不了」常常不是没装引擎，而是**装了好几个、
+     * 默认那个不认中文**。此时最省事的修法不是让用户去系统设置里翻，
+     * 而是我们直接把识别指向一个能用的引擎——
+     * `SpeechRecognizer.createSpeechRecognizer(ctx, componentName)` 就是为这件事存在的。
+     *
+     * 值由 [com.beichen.polaris.audio.SpeechProbe.probeEngines] 的探测结果决定，
+     * 挑选规则在 [com.beichen.polaris.core.voice.EngineSelector.pick]。
+     */
+    @Volatile
+    var preferredEngine: String? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            AgentLogger.i(TAG, "识别引擎切换为 ${value ?: "系统默认"}")
+        }
+
+    /**
+     * 探一遍「哪个引擎认当前语言」，把能用的那个接上。
+     *
+     * 什么时候调：桌宠服务起来时调一次（[com.beichen.polaris.pet.PetOverlay] 建完窗口）。
+     * 不放在 [start] 里——探测要连上每个引擎问一遍，几百毫秒起步，
+     * 而用户长按要的是「立刻开始听」。
+     *
+     * 挑中的是系统默认那个时，仍走默认路径（不锁死组件）：默认引擎可能被系统改掉，
+     * 锁死一个组件反而会在用户换引擎后继续用旧的那个。
+     */
+    fun refreshEngine() {
+        probe.probeEngines { engines ->
+            val chosen = EngineSelector.pick(engines)
+            preferredEngine = if (chosen == null || chosen.isDefault) null else chosen.component
+            if (engines.isNotEmpty() && chosen == null) {
+                AgentLogger.w(
+                    TAG,
+                    "没有引擎支持当前语言（${probe.currentLanguageTag()}）：" +
+                        engines.joinToString("、") { it.component },
+                )
+            }
+        }
+    }
+
+    /**
+     * 建一个识别器，优先用 [preferredEngine]。
+     *
+     * 指定引擎创建失败时**静默回退系统默认**：用户此刻要的是「说话能被识别」，
+     * 不是「必须用某个引擎」。为了一次创建失败就弹一句技术错误，等于把内部
+     * 选择逻辑的失败转嫁给用户。
+     */
+    private fun createRecognizer(): SpeechRecognizer? {
+        val chosen = preferredEngine
+        if (chosen != null) {
+            val component = ComponentName.unflattenFromString(chosen)
+            if (component != null) {
+                val rec = runCatching {
+                    SpeechRecognizer.createSpeechRecognizer(app, component)
+                }.getOrNull()
+                if (rec != null) {
+                    AgentLogger.i(TAG, "使用指定引擎：$chosen")
+                    return rec
+                }
+                AgentLogger.w(TAG, "指定引擎 $chosen 创建失败，回退系统默认")
+            }
+        }
+        return runCatching { SpeechRecognizer.createSpeechRecognizer(app) }.getOrNull()
     }
 
     /**

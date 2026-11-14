@@ -1,15 +1,24 @@
 package com.beichen.polaris.audio
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.speech.RecognitionService
+import android.speech.RecognitionSupport
+import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.core.content.ContextCompat
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.voice.EngineCapability
+import com.beichen.polaris.core.voice.EngineSelector
+import com.beichen.polaris.core.voice.LanguageTag
 import com.beichen.polaris.core.voice.SpeechCapability
 import com.beichen.polaris.core.voice.SpeechCapabilityPolicy
 import com.beichen.polaris.core.voice.VoicePath
@@ -59,6 +68,10 @@ import java.util.Locale
 class SpeechProbe(context: Context) {
 
     private val app = context.applicationContext
+
+    /** 探测的超时与回调都要落在主线程：`SpeechRecognizer` 只认主线程。 */
+    private val handler = Handler(Looper.getMainLooper())
+    private val mainExecutor = ContextCompat.getMainExecutor(app)
 
     /**
      * 设备上是否存在任何识别服务。
@@ -111,27 +124,197 @@ class SpeechProbe(context: Context) {
     }
 
     /**
+     * 上一次 [probeEngines] 的结果。null = 还没探测过。
+     *
+     * 为什么全程缓存：探测要连上每个引擎问一遍（每个几百毫秒），
+     * 而判定要同步返回。第一次判定时缓存为空，放行；探测回来后，
+     * 后面的判定就能用上真实结论。
+     *
+     * 进程内有效，不做持久化：引擎的语言包用户随时可能装/卸，
+     * 跨进程缓存一个旧结论比不缓存更糟。
+     */
+    /** 已探测到的引擎清单；null = 还没探过。 */
+    fun cachedEngines(): List<EngineCapability>? = sharedEngines
+
+    /**
      * 引擎是否支持当前语言。
      *
-     * **当前实现恒返回 null（查不出来），这是有意的。**
+     * 同步版只能看**缓存**：
      *
-     * AOSP 的 `SpeechRecognizer.checkRecognitionSupport` 是**实例方法 + 异步回调**
-     * （要 Intent + Executor + RecognitionSupportCallback），而且它要先连上引擎才能问。
-     * 把它做成同步探测需要挂起整个调用链（桌宠的 `start()` 在主线程、聊天页在
-     * Compose lambda 里），代价远大于收益。
+     * - 没探测过（或探测不可用）→ null，不据此下结论。这是有意的：
+     *   拿不到信息就放行，让引擎自己报错码，而不是凭猜测拦下用户。
+     * - 探测过且一个能用的都没有 → false，明确不支持。
+     * - 探测过且有能用的 → true。
      *
-     * 更重要的是：**这个信息本来就有更好的来源**。引擎不认当前语言时，会在
-     * `onError` 里回 [android.speech.SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED]（12）
-     * 或 `ERROR_LANGUAGE_UNAVAILABLE`（13），由 `SpeechCapabilityPolicy.explainError`
-     * 翻译成准确提示。提前问只是把同一个答案提前一点拿到，还搭上了一条异步链路。
-     *
-     * 保留这个函数是为了让判定表的维度完整（harness 会逐条钉死它），
-     * 以及将来若需要「开始录音前就告知语言问题」时有现成位置。
+     * 真正的探测在 [probeEngines]——异步、逐个问、结果进缓存。
+     * 分开的理由：`SpeechRecognizer.checkRecognitionSupport` 是实例方法 + 异步回调，
+     * 还要先连上引擎；做不成同步查询，而桌宠的 `start()` 在主线程、
+     * 聊天页在 Compose lambda 里，都不能挂起。
      */
     fun isLanguageSupported(language: String = currentLanguageTag()): Boolean? {
-        AgentLogger.i(TAG, "语言支持情况交由引擎错误码回报（$language）")
-        return null
+        val verdict = EngineSelector.languageVerdict(sharedEngines)
+        AgentLogger.i(TAG, "语言支持（$language）：${verdict ?: "未知（未探测）"}")
+        return verdict
     }
+
+    /**
+     * 逐个问引擎：当前语言你认不认。
+     *
+     * 这是本轮修复的核心。真机日志显示，用户设备上有两个识别服务，
+     * 默认那个（Google TTS 自带的）不认中文，于是桌宠每次录音都拿到
+     * `ERROR_LANGUAGE_NOT_SUPPORTED`——而 App 侧「引擎已选」的检查是绿的，
+     * 因为那个设置里确实有值。
+     *
+     * 拿到每个引擎的结论后，[EngineSelector.pick] 就能挑一个**现在就能用**的，
+     * 桌宠用 `createSpeechRecognizer(ctx, componentName)` 直接指过去，
+     * 不需要用户去系统设置里翻。
+     *
+     * ## 约束
+     *
+     * - **必须在主线程调**（`createSpeechRecognizer` 的要求）。
+     * - 每个引擎一个超时：引擎不应答是常态（未初始化、被停用），
+     *   不能让它拖住整轮探测。
+     * - 结果回调在主线程。
+     *
+     * @param language BCP-47 语言标签，默认取系统语言。
+     * @param onDone 探测完成。低版本系统或查询不到服务时给空列表。
+     */
+    fun probeEngines(
+        language: String = currentLanguageTag(),
+        onDone: (List<EngineCapability>) -> Unit,
+    ) {
+        // checkRecognitionSupport 是 API 33 才有的。低版本上「引擎认不认这个语言」
+        // 只能在录音开始后由错误码告诉我们——那就保持现状，不假装探到了。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            AgentLogger.i(TAG, "系统版本 ${Build.VERSION.SDK_INT} < 33，无法提前探测引擎的语言支持")
+            sharedEngines = emptyList()
+            onDone(emptyList())
+            return
+        }
+
+        // 节流：聊天页每次进入都会调一次，而绑定每个引擎问一遍是有成本的
+        // （要连服务）。15 秒内复用结果。装完语言包想立刻看到效果的话，
+        // 退出再进一次聊天页即可（超过节流窗口就会重探）。
+        val cached = sharedEngines
+        if (cached != null && System.currentTimeMillis() - lastProbeAt < PROBE_THROTTLE_MS) {
+            onDone(cached)
+            return
+        }
+
+        val services = queryRecognitionServices()
+        if (services.isEmpty()) {
+            sharedEngines = emptyList()
+            lastProbeAt = System.currentTimeMillis()
+            onDone(emptyList())
+            return
+        }
+
+        val defaultComponent = defaultEngineComponent()
+        val total = services.size
+        val results = ArrayList<EngineCapability>(total)
+        var finished = 0
+        var delivered = false
+
+        fun oneDone(capability: EngineCapability?) {
+            if (capability != null) results.add(capability)
+            finished++
+            if (finished < total || delivered) return
+            delivered = true
+            sharedEngines = results.toList()
+            lastProbeAt = System.currentTimeMillis()
+            AgentLogger.i(
+                TAG,
+                "引擎探测完成（$language）：" + results.joinToString("；") {
+                    "${it.component}=${EngineSelector.describe(EngineSelector.fit(it))}" +
+                        if (it.isDefault) "[默认]" else ""
+                },
+            )
+            onDone(results.toList())
+        }
+
+        services.forEach { info ->
+            val pkg = info.serviceInfo.packageName
+            val cls = info.serviceInfo.name
+            val key = "$pkg/$cls"
+            var settled = false
+
+            val recognizer = runCatching {
+                SpeechRecognizer.createSpeechRecognizer(app, ComponentName(pkg, cls))
+            }.getOrNull()
+            if (recognizer == null) {
+                AgentLogger.w(TAG, "无法为引擎 $key 创建识别器")
+                oneDone(null)
+                return@forEach
+            }
+
+            // 回调与超时可能都到，用 settled 保证只结算一次。
+            fun settle(capability: EngineCapability?) {
+                if (settled) return
+                settled = true
+                runCatching { recognizer.destroy() }
+                oneDone(capability)
+            }
+
+            handler.postDelayed({ settle(null) }, PROBE_TIMEOUT_MS)
+
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                )
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+            }
+            runCatching {
+                recognizer.checkRecognitionSupport(
+                    intent,
+                    mainExecutor,
+                    object : RecognitionSupportCallback {
+                        override fun onSupportResult(support: RecognitionSupport) {
+                            settle(
+                                EngineCapability(
+                                    component = key,
+                                    installedOffline = LanguageTag.anyCovers(
+                                        support.installedOnDeviceLanguages, language,
+                                    ),
+                                    supportedOffline = LanguageTag.anyCovers(
+                                        support.supportedOnDeviceLanguages, language,
+                                    ),
+                                    online = LanguageTag.anyCovers(support.onlineLanguages, language),
+                                    isDefault = key == defaultComponent,
+                                ),
+                            )
+                        }
+
+                        // 引擎自己报错（未初始化、内部异常）也走这里。
+                        // 不处理的话这一项会一直等超时，白拖 800ms。
+                        override fun onError(error: Int) {
+                            AgentLogger.w(TAG, "引擎 $key 查询语言支持报错：$error")
+                            settle(null)
+                        }
+                    },
+                )
+            }.onFailure { e ->
+                AgentLogger.w(TAG, "询问引擎 $key 的语言支持失败：${e.message}")
+                settle(null)
+            }
+        }
+    }
+
+    /** 设备上的识别服务清单。查不到时给空表并记日志（不抛）。 */
+    private fun queryRecognitionServices(): List<ResolveInfo> = runCatching {
+        app.packageManager.queryIntentServices(
+            Intent(RecognitionService.SERVICE_INTERFACE),
+            0,
+        ).orEmpty()
+    }.getOrElse { e ->
+        AgentLogger.w(TAG, "查询识别服务失败：${e.message}")
+        emptyList()
+    }
+
+    /** 系统选定的默认识别引擎，`包名/类名`。读不到给 null。 */
+    private fun defaultEngineComponent(): String? = runCatching {
+        Settings.Secure.getString(app.contentResolver, VOICE_RECOGNITION_SERVICE)
+    }.getOrNull()?.takeIf { it.isNotBlank() }
 
     /**
      * 是否有 App 能处理系统识别 Intent（`ACTION_RECOGNIZE_SPEECH`）。
@@ -223,5 +406,32 @@ class SpeechProbe(context: Context) {
 
         /** `Settings.Secure.VOICE_RECOGNITION_SERVICE`，API 29 起可读。 */
         const val VOICE_RECOGNITION_SERVICE = "voice_recognition_service"
+
+        /**
+         * 单个引擎的探测超时。
+         *
+         * 800ms 是取舍：引擎正常应答在 100–300ms，但要先绑定服务；
+         * 完全不应答的引擎（被停用、未初始化）必须尽快放过，
+         * 否则 3 个引擎能让启动拖到 3 秒以上。
+         */
+        const val PROBE_TIMEOUT_MS = 800L
+
+        /**
+         * 引擎探测结果的**进程级**缓存。
+         *
+         * 为什么不是实例字段：探测结果描述的是「这台设备上的引擎认不认当前语言」，
+         * 与哪个 [SpeechProbe] 对象无关。做成实例字段的话，
+         * 桌宠探完、用户在设置里点「语音诊断」（new 一个 probe）就又是空的——
+         * 而那一刻恰恰是最需要看到结果的时刻。
+         */
+        @Volatile
+        var sharedEngines: List<EngineCapability>? = null
+
+        /** 上次探测完成的时间，用于节流。 */
+        @Volatile
+        var lastProbeAt = 0L
+
+        /** 探测节流窗口：窗口内复用上次结果，不重复绑定引擎。 */
+        const val PROBE_THROTTLE_MS = 15_000L
     }
 }
