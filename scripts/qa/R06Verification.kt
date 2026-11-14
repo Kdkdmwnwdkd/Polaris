@@ -71,15 +71,15 @@ fun <T> eq(actual: T, expected: T, what: String) {
  * `ConversationStore.flush()` 是**异步**的（把任务插进单线程调度器队列），
  * 写完才知道——所以不能「flush 完立刻读文件」，那是用例自己制造的竞态。
  */
-private fun flushAndWait(store: ConversationStore, quiesceMs: Long = 100) {
+private fun flushAndWait(store: ConversationStore) {
     store.flush()
-    // 等到「计数不再变化」而不是「计数变了一次」：create() 自己会排一次紧急写，
-    // 只等第一次变化会在*别人*那次写完成时返回，我们的写还在队列里——用例自造竞态。
-    var last = -1L
-    while (store.persistCount != last) {
-        last = store.persistCount
-        Thread.sleep(quiesceMs)
-    }
+    // 往**同一个单线程**调度器投一个空任务：FIFO 保证它执行时，此前排队的写必然已跑完。
+    //
+    // 原来的写法是「等 persistCount 不再变化」——那是在赌调度器跑得够快：
+    // 写还没开始执行时计数当然不变，于是这里提前返回，写随后才完成。
+    // 2026-11-14 本轮全量回归里 E3 偶发红过一次（连跑三次又全绿），就是这个竞态。
+    // ConversationStore.awaitPersist 正是为这件事准备的（它的注释写着同一句话）。
+    store.awaitPersist()
 }
 
 /**
@@ -375,7 +375,9 @@ fun main() {
         val before = store.persistCount
         val p = projectionOn(store, { conv }, { null })
         eq(p.settleInterrupted(conv), 0, "收口条数")
-        Thread.sleep(100)
+        // 关键：等队列**排空**再比计数。原来靠固定 sleep，落盘若落在窗口外就被漏掉，
+        // 断言就成了「有没有恰好在 100ms 内写完」的抽奖。
+        store.awaitPersist()
         eq(store.persistCount, before, "无变更却触发了落盘")
     }
 
