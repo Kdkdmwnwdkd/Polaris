@@ -14,8 +14,8 @@
 | **P1–P3** 容器租约 | ❗需要 arm64 真机 | proot 在 x86 模拟器上无法让 musl 程序 `execve`，只能到「租约就绪」半步 |
 | **P4–P6** | 任何设备都能做 | 失败路径 / 诊断包 / 截断提示，不需要 arm64 |
 | **P11** 桌面助手悬浮窗 | ❗需要真机或带 GApps 的模拟器 | 悬浮窗权限、拖动吸附、悬浮窗内输入法、常驻通知、关掉后彻底消失（见文末） |
-| **P12** 桌宠语音闭环 | ❗未验（2026-11-14 落地） | 9 条；只有 P12-4（Android 14 悬浮窗内录音）必须真机 |
-| **P13** 一键唤起（磁贴 + 通知按钮） | ❗未验（2026-11-14 落地） | 9 条；P13-2（国产 ROM 后台起前台服务）、P13-7（锁屏）必须真机 |
+| **P12** 桌宠语音闭环 | ⚠️ **3/9 已验**（模拟器 + 桩识别服务，2026-11-14） | P12-1/2/9 的 App 侧链路已验；P12-3~8 要真实音频，仍必须真机 |
+| **P13** 一键唤起（磁贴 + 通知按钮） | ⚠️ **5/9 已验**（模拟器真点磁贴，2026-11-14） | P13-1（部分）/2/3/5/8 已验；P13-7 只验了「先要求解锁」，P13-4/6/9 仍必须真机 |
 
 也就是说：**真机上真正剩下的是 P1–P3（容器三条）+ P4–P6 的界面确认 + P11/P12/P13 这 28 条**，约 40 分钟。
 P7/P8 这两条原本最需要真机的（一个要看 manifest、一个要跑 90 秒），已经在服务器侧用
@@ -1420,8 +1420,44 @@ W ActivityManager: Foreground service started from background can not have
 location/camera/microphone access: service com.beichen.polaris/.pet.PetOverlayService
 ```
 
-**仍然必须真机的**：P12 全部（本镜像无 RecognitionService）、P11-6（要模型可达）、
-P13-2/5/6/7/8/9（磁贴点击 / 通知按钮 / 锁屏 / 撤权限，`cmd statusbar` 在该 build 上不支持 add-tile）。
+**仍然必须真机的**：P12 全部（本镜像无 RecognitionService）、P11-6（要模型可达）、P13-2/5/6/7/8/9（磁贴点击 / 通知按钮 / 锁屏 / 撤权限，`cmd statusbar` 在该 build 上不支持 add-tile）。
+
+> ↑ 这一行已被**第二轮**推翻一半，见下面「第二轮」小节。
+
+### 第二轮（同日）：桩识别服务 + 真点磁贴，19/28
+
+> 详见 `docs/archive/reports/模拟器实测-第二轮-2026-11-14.md`。
+
+上一轮把 P12 整段判死，是因为镜像里没有 RecognitionService。这一轮补了一个
+**桩识别服务**（`com.beichen.debug.stt`，继承 `RecognitionService`，行为由
+`debug.stt.mode` 系统属性控制：`result` / `nomatch` / `speech_timeout` / `hang`），
+`settings put secure voice_recognition_service` 指过去，`isRecognitionAvailable` 即成立。
+
+它能验的是**调用链**（起引擎 → 回调 → 文案映射 → 收尾 → 租约释放），
+验不了识别质量、真实音频、TTS、ducking、他应用占用。边界写清楚了再往表里填。
+
+同时上一轮「`cmd statusbar` 不支持 add-tile」是**误判**：命令都在，
+`dumpsys statusbar` 看不到 tile 列表（tile 状态在 SystemUI 的 `QSTileHost` 里），
+且 `click-tile` 不转发 —— 但 `input swipe` 拉面板 + `input tap` 真点是可以的。
+
+| 本轮新增 | 证据 |
+|---|---|
+| **P12-1** | 桩回 `ERROR_NO_MATCH` → `[PetVoice] 识别失败 code=7 → 没听清，再说一次试试` → `Capture#1 释放` |
+| **P12-2** | 桩回文本 → `[AgentLoop] 开始运行，输入：… 现在几点（历史 0 条）`，识别文字自动上屏并进回合 |
+| **P12-9** | `W [PetVoice] 录音超时，强制收尾`（`HARD_TIMEOUT_MS=20_000`，实测约 24s）+ 租约释放 |
+| **P13-2** | 关态下点磁贴 → `Background started FGS: Allowed [... uidState: CEM ... action.LISTEN ... code:ACTIVITY_STARTER]`，同一次点击里桩已 `onStartListening`（= 直接进聆听） |
+| **P13-3** | `mInputShown=false`，窗口已展开（复验） |
+| **P13-5** | 聆听中再点 → `onStopListening` → `onCancel` → `Capture#1 释放` |
+| **P13-8** | 撤权后点磁贴 → `START u0 {act=android.settings.action.MANAGE_OVERLAY_PERMISSION …}`，`topResumedActivity=com.android.settings/.spa.SpaActivity` |
+| **P13-1（部分）** | 面板截图两枚「北辰」，副标题「点一下听…」；`QSTileHost: Loaded tile specs … custom(...)` |
+
+**还是得真机**：P11-6、P11-4 的 ROM 差异、P11-10 的省电策略、P12-3（静音阈值）、
+P12-4（Android 14 后台麦克风）、P12-5（朗读打断）、P12-6（ducking）、P12-7（他应用占用）、
+P12-8（录音中拖动，需窗口可见可触摸）、P13-4、P13-6、P13-7 的「不解锁不录音」、P13-9。
+
+**顺带一条观察**：桩侧 `service created` 比 `startListening` 晚 6 秒（TCG 上），
+20 秒硬超时从 `start()` 起算 —— 低端机首次唤起时，这段冷启动会吃掉超时预算。
+本轮没有证据说是 bug，等真机看 P13-4 的首次延迟。
 
 ---
 
