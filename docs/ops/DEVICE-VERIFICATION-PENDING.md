@@ -1851,3 +1851,88 @@ enum class VoicePath {
 > P15-2 是本轮最重要的一条：它验的是**我们没有拦住一条本来能用的路**。
 > 这类问题不会有任何报错，只会让用户继续说「语音没反应」。
 
+
+---
+
+## 2026-11-14 第六轮：真机日志到手——问题不在判定，在「默认引擎不认中文」
+
+第五轮结尾留了一句「真机识别这一步我验不了」。当天晚上用户把日志贴过来了，
+是 731 包（第五轮修复版）在真机上的运行记录。**日志推翻了我此前的猜测**，
+也把真正的原因指得很清楚。
+
+### 日志里的三行关键事实
+
+```
+21:46:11.525 [SpeechProbe] 识别服务 2 个：com.google.android.tts/…GoogleTTSRecognitionService、
+                                        com.qualcomm.qti.voiceai.speech/…SpeechRecognitionService
+21:46:11.527 [SpeechProbe] 语音能力检查通过（路径=SystemPage，引擎已选=true，语言支持=null）
+21:46:37.376 [PetVoice] 识别失败 code=12 → 语音识别服务不支持当前语言，换个系统语言试试
+```
+
+| 事实 | 推翻了什么 |
+|---|---|
+| 识别服务 **2 个** | 我上一轮猜「国产 ROM 没 GMS、所以没识别服务」——**错了**，这台机器有两个 |
+| 引擎已选 = **true** | 「系统没选默认引擎」也不是原因 |
+| 语言支持 = **null** | 判定表缺了这一维的信息，于是**放行了** |
+| code = **12** | `ERROR_LANGUAGE_NOT_SUPPORTED`：引擎自己说「我不认这个语言」 |
+
+结论：**判定层没错，是判定层拿不到那一维的信息。**
+我上一轮在 `isLanguageSupported()` 里写了「语言支持交给引擎错误码回报」——
+理由听起来合理（错误码确实是权威答案），代价却是：
+
+> 用户按下去、说一句话、被引擎拒绝，只拿到一句「不支持当前语言」。
+> 而设备上**明明还装着另一个能识别中文的引擎**。
+
+能在本地解决的事，不该变成用户的电话。
+
+### 根因
+
+系统默认引擎是 `com.google.android.tts` 里的 `GoogleTTSRecognitionService`。
+那是 Google TTS 包自带的识别服务，**要单独下载中文离线包才会认中文**。
+同一台机器上还装着 `com.qualcomm.qti.voiceai.speech`（高通语音），
+很可能认中文——但 App 既没问过它，也没法把识别指向它。
+
+### 修复：App 自己挑引擎
+
+| 位置 | 做了什么 | 为什么必须 |
+|---|---|---|
+| `core/voice/RecognitionEngine.kt`（新） | `EngineCapability` / `EngineFit` / `EngineSelector` / `LanguageTag` | 挑错引擎**不报错**，只表现为「语音还是不能用」，必须能被 JVM 逐条断言 |
+| `app/audio/SpeechProbe.probeEngines()` | 对每个识别服务调 `checkRecognitionSupport`，问「当前语言你认不认」 | `checkRecognitionSupport` 是实例方法 + 异步回调（还要先连上引擎），只能异步；每个引擎 800ms 超时兜底 |
+| `app/pet/PetVoice.createRecognizer()` | 用 `createSpeechRecognizer(ctx, componentName)` **指定引擎** | 这是 AOSP 官方为「指定服务」提供的入口；只记录不指定的话，日志会说谎 |
+| `app/pet/PetOverlay` | 启动时 `refreshEngine()`，错误提示上带「去换引擎」的直达动作 | 长按时再探会多等几百毫秒；用户长按要的是「立刻开始听」 |
+| `SpeechRemedy.SwitchEngine`（新） | 「不支持当前语言」的出路从 `ChangeLanguage` 改成换引擎 | 换系统语言要把整台手机所有应用变成另一种语言，只为用一次语音输入——代价完全不对等 |
+| `LanguageTag` | 语言标签按主语言比较，认 `cmn` / `zh_CN` / `zh-Hans-CN` | 引擎回报的写法有四种。用 `==` 比会把 `cmn-Hans-CN` 判成「不支持」，然后让用户去换系统语言——**而它完全能识别** |
+
+### 为什么「空探测结果」不能当成「不支持」
+
+`EngineSelector.languageVerdict()` 有三种输入、三种答案：
+
+| 输入 | 答案 | 理由 |
+|---|---|---|
+| `null`（还没探过） | `null` | 拿不到信息就放行，让引擎自己报错码，而不是凭猜测拦人 |
+| `emptyList()`（探不了：系统 < 13、查不到服务） | `null` | 它的真实含义是「**没问到**」，不是「都不支持」。混为一谈会让低版本系统上的用户每次都被拦住 |
+| 有结果 | 有没有能用的 | 这才是真结论 |
+
+这条规则被 harness 的 C13/C14 钉死。
+
+### 验证
+
+| 手段 | 结果 |
+|---|---|
+| `run-speech-capability-verification.sh` | **96 通过 / 0 失败**（21 结构 + 48 行为 + 16 引擎选择 + 11 语言标签） |
+| `run-desktop-pet-verification.sh` | 52 / 0 |
+| `run-r14-contract-verification.sh` | 12 / 0 |
+| `run-arch-guard-verification.sh` | 7 / 0 |
+| `assertion-census.py` | 1729 条，只减不增 |
+
+### 真机复验（P16，5 分钟）
+
+| 判据 | 步骤 | 通过 | 不通过的含义 |
+|---|---|---|---|
+| **P16-1** | 装新包 → 开一次桌宠 → 设置 → 语音诊断 | 报告里有「—— 各引擎对 zh-CN 的支持 ——」，每个引擎都标了适配度，且「当前应使用」**不是** `com.google.android.tts/…GoogleTTSRecognitionService` | 全是「不支持当前语言」→ 两个引擎都不认中文，得装 Google 语音服务；显示「未探测」→ 桌宠没探 |
+| **P16-2** | 桌宠长按说「现在几点」 | 识别出文字并自动发送、有回答 | 仍报 code=12 → 探测没挑中引擎（把 P16-1 的报告发出来） |
+| **P16-3** | 在桌宠提示里点「去换引擎」那条 | 跳到系统的语音输入设置（或本应用详情页） | 跳不动 → 该 ROM 没有这个设置页，兜底也没生效 |
+
+> P16-1 是这一轮的验收点：**只要报告里「当前应使用」指向了一个「离线可用」或「仅在线可用」的引擎，
+> 就不该再出现 code=12。** 如果出现了，说明探测结果与实际的引擎选择对不上，
+> 那是新 bug，不是环境问题。
