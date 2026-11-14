@@ -1,6 +1,7 @@
 package com.beichen.polaris.pet
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.os.Build
@@ -26,6 +27,7 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.AppScope
+import com.beichen.polaris.core.voice.SpeechRemedy
 import com.beichen.polaris.ui.AgentKitTheme
 import com.beichen.polaris.ui.AppearanceState
 import kotlinx.coroutines.CoroutineScope
@@ -110,6 +112,18 @@ class PetOverlayHost(
         private set
 
     /**
+     * 提示附带的可点击动作（如「去授权」）。null = 提示只是文字。
+     *
+     * 为什么需要它：缺麦克风权限时，光提示「去系统设置给『北辰』打开麦克风」是不够的——
+     * 用户得自己去设置里找到这个 App、找到权限项、点开。而**桌宠是常驻悬浮窗，
+     * 本身没有 Activity**，没法自己弹权限申请框（Compose 的权限 launcher 需要 Activity）。
+     *
+     * 所以这里给一条出路：点提示直接跳到本应用的系统权限页，一步到位。
+     */
+    var noticeAction: (() -> Unit)? by mutableStateOf(null)
+        private set
+
+    /**
      * 展开后要不要把焦点塞进输入框。
      *
      * 默认 true（点一下形象展开，用户多半是想打字）。两类情况必须为 false：
@@ -136,7 +150,10 @@ class PetOverlayHost(
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private val clearNotice = Runnable { notice = null }
+    private val clearNotice = Runnable {
+        notice = null
+        noticeAction = null
+    }
 
     fun show() {
         if (view != null) return
@@ -180,6 +197,7 @@ class PetOverlayHost(
                         ask = ask,
                         voiceState = voiceState,
                         notice = notice,
+                        noticeAction = noticeAction,
                         voicePrompt = voicePrompt,
                         autoFocusInput = autoFocusInput,
                         onVoicePromptConsumed = ::consumeVoicePrompt,
@@ -217,7 +235,18 @@ class PetOverlayHost(
                 // 绕过去就会变成「语音发的消息不进历史」。
                 voicePrompt = text
             },
-            onProblem = { message -> showNotice(message) }
+            onProblem = { message -> showNotice(message) },
+            onProblemWithCode = { message, remedy ->
+                // 缺权限是唯一「当场就能解决」的一种：给一条直达系统权限页的出路。
+                // 其他原因（没服务 / 被占用 / 没听清）不给按钮——给了也只是让人多点一次。
+                //
+                // 注意这里必须写成单行 if 表达式：写成带花括号的分支时，
+                // Kotlin 编译器会在生成可调用引用上崩（ICE）——已复现。
+                showNotice(
+                    message,
+                    if (remedy == SpeechRemedy.GrantMicPermission) ::openAppPermissionSettings else null,
+                )
+            }
         )
 
         compose.post { snapToEdge() }
@@ -285,8 +314,34 @@ class PetOverlayHost(
      * 而不是被第一次的定时器提前清掉（清之前比对内容的那套在这里不需要，
      * 因为 removeCallbacks 已经保证只有一个 pending 的清除任务）。
      */
-    private fun showNotice(text: String) {
+    /**
+     * 跳到本应用的系统权限页。
+     *
+     * 为什么不是「申请权限」：桌宠是常驻悬浮窗，没有 Activity 上下文，
+     * 而 Compose 的 `RequestPermission` launcher 必须挂在 Activity 上。
+     * 从 Service 里直接拉起系统的权限设置页是可行的——系统会显示这个 App 的
+     * 权限列表，用户点一下麦克风开关即可。
+     *
+     * `ACTION_APPLICATION_DETAILS_SETTINGS` 而不是 `ACTION_MANAGE_APP_ALL_PERMISSIONS`：
+     * 后者在部分 ROM 上不存在，前者从 Android 9 起一直都在。
+     */
+    private fun openAppPermissionSettings() {
+        val intent = Intent(
+            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            android.net.Uri.fromParts("package", context.packageName, null)
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { context.startActivity(intent) }
+            .onFailure {
+                AgentLogger.w(TAG, "打开应用权限页失败：${it.message}")
+                showNotice("打不开系统权限页，请手动到系统设置里给「北辰」打开麦克风")
+            }
+    }
+
+    private fun showNotice(text: String, action: (() -> Unit)? = null) {
         notice = text
+        noticeAction = action
         // 只为让人看一眼文字而展开，不该顺手弹出键盘
         applyExpanded(true, focusInput = false)
         mainHandler.removeCallbacks(clearNotice)

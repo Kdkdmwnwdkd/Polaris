@@ -95,6 +95,11 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import com.beichen.polaris.core.text.ChatTime
 import com.beichen.polaris.core.text.SpeechLogic
+import com.beichen.polaris.core.voice.VoicePath
+import com.beichen.polaris.audio.SpeechProbe
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import com.beichen.polaris.core.agent.AskUserBroker
 import com.beichen.polaris.core.agent.APPROVAL_TIMEOUT_MS
 import com.beichen.polaris.core.agent.PlanBroker
@@ -245,6 +250,8 @@ fun ChatScreen(
     // 功能四：模型切换弹窗开关（指示条点击打开）
     var showModelSwitch by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
+    // 语音能力探测。与桌宠共用同一个实现——两条路必须给出同一个结论。
+    val speechProbe = remember(ctx) { SpeechProbe(ctx) }
     // 功能五（P1-2）：TTS 朗读（离开对话页即 shutdown，防系统绑定泄漏）
     val tts = remember { TtsController(ctx) }
     DisposableEffect(Unit) { onDispose { tts.shutdown() } }
@@ -286,26 +293,64 @@ fun ChatScreen(
             }
         }
     }
-    val startVoiceInput: () -> Unit = {
+    /**
+     * 真正发起系统识别。
+     *
+     * 2026-11-14 简化：原先这里绕了一层 `remember { mutableStateOf<(() -> Unit)?>(null) }`，
+     * 是为了打破「权限回调声明在它之前」的顺序限制。权限入口撤掉后（理由见下），
+     * 那层间接就没有存在意义了——去掉它也顺带去掉了「在组合过程中写状态」这个坏味道。
+     */
+    val launchVoiceRecognizer: () -> Unit = {
         val denied = vm.beginVoiceCapture()
         if (denied != null) {
             // 被拒的原因是「别的应用在录音」「通话中」这类，必须原样告诉用户，
             // 否则他会以为语音按钮坏了。
             Toast.makeText(ctx, denied, Toast.LENGTH_SHORT).show()
         } else {
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(
-                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                )
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.getDefault().toString())
-                putExtra(RecognizerIntent.EXTRA_PROMPT, "说出你要问的内容")
+            val launched = runCatching {
+                voiceLauncher.launch(VoiceInputLogic.buildRecognizeIntent())
             }
-            val launched = runCatching { voiceLauncher.launch(intent) }
             if (launched.isFailure) {
                 vm.endVoiceCapture()
                 Toast.makeText(ctx, "本机没有可用的语音识别服务", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    /**
+     * 麦克风权限（**已撤**）。
+     *
+     * 2026-11-14 撤掉的原因：这里原先加了一个「缺权限就当场申请」的入口，
+     * 前提是「聊天页要自己录音」——**那个前提是错的**。
+     *
+     * 聊天页走的是系统识别页（[RecognizerIntent]），录音发生在**系统进程**里，
+     * 我们的 `RECORD_AUDIO` 跟它无关。依据见
+     * [com.beichen.polaris.core.voice.VoicePath] 的注释（AOSP attribution 链 +
+     * 框架 `SearchView` 的旁证）。
+     *
+     * 留着这个拦截的代价是：只用聊天页语音、没在设置里开过桌宠的用户，
+     * 点麦克风会被「请授予麦克风权限」拦下——**而那条路本来是通的**。
+     * 拦住一条本来能用的路，比不拦更糟。
+     *
+     * 需要麦克风权限的是**桌宠**（自己录音那条路），它那边有独立的提示与跳转。
+     */
+
+    val startVoiceInput: () -> Unit = {
+        // 先问「这台机器能不能识别」，再决定要不要弹系统识别页。
+        //
+        // 顺序的理由：系统识别页一旦弹出，用户就进入了一个走不出来的流程
+        // （有的 ROM 上那个页面上没有「取消」）。先自己判定，缺什么就地提示，
+        // 比弹出去再让用户自己发现不对要好。
+        //
+        // 判定与桌宠共用 [SpeechProbe]——但**走不同的路径**：
+        // 聊天页走系统识别页（[com.beichen.polaris.core.voice.VoicePath.SystemPage]），
+        // 录音在系统进程里，我们的麦克风权限与它无关，所以这一维不参与判定。
+        when (val action = VoiceInputLogic.actionFor(
+            speechProbe.check(VoicePath.SystemPage)
+        )) {
+            is VoiceInputLogic.Action.Start -> launchVoiceRecognizer()
+            is VoiceInputLogic.Action.Notify ->
+                Toast.makeText(ctx, action.message, Toast.LENGTH_LONG).show()
         }
     }
 

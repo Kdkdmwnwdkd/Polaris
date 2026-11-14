@@ -1,21 +1,23 @@
 package com.beichen.polaris.pet
 
-import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import androidx.core.content.ContextCompat
 import com.beichen.polaris.audio.AudioGraph
+import com.beichen.polaris.audio.SpeechProbe
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.text.SpeechLogic
 import com.beichen.polaris.core.voice.AudioLease
 import com.beichen.polaris.core.voice.ClaimResult
+import com.beichen.polaris.core.voice.SpeechCapability
+import com.beichen.polaris.core.voice.SpeechCapabilityPolicy
+import com.beichen.polaris.core.voice.SpeechRemedy
+import com.beichen.polaris.core.voice.VoicePath
 import java.util.Locale
 
 /**
@@ -87,11 +89,26 @@ class PetVoiceInput(
     private val onText: (String) -> Unit,
     /** 一句话的可执行提示（没权限 / 没服务 / 没听清 / 被占用）。主线程回调。 */
     private val onProblem: (String) -> Unit,
+
+    /**
+     * 带**结构化出路**的提示回调。默认走 [onProblem]。
+     *
+     * 为什么需要它：调用方要据此决定要不要给「去授权」这个动作——
+     * 只有 [SpeechRemedy.GrantMicPermission] 是**当场就能解决**的
+     * （点一下跳到系统权限页），而「没听清」「识别服务正忙」给个按钮只会让人多点一次。
+     *
+     * 传的是枚举而不是字符串：字符串写错一个字母不会编译报错，
+     * 只会静默地不再跳权限页——正是「按了没反应」这一类最难查的问题。
+     */
+    private val onProblemWithCode: ((String, SpeechRemedy) -> Unit)? = null,
 ) {
 
     private val app = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
     private val arbiter = AudioGraph.arbiter(app)
+
+    /** 识别能力探测。与聊天页共用同一套结论——两边说法不一致会让用户以为其中一边坏了。 */
+    private val probe = SpeechProbe(app)
 
     private var lease: AudioLease? = null
     private var recognizer: SpeechRecognizer? = null
@@ -188,15 +205,34 @@ class PetVoiceInput(
     fun start(): Boolean {
         if (active) return false
 
-        if (!hasMicPermission()) {
-            onProblem("没有麦克风权限。去系统设置给「北辰」打开麦克风后重试")
-            return false
-        }
-        if (!SpeechRecognizer.isRecognitionAvailable(app)) {
-            // 这条路比想象中常见：AOSP 无 GApps 镜像、部分国产 ROM 精简版。
-            // 不做静默回落（比如偷偷弹系统识别页），那会打破「不弹窗」的承诺而不自知。
-            onProblem("本机没有语音识别服务，暂时只能用文字。系统设置里装一个语音服务（如 Google 语音服务）后可再用")
-            return false
+        // 「能不能识别」要查三件事，缺一件都会静默失败：
+        //   ① 有没有识别服务；
+        //   ② 系统**选了**哪个引擎（Android 14 的 SpeechRecognizer 绑定时读
+        //      Settings.Secure.VOICE_RECOGNITION_SERVICE，它为空时绑定直接失败，
+        //      应用侧只能看到笼统的 ERROR_CLIENT）；
+        //   ③ 引擎**认不认**当前语言（只能在录音前问，方式是 checkRecognitionSupport，
+        //      它不碰麦克风）。
+        //
+        // 三件事合起来才是完整判定，所以统一交给探测层，与聊天页共用同一套结论——
+        // 两边说的不一样，用户会以为其中一边坏了。
+        //
+        // 这里**不再自己先判权限**：那会让桌宠的结论顺序（先说缺权限）与聊天页
+        // （先说缺服务）不一致，而这两条路必须给出同一句结论。
+        // 判定顺序里「没服务」排在「没权限」前面，理由见 SpeechCapabilityPolicy 的注释。
+        //
+        // 桌宠走的是**自己录音**那条路（[VoicePath.SelfRecorded]）：
+        // 录音发生在我们的进程里，所以我们的麦克风权限是硬前置。
+        // 聊天页走系统识别页，那边的权限归系统管——两边不能用同一套要求。
+        when (val cap = probe.check(VoicePath.SelfRecorded)) {
+            is SpeechCapability.Available -> Unit
+            is SpeechCapability.Unavailable -> {
+                report(cap.message, cap.remedy)
+                return false
+            }
+            is SpeechCapability.LanguageUnsupported -> {
+                report(cap.message, cap.remedy)
+                return false
+            }
         }
 
         when (val r = arbiter.beginCapture("桌面助手语音输入")) {
@@ -270,14 +306,25 @@ class PetVoiceInput(
             RecognizerIntent.EXTRA_LANGUAGE_MODEL,
             RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
         )
-        // 用系统语言而不是硬编码 zh-CN：双语用户的手机可能是英文，
-        // 硬编码会让他说中文被识别成一串英文音近词。
+        // 用系统语言的 BCP-47 形式（`zh-CN`）而不是 [Locale.toString]（`zh_CN`）：
+        // 后者不是 BCP-47，严格按规范解析的引擎会读不出语言。
+        // 双语用户的手机可能是英文，硬编码 zh-CN 会让他说中文被识别成一串英文音近词。
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, app.packageName)
         // 只是个 hint：支持离线识别的引擎走离线（更快、不费流量），不支持的原样忽略。
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+    }
+
+    /**
+     * 报一个提示，优先走带结构化出路的回调。
+     *
+     * 带出路的回调存在时由它负责展示——否则两条路会弹两次提示。
+     */
+    private fun report(message: String, remedy: SpeechRemedy) {
+        val cb = onProblemWithCode
+        if (cb != null) cb(message, remedy) else onProblem(message)
     }
 
     private fun finishWithProblem(message: String) {
@@ -311,29 +358,18 @@ class PetVoiceInput(
             .onFailure { AgentLogger.w(TAG, "释放麦克风失败（$reason）：${it.message}") }
     }
 
-    private fun hasMicPermission(): Boolean = ContextCompat.checkSelfPermission(
-        app,
-        Manifest.permission.RECORD_AUDIO
-    ) == PackageManager.PERMISSION_GRANTED
-
     /**
      * 错误码 → 给人看的一句话。
      *
-     * 每一条都要能回答「我现在该做什么」。`ERROR_CLIENT` 是最常被写成「未知错误」的那个，
-     * 它实际的含义是「这次会话被主动取消了」——用户按了取消或窗口被销毁，不该报警。
+     * 翻译表放在 [SpeechCapabilityPolicy.explainError]，与聊天页共用一份。
+     * 两处各写一套的结果是：同一个错误码在桌宠上显示「识别失败」，在聊天页显示
+     * 「网络不太好」，用户没法判断到底是哪一种。
+     *
+     * 特别地，`ERROR_CLIENT`（=5）**不是**「未知错误」，它是信息量最大的一个：
+     * Android 14 的识别器在「系统没选定默认引擎」和「绑定引擎失败」时都走这一条，
+     * 应用侧看不出区别，所以文案给最可能的那条出路。
      */
-    private fun errorText(code: Int): String = when (code) {
-        SpeechRecognizer.ERROR_AUDIO -> "录音出错了，检查一下麦克风有没有被别的应用占着"
-        SpeechRecognizer.ERROR_CLIENT -> "这次语音被取消了"
-        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "没有麦克风权限"
-        SpeechRecognizer.ERROR_NETWORK -> "网络不太好，识别不了"
-        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "网络超时，识别不了"
-        SpeechRecognizer.ERROR_NO_MATCH -> "没听清，再说一次试试"
-        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "识别服务正忙，等一下再试"
-        SpeechRecognizer.ERROR_SERVER -> "识别服务出错了，稍后再试"
-        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "没听到声音"
-        else -> "识别失败（错误码 $code）"
-    }
+    private fun errorText(code: Int): String = SpeechCapabilityPolicy.explainError(code)
 
     private companion object {
         const val TAG = "PetVoice"

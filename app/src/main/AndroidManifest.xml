@@ -58,6 +58,35 @@
     <!-- android:name 指向 AgentKitApplication：它只做一件事——在最早时机装上 CrashLogger -->
     <!-- requestLegacyExternalStorage：targetSdk 降到 28 后，Android 10/11 上要显式声明
          才能用旧版共享存储模式（容器 -b /sdcard 与作品库读写依赖它） -->
+    <!-- ===== 语音识别服务可见性（Android 11+ package visibility）=====
+
+         SpeechRecognizer.isRecognitionAvailable() 内部走
+         queryIntentServices(RecognitionService.SERVICE_INTERFACE, 0)，
+         在 Android 11+ 上受 package visibility 限制：查不到别的 App 声明的
+         识别服务时它会返回 false，桌宠于是显示「本机没有语音识别服务」。
+
+         本 App 的 targetSdk = 28（不是 30+），**当前不受该限制**，
+         所以这段声明现在不产生行为变化——它是给将来升 targetSdk 预留的。
+         少了它的后果很隐蔽：升 targetSdk 的那天，语音功能会毫无征兆地失效，
+         而且日志里只有一句「没有识别服务」，极难归因。
+
+         声明了没有副作用（只是让可见性显式化），不声明则会在升级那天变成坑。 -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <!--
+          系统语音识别页（聊天页语音输入要靠它弹界面）。
+          和上一条同理：当前 targetSdk=28 不受 package visibility 限制，
+          但升级那天没有这条声明，queryIntentActivities 会返回空，
+          于是「本机没有系统语音识别页」这条提示会在**能用**的机器上误报，
+          把一条本来能用的路拦下来——那比不检查更糟。
+        -->
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
     <application
         android:name=".AgentKitApplication"
         android:allowBackup="false"

@@ -2,6 +2,7 @@ package com.beichen.polaris.pet
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +25,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -100,6 +102,14 @@ fun PetPanel(
     voiceState: PetVoiceState,
     /** 外部注入的瞬时提示（没权限 / 没听清 / 被占用）。5 秒后由宿主清空。 */
     notice: String?,
+    /**
+     * 提示附带的动作（如「去授权」）。null = 提示只是文字。
+     *
+     * 存在的理由：缺麦克风权限时，光给一句「去系统设置」是让用户自己去设置里
+     * 找这个 App、找权限项、点开——桌宠没有 Activity，弹不了申请框，
+     * 所以必须给一条能一键跳过去的出路。
+     */
+    noticeAction: (() -> Unit)?,
     /** 语音识别出的待发送文本。非空即发送，发完回调 [onVoicePromptConsumed]。 */
     voicePrompt: String?,
     /**
@@ -168,6 +178,7 @@ fun PetPanel(
                 onInputChange = { input = it },
                 sending = sending,
                 notice = notice,
+                noticeAction = noticeAction,
                 voiceState = voiceState,
                 autoFocusInput = autoFocusInput,
                 onSend = { send(input) },
@@ -224,6 +235,7 @@ private fun BubbleCard(
     onInputChange: (String) -> Unit,
     sending: Boolean,
     notice: String?,
+    noticeAction: (() -> Unit)?,
     voiceState: PetVoiceState,
     autoFocusInput: Boolean,
     onSend: () -> Unit,
@@ -303,14 +315,43 @@ private fun BubbleCard(
             // 但「没听清」这类提示用户可能正在读，所以不设自动消失的定时器在这里。
             if (!notice.isNullOrBlank()) {
                 Spacer(Modifier.height(6.dp))
-                Text(
-                    text = notice,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontSize = 11.5.sp,
-                        lineHeight = 16.sp
-                    ),
-                    color = scheme.error
-                )
+                if (noticeAction != null) {
+                    // 有出路时整条提示可点。做成「文字 + 箭头」而不是纯文字：
+                    // 纯文字的提示没人会意识到能点，加个箭头才是明确的邀请。
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable(onClick = noticeAction)
+                            .padding(vertical = 3.dp, horizontal = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = notice,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 11.5.sp,
+                                lineHeight = 16.sp
+                            ),
+                            color = scheme.error,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Outlined.ChevronRight,
+                            contentDescription = null,
+                            tint = scheme.error,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                } else {
+                    Text(
+                        text = notice,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.sp
+                        ),
+                        color = scheme.error
+                    )
+                }
             }
 
             if (messages.isEmpty()) {

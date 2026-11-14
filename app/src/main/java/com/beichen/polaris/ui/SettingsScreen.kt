@@ -31,6 +31,7 @@ import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Info
@@ -67,6 +68,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import android.widget.Toast
+import com.beichen.polaris.core.uiKeySeq
+import com.beichen.polaris.audio.VoiceDiagnostics
 import com.beichen.polaris.core.agent.ApprovalTier
 import com.beichen.polaris.core.agent.SurvivalCheckService
 import com.beichen.polaris.pet.PetState
@@ -581,6 +584,34 @@ fun SettingsScreen(
                     title = "权限中心",
                     description = "无障碍、通知、使用情况与调试通道（Shizuku / 无线调试）",
                     onClick = { onNavigate(AppDest.PERMISSIONS) }
+                )
+                // 语音诊断：让用户自己看出「语音为什么不能用」。
+                //
+                // 为什么需要它：语音不好用有五种原因（没识别服务 / 没麦克风权限 /
+                // 系统没选默认引擎 / 麦克风被占 / 语言不支持），而在用户眼里
+                // 它们都是同一句「语音坏了」。没有这个入口，用户只能反复试，
+                // 开发者只能靠猜——而这五种对应的修法完全不同。
+                //
+                // 报告进日志（开发者看）也用剪贴板（用户自己复制给技术支持）。
+                AkListItem(
+                    icon = Icons.Outlined.Mic,
+                    title = "语音诊断",
+                    description = "查本机的语音识别环境：权限、识别服务、默认引擎、语言",
+                    onClick = {
+                        val report = VoiceDiagnostics.buildReport(context)
+                        VoiceDiagnostics.logReport(context)
+                        runCatching {
+                            val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                            cm?.setPrimaryClip(
+                                android.content.ClipData.newPlainText("北辰语音诊断", report)
+                            )
+                        }
+                        Toast.makeText(
+                            context,
+                            "诊断报告已复制到剪贴板，也写进了日志",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                 )
                 // 存活自检：给没有电脑、拉不了 adb 的用户一个自测入口。
                 // 判据写在通知里——锁屏回来数字还在涨就是没被冻结。
