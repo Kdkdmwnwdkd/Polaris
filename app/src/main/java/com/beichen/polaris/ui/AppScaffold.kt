@@ -56,6 +56,7 @@ import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
@@ -146,6 +147,8 @@ enum class AppDest(
     SETTINGS("settings", "设置", "设置", Icons.Outlined.Settings),
     /** W-67：外观子页——壁纸与颜色原来在设置页占掉一整屏，拆成独立页。 */
     APPEARANCE("appearance", "壁纸与颜色", "壁纸与颜色", Icons.Outlined.Palette),
+    /** 语音引擎子页：桌宠的「去换引擎」要能直达（系统设置里很多机型没有这一项）。 */
+    VOICE("voice", "语音识别", "语音识别", Icons.Outlined.Mic),
     ABOUT("about", "关于", "关于", Icons.Outlined.Info);
 
     companion object {
@@ -233,7 +236,10 @@ fun AppScaffold(
     themeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit,
     dynamicColor: Boolean = false,
-    onDynamicColorChange: (Boolean) -> Unit = {}
+    onDynamicColorChange: (Boolean) -> Unit = {},
+    /** 外来跳转目标（桌宠「去换引擎」）。一次性：消费后由 [onRouteConsumed] 清空。 */
+    initialRoute: String? = null,
+    onRouteConsumed: () -> Unit = {},
 ) {
     // 路由态：15 个一级目的地的唯一真相源（抽屉见 4+1，其余经设置页/控制台）；切换无转场动画（v3 无此 token，§6.5.2）。
     var route by rememberSaveable { mutableStateOf(AppDest.CHAT.route) }
@@ -245,6 +251,12 @@ fun AppScaffold(
     // 为什么存 route 而不是 enum，见 AppBackStackSaver 的说明（删枚举值会白屏）。
     var backStack by rememberSaveable(stateSaver = BackStackSaver) {
         mutableStateOf(listOf<AppDest>())
+    }
+
+    // 外来跳转：带值就导航并清空返回栈（这是一次新意图，返回应回到来之前的地方）。
+    // 必须消费掉，否则每次重组都再弹一次，看起来像「返回键坏了」。
+    LaunchedEffect(initialRoute) {
+        initialRoute?.takeIf { it.isNotBlank() }?.let { route = it; backStack = listOf(); onRouteConsumed() }
     }
     // 功能一：根页「再按一次返回退出」的上一次按压时刻（0 = 从未按过）
     var backPressedAt by rememberSaveable { mutableStateOf(0L) }
@@ -715,6 +727,7 @@ private fun ScreenHost(
                         dynamicColor,
                         onDynamicColorChange
                     )
+                    AppDest.VOICE -> VoiceEngineScreen()
                     AppDest.ABOUT -> AboutScreen(
                         onOpenPermissionGuide = { onNavigate(AppDest.PERMISSION_GUIDE) }
                     )

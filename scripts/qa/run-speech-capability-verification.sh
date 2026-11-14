@@ -334,6 +334,40 @@ else
   fail "A25 语言判定对所有路径生效 —— 聊天页会被自己的探测结论挡住"
 fi
 
+# A26 应用内必须有引擎选择页，并且是一条真路由。
+#
+# 2026-11-14 的真机截图：用户的「默认应用」里只有「文字转语音输出」，
+# **没有「语音识别」**。我们此前所有「去系统设置换一个」的提示，
+# 在这台机器上都是死路——用户照着走只会在 TTS 页面里打转。
+# 系统改不了，但 createSpeechRecognizer(ctx, component) 能指定引擎，所以选择必须做进 App。
+VOICE_SCREEN=$(find app/src/main -name "VoiceEngineScreen.kt" 2>/dev/null | head -1)
+if [ -n "$VOICE_SCREEN" ] && grep -qF 'VOICE("voice"' app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt &&
+   grep -qF "VoiceEngineScreen()" app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt; then
+  pass "A26 应用内有语音引擎选择页（不依赖 ROM 是否把语音识别做成设置项）"
+else
+  fail "A26 没有引擎选择页 —— 提示只能指路系统设置，而那台机器上没有那一项"
+fi
+
+# A27 用户指定的引擎必须**高于**自动探测。
+# 反过来的话，用户点了某个引擎、下次启动又被自动结果盖掉——
+# 界面显示的和实际用的不是一个，属于最难查的那类问题。
+if [ -n "$PET_VOICE" ] &&
+   grep -qF "VoiceEngineStore.pinned(app) ?: preferredEngine" "$PET_VOICE"; then
+  pass "A27 用户指定的引擎优先于自动探测"
+else
+  fail "A27 自动探测会盖掉用户的选择 —— 设置页显示与实际使用不一致"
+fi
+
+# A28 桌宠的「换引擎」出路必须跳**本应用**的页面。
+# 仍然跳系统语音设置的话，用户点完会落到那个不存在的页面上，
+# 然后回来问「找不到」——这正是 2026-11-14 发生的事。
+if [ -n "$PET_OVERLAY" ] && grep -qF "openVoiceEngineSettings()" "$PET_OVERLAY" &&
+   grep -qF "AppDest.VOICE.route" "$PET_OVERLAY"; then
+  pass "A28 桌宠的换引擎出路直达本应用语音页"
+else
+  fail "A28 换引擎仍跳系统设置 —— 那台机器上没有这一项，用户会白跑"
+fi
+
 echo ""
 echo "[B] 行为：真编真跑判定表"
 

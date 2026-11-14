@@ -585,6 +585,19 @@ fun SettingsScreen(
                     description = "无障碍、通知、使用情况与调试通道（Shizuku / 无线调试）",
                     onClick = { onNavigate(AppDest.PERMISSIONS) }
                 )
+                // 语音识别引擎（2026-11-14）。
+                //
+                // 为什么它必须在这里，而不是继续写「去系统设置换一个」：
+                // 真机截图证明，这台魅族 20 的「默认应用」里只有「文字转语音输出」，
+                // 没有「语音识别」。所有指路系统设置的提示，对那些机型都是死路。
+                // 应用侧本来就能用 createSpeechRecognizer(ctx, component) 指定引擎，
+                // 那就把选择放进自己的页面。
+                AkListItem(
+                    icon = Icons.Outlined.Mic,
+                    title = "语音识别",
+                    description = "选桌宠用哪个识别引擎（很多机型设置里没有这一项）",
+                    onClick = { onNavigate(AppDest.VOICE) }
+                )
                 // 语音诊断：让用户自己看出「语音为什么不能用」。
                 //
                 // 为什么需要它：语音不好用有五种原因（没识别服务 / 没麦克风权限 /
@@ -594,7 +607,7 @@ fun SettingsScreen(
                 //
                 // 报告进日志（开发者看）也用剪贴板（用户自己复制给技术支持）。
                 AkListItem(
-                    icon = Icons.Outlined.Mic,
+                    icon = Icons.Outlined.Description,
                     title = "语音诊断",
                     description = "查本机的语音识别环境：权限、识别服务、默认引擎、语言",
                     onClick = {

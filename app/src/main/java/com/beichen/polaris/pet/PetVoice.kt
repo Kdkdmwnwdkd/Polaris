@@ -11,6 +11,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.audio.SpeechProbe
+import com.beichen.polaris.audio.VoiceEngineStore
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.text.SpeechLogic
 import com.beichen.polaris.core.voice.AudioLease
@@ -322,14 +323,18 @@ class PetVoiceInput(
     }
 
     /**
-     * 建一个识别器，优先用 [preferredEngine]。
+     * 建一个识别器，优先用用户指定的引擎，其次用探测挑出来的。
+     *
+     * 顺序说明：**用户的选择高于自动探测**。自动那套的规则是「默认引擎能用就别换」，
+     * 它解决的是「用户不知道该怎么办」的场景；一旦用户自己点了某个引擎，
+     * 再让探测结果盖掉他的选择就成了「App 觉得自己更懂」。
      *
      * 指定引擎创建失败时**静默回退系统默认**：用户此刻要的是「说话能被识别」，
      * 不是「必须用某个引擎」。为了一次创建失败就弹一句技术错误，等于把内部
      * 选择逻辑的失败转嫁给用户。
      */
     private fun createRecognizer(): SpeechRecognizer? {
-        val chosen = preferredEngine
+        val chosen = VoiceEngineStore.pinned(app) ?: preferredEngine
         if (chosen != null) {
             val component = ComponentName.unflattenFromString(chosen)
             if (component != null) {

@@ -187,11 +187,72 @@ object EngineSelector {
      *
      * 旧文案是「换个系统语言试试」——**这句话把代价推给了用户**：
      * 改系统语言会让整台手机的所有应用变成另一种语言，只为用一次语音输入。
-     * 真正的出路是换一个识别服务，或者给现在这个下语言包。
+     *
+     * 上一版改成「到系统设置 → 默认应用 → 语音识别 换一个」，听起来对了，
+     * 但在真机上同样是死路：2026-11-14 的截图显示，这台魅族 20 的「默认应用」
+     * 里**根本没有「语音识别」这一项**（只有「文字转语音输出」）。
+     * 用户照着做只会在 TTS 页面里打转，然后回来问「找不到」。
+     *
+     * 所以出口只能指向我们自己的页面——那里列的是真实的引擎清单，
+     * 点一下就能指定，不需要去一个不存在的系统设置项里翻。
      */
     const val MSG_NO_ENGINE_FOR_LANGUAGE =
-        "这台设备上的语音识别服务都不支持中文。到系统设置 → 默认应用 → 语音识别 换一个，" +
-            "或者给现在这个服务下载中文语言包"
+        "这台设备上的识别服务都不支持中文。到「设置 → 语音识别」指定一个能用的，" +
+            "或给现在这个服务下载中文语言包"
+}
+
+/**
+ * 引擎的人类可读名字。
+ *
+ * 存在的理由：设置页要把引擎摆出来让用户选，而 `com.google.android.tts/…GoogleTTSRecognitionService`
+ * 这种东西没法读。也不能只显示包名——同一包里可能有多个识别服务。
+ *
+ * 纯函数，可被 JVM harness 断言：起名规则错了不报错，只会让用户在一串
+ * 看不懂的字符串里瞎选。
+ */
+object EngineLabel {
+
+    /** 常见厂商/产品前缀 → 给人看的名。按前缀匹配，长的放前面避免被短的抢走。 */
+    private val KNOWN = listOf(
+        "com.google.android.googlequicksearchbox" to "Google 语音服务",
+        "com.google.android.tts" to "Google 语音",
+        "com.qualcomm.qti" to "高通语音",
+        "com.iflytek" to "讯飞语音",
+        "com.baidu" to "百度语音",
+        "com.huawei" to "华为语音",
+        "com.hihonor" to "荣耀语音",
+        "com.miui" to "小米语音",
+        "com.xiaomi" to "小米语音",
+        "com.oppo" to "OPPO 语音",
+        "com.coloros" to "OPPO 语音",
+        "com.vivo" to "vivo 语音",
+        "com.meizu" to "魅族语音",
+        "com.samsung" to "三星语音",
+        "com.sec.android" to "三星语音",
+    )
+
+    /**
+     * 组件名 → 短名。
+     *
+     * 已知产品给中文名；未知的退化为「类名去后缀后按驼峰拆词」，
+     * 再退化到包名末段。**永远不返回空串**：设置页的每一行都必须可读，
+     * 一个空标题会看起来像界面坏了。
+     */
+    fun friendly(component: String): String {
+        val pkg = component.substringBefore('/')
+        KNOWN.firstOrNull { pkg.startsWith(it.first) }?.let { return it.second }
+        val simple = component.substringAfter('/', "")
+            .substringAfterLast('.')
+            .removeSuffix("Service")
+            .removeSuffix("Recognition")
+        val spaced = CAMEL.split(simple).joinToString(" ").trim()
+        if (spaced.isNotEmpty()) return spaced
+        val tail = pkg.substringAfterLast('.')
+        return tail.ifEmpty { component.ifEmpty { "语音服务" } }
+    }
+
+    /** `GoogleTTSRecognition` → `Google TTS Recognition`（不动全大写缩写）。 */
+    private val CAMEL = Regex("(?<=[a-z0-9])(?=[A-Z])")
 }
 
 /**

@@ -34,13 +34,25 @@ class MainActivity : ComponentActivity() {
      */
     private val pendingWorkflowId = mutableStateOf<String?>(null)
 
+    /**
+     * 外部要求直达的页面路由（2026-11-14）。
+     *
+     * 用途：桌宠悬浮窗的「去换引擎」按钮。悬浮窗不是 Activity，没法自己导航，
+     * 只能拉起本 Activity 并带上目标页。用 Compose State 的理由同上——
+     * App 在前台时点这个按钮走 [onNewIntent]，Activity 不重建。
+     */
+    private val pendingDest = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingWorkflowId.value = intent?.getStringExtra(WorkflowNotifier.EXTRA_WORKFLOW_ID)
+        pendingDest.value = intent?.getStringExtra(EXTRA_DEST)
         setContent {
             AgentKitApp(
                 pendingWorkflowId = pendingWorkflowId.value,
-                onWorkflowConsumed = { pendingWorkflowId.value = null }
+                onWorkflowConsumed = { pendingWorkflowId.value = null },
+                pendingDest = pendingDest.value,
+                onDestConsumed = { pendingDest.value = null },
             )
         }
         // W-15 的后台 WebView：**首帧画完之后**再建，别挡在首帧前面。
@@ -78,6 +90,13 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         // 前台时点通知：不重建 Activity，靠这个状态触发执行
         pendingWorkflowId.value = intent.getStringExtra(WorkflowNotifier.EXTRA_WORKFLOW_ID)
+        // 前台时从悬浮窗点「去换引擎」：同样不重建，靠状态触发导航
+        pendingDest.value = intent.getStringExtra(EXTRA_DEST)
+    }
+
+    companion object {
+        /** 拉起本 Activity 并直达某页的路由键（值必须是 [com.beichen.polaris.ui.AppDest.route]）。 */
+        const val EXTRA_DEST = "polaris.dest"
     }
 
     /**
@@ -113,7 +132,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AgentKitApp(
     pendingWorkflowId: String? = null,
-    onWorkflowConsumed: () -> Unit = {}
+    onWorkflowConsumed: () -> Unit = {},
+    pendingDest: String? = null,
+    onDestConsumed: () -> Unit = {},
 ) {
     // W-64：外观偏好落盘后由 AppearanceState 统一持有。
     // 这里只在首次组合时读一次盘；之后改值走 setXxx（内部会写盘并触发重组）。
@@ -136,7 +157,9 @@ private fun AgentKitApp(
             themeMode = themeMode,
             onThemeModeChange = { AppearanceState.setThemeMode(ctx, it) },
             dynamicColor = dynamicColor,
-            onDynamicColorChange = { AppearanceState.setDynamicColor(ctx, it) }
+            onDynamicColorChange = { AppearanceState.setDynamicColor(ctx, it) },
+            initialRoute = pendingDest,
+            onRouteConsumed = onDestConsumed,
         )
         // 审计 F16：审批是全局模态，挂在 Scaffold 之外——路由停在权限引导/控制台/设置页
         // 时它照样出现。修前挂在 ChatScreen 里，非对话页触发的审批只能等 30 秒超时被拒。

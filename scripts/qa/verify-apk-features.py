@@ -74,6 +74,9 @@ POOL_GROUPS = {
         ("语言标签比较", "Lcom/beichen/polaris/core/voice/LanguageTag;"),
         ("逐引擎探测方法", "probeEngines"),
         ("指定引擎创建", "createSpeechRecognizer"),
+        ("引擎名字生成", "Lcom/beichen/polaris/core/voice/EngineLabel;"),
+        ("引擎选择持久化", "Lcom/beichen/polaris/audio/VoiceEngineStore;"),
+        ("语音引擎选择页", "Lcom/beichen/polaris/ui/VoiceEngineScreen;"),
     ],
     "W9-A 截图双通道（pool 池条目精确匹配）": [
         ("无障碍截屏服务方法名", "takeScreenshotViaA11y"),
@@ -349,6 +352,9 @@ ABSENT_POOL = [
     # 直接回 ERROR_LANGUAGE_NOT_SUPPORTED——把「能用」变成「不能用」。
     # 断言的是它的**字符串值**：dex 里出现就说明还有别处在传。
     ("强制离线的 extra 已移除", "android.speech.extra.PREFER_OFFLINE"),
+    # 2026-11-14 第四轮：真机截图证明「默认应用」里没有「语音识别」这一项。
+    # 这句指路文案必须从包里彻底消失，否则我们还在把用户送进死路。
+    ("旧的「去系统设置换识别服务」文案已移除", "到系统设置 → 默认应用 → 语音识别"),
 ]
 
 BYTES_GROUPS = {
@@ -359,8 +365,8 @@ BYTES_GROUPS = {
         ("权限缺失的提示", "没有麦克风权限。去系统设置给「北辰」打开麦克风后重试"),
         ("ERROR_CLIENT 的新文案", "识别服务连不上，去系统设置里确认已选定语音识别服务"),
         ("语音诊断入口", "语音诊断"),
-        ("语言不支持的新文案（指向换引擎）", "当前的语音识别服务不支持中文"),
-        ("所有引擎都不认中文的提示", "这台设备上的语音识别服务都不支持中文"),
+        ("语言不支持的新文案（指向应用内语音页）", "当前引擎不认中文"),
+        ("所有引擎都不认中文的提示", "这台设备上的识别服务都不支持中文"),
         # 2026-11-14 第三轮：「没问到」必须与「不支持」在文案上区分开。
         # 两者混为一谈的后果是用户去换引擎——而真正要做的只是再问一次。
         ("未应答引擎的说明文案", "没问到（引擎没在超时内应答"),

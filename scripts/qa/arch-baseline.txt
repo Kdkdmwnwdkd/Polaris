@@ -172,7 +172,15 @@ lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3723
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3235
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1532
-lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1535
+# 2026-11-14 上调（AppScaffold +13）：语音引擎子页。
+# 真机截图证明这台机器的「设置 → 默认应用」里没有「语音识别」，
+# 只有「文字转语音输出」。所以此前所有「去系统设置换一个」的提示都是死路。
+# 出路只有一条：把引擎选择做进 App，并让桌宠的提示**直达**那一页
+# （只打开设置页顶部的话，用户还得往下滑六组才能找到——他刚被拒绝一次，多一步就会放弃）。
+# 增量 = 一条路由 + 两个一次性导航参数 + 一次 LaunchedEffect + 一个 when 分支。
+# 已压到最小：导航目标必须落在持有 route 状态的本文件里；
+# 抽成外部单例只能省 3 行，却会让「谁在改路由」变得不可追踪。
+lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1548
 
 # 2026-11-13 上调（ChatScreen +5）：工具返回的图片改成采样解码。
 # decodeDataUrl / DataImage 原来直接 decodeByteArray 全尺寸解码，一张 4000×3000

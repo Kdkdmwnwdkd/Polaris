@@ -185,11 +185,17 @@ object SpeechCapabilityPolicy {
 
     /** 系统没设置默认识别引擎时的提示。 */
     const val MSG_NO_DEFAULT_ENGINE =
-        "系统还没选定语音识别服务。在「系统设置 → 应用 → 默认应用 → 语音识别」里选一个就能用"
+        "系统还没选定语音识别服务。到「设置 → 语音识别」手动指定一个就能用"
 
-    /** 语言不受支持时的提示。 */
+    /**
+     * 语言不受支持时的提示。
+     *
+     * 出口指向**我们自己的**语音设置页，不是系统设置。理由见
+     * [EngineSelector.MSG_NO_ENGINE_FOR_LANGUAGE]：这台机器的系统设置里
+     * 没有「语音识别」这一项，让用户去那儿找，等于让他白跑一趟。
+     */
     const val MSG_LANGUAGE_UNSUPPORTED =
-        "当前的语音识别服务不支持中文。到系统设置 → 默认应用 → 语音识别 换一个服务，" +
+        "当前引擎不认中文。到「设置 → 语音识别」换一个引擎，" +
             "或给现在这个服务下载中文语言包"
 
     /** 没有 App 能处理系统识别 Intent 时的提示。 */
@@ -394,8 +400,8 @@ object SpeechCapabilityPolicy {
         ErrorCode.SERVER_DISCONNECTED -> ErrorSpec("识别服务断开了，稍后再试", SpeechRemedy.Retry)
         ErrorCode.LANGUAGE_NOT_SUPPORTED -> ErrorSpec(MSG_LANGUAGE_UNSUPPORTED, SpeechRemedy.SwitchEngine)
         ErrorCode.LANGUAGE_UNAVAILABLE -> ErrorSpec(
-            "当前语言的识别包没装。到系统设置 → 默认应用 → 语音识别，给这个服务下载中文包，" +
-                "或换一个已经支持中文的服务",
+            "当前语言的识别包没装。到「设置 → 语音识别」换一个已有中文的服务，" +
+                "或给这个服务下载中文包",
             SpeechRemedy.SwitchEngine,
         )
         else -> ErrorSpec("识别失败（错误码 $code）", SpeechRemedy.ReportErrorCode)

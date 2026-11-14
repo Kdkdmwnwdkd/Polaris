@@ -247,12 +247,13 @@ class PetOverlayHost(
                     when (remedy) {
                         // 缺权限：直达本应用的权限页。
                         SpeechRemedy.GrantMicPermission -> ({ openAppPermissionSettings() })
-                        // 换引擎：直达系统「语音输入」设置。
-                        // 这是「不支持当前语言」唯一能当场解决的出路——
-                        // 设备上往往就装着另一个认中文的引擎，换过去就好了。
-                        SpeechRemedy.SwitchEngine,
-                        SpeechRemedy.SelectDefaultEngine,
-                        -> ({ openVoiceInputSettings() })
+                        // 换引擎：直达**本应用**的语音识别页。
+                        // 系统「语音识别」设置项在部分机型上根本不存在
+                        // （2026-11-14 真机截图：默认应用里只有「文字转语音输出」），
+                        // 所以出路必须是我们自己的页面。
+                        SpeechRemedy.SwitchEngine -> ({ openVoiceEngineSettings() })
+                        // 系统没选定默认引擎：那一项确实在系统设置里，跳系统页。
+                        SpeechRemedy.SelectDefaultEngine -> ({ openVoiceInputSettings() })
                         else -> null
                     },
                 )
@@ -355,10 +356,40 @@ class PetOverlayHost(
     }
 
     /**
+     * 直达本应用的「语音识别」页。
+     *
+     * 这是「引擎不认中文」的首选出路，也是 2026-11-14 真机截图之后的改法：
+     * 原来这里跳的是系统语音设置，而用户的机器上**根本没有那一项**
+     * （「默认应用」里只有「文字转语音输出」）。指路一个不存在的页面，
+     * 等于让用户白跑一趟再回来。
+     *
+     * 我们自己的页面列的是真实引擎清单，点一下就能指定——
+     * 这条出路不依赖任何 ROM 是否把语音识别做成设置项。
+     *
+     * 悬浮窗拉起 Activity 必须带 `NEW_TASK`；带 `SINGLE_TOP` 是为了复用它，
+     * 而不是在任务栈里堆第二个 MainActivity。
+     */
+    private fun openVoiceEngineSettings() {
+        val intent = Intent(context, com.beichen.polaris.MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra(
+                com.beichen.polaris.MainActivity.EXTRA_DEST,
+                com.beichen.polaris.ui.AppDest.VOICE.route,
+            )
+        }
+        runCatching { context.startActivity(intent) }
+            .onFailure {
+                AgentLogger.w(TAG, "打开本应用语音页失败：${it.message}")
+                // 兜底：至少把人送到一个能改东西的地方，而不是什么都不发生。
+                openVoiceInputSettings()
+            }
+    }
+
+    /**
      * 跳到系统的「语音输入」设置。
      *
-     * 这是「识别服务不支持当前语言」的出路：换一个服务，或给现在的下语言包。
-     * 桌宠没有 Activity、也不能替用户改系统设置，所以只能把人送到那一页。
+     * 只在 [openVoiceEngineSettings] 失败时兜底用。保留它是因为
+     * 有些 ROM **确实**有这一项，而我们的页面在极端情况下（Activity 被禁用）也可能拉不起来。
      *
      * 两个候选按顺序试：
      * 1. `ACTION_VOICE_INPUT_SETTINGS`——就是语音输入设置，但**不是所有 ROM 都有**

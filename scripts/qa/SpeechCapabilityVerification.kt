@@ -2,6 +2,7 @@ package com.beichen.polaris.qa
 
 import com.beichen.polaris.core.voice.EngineCapability
 import com.beichen.polaris.core.voice.EngineFit
+import com.beichen.polaris.core.voice.EngineLabel
 import com.beichen.polaris.core.voice.EngineSelector
 import com.beichen.polaris.core.voice.LanguageTag
 import com.beichen.polaris.core.voice.SpeechCapability
@@ -618,6 +619,55 @@ object SpeechCapabilityVerification {
                     hasMicPermission = true,
                 ) as SpeechCapability.LanguageUnsupported
                 ).remedy == SpeechRemedy.SwitchEngine,
+        )
+
+        // ———— [G] 引擎名字与出口：用户在设置页里看到什么 ————
+        //
+        // 2026-11-14 的三张真机截图：用户照着我们的话去「设置 → 默认应用 → 语音识别」，
+        // 结果那一项根本不存在（只有「文字转语音输出」）。所以有两个新要求：
+        // 1. 出口必须指向我们自己的页面，不再指路一个可能不存在的系统设置项；
+        // 2. 那个页面要能读——引擎清单不能是一串包名。
+        println()
+        println("[G] 行为：引擎名字与提示出口")
+
+        check(
+            "G1 Google TTS 有中文名",
+            EngineLabel.friendly(
+                "com.google.android.tts/com.google.android.apps.speech.tts.googletts.service.GoogleTTSRecognitionService"
+            ) == "Google 语音",
+        )
+        check(
+            "G2 高通语音有中文名",
+            EngineLabel.friendly(
+                "com.qualcomm.qti.voiceai.speech/com.qualcomm.qti.voiceai.speech.SpeechRecognitionService"
+            ) == "高通语音",
+        )
+        check(
+            "G3 未知引擎退化为类名拆词，不返回空串",
+            EngineLabel.friendly("com.example.vendor/.MyFancyRecognitionService").let {
+                it.isNotEmpty() && it.indexOf('/') < 0
+            },
+        )
+        check(
+            "G4 畸形输入也不返回空串（空标题会让界面看起来坏了）",
+            EngineLabel.friendly("").isNotEmpty() && EngineLabel.friendly("/").isNotEmpty(),
+        )
+        check(
+            "G5 中文名不暴露包名（用户看不懂 com.xxx）",
+            EngineLabel.friendly("com.google.android.tts/a.B").indexOf("com.") < 0,
+        )
+        check(
+            "G6 「语言不支持」的提示不再指路系统设置",
+            SpeechCapabilityPolicy.MSG_LANGUAGE_UNSUPPORTED.indexOf("默认应用") < 0,
+        )
+        check(
+            "G7 「没有引擎能用」的提示不再指路系统设置",
+            EngineSelector.MSG_NO_ENGINE_FOR_LANGUAGE.indexOf("默认应用") < 0,
+        )
+        check(
+            "G8 两条提示都指向我们自己的语音页（那条路不依赖 ROM）",
+            SpeechCapabilityPolicy.MSG_LANGUAGE_UNSUPPORTED.indexOf("语音识别") >= 0 &&
+                EngineSelector.MSG_NO_ENGINE_FOR_LANGUAGE.indexOf("语音识别") >= 0,
         )
 
         println()
