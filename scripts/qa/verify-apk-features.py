@@ -57,6 +57,18 @@ def dex_string_pool(dex):
 # ---- 判据表 ----------------------------------------------------------------
 
 POOL_GROUPS = {
+    "语音能力判定（pool 池条目精确匹配）": [
+        ("能力判定表", "Lcom/beichen/polaris/core/voice/SpeechCapabilityPolicy;"),
+        ("判定结果类型", "Lcom/beichen/polaris/core/voice/SpeechCapability;"),
+        ("路径枚举（谁来录音）", "Lcom/beichen/polaris/core/voice/VoicePath;"),
+        ("出路枚举（该做什么）", "Lcom/beichen/polaris/core/voice/SpeechRemedy;"),
+        ("环境探测层", "Lcom/beichen/polaris/audio/SpeechProbe;"),
+        ("语音诊断报告", "Lcom/beichen/polaris/audio/VoiceDiagnostics;"),
+        ("聊天页语音纯逻辑", "Lcom/beichen/polaris/ui/VoiceInputLogic;"),
+        ("判定入口方法", "decide"),
+        ("路径判别方法", "hasSystemRecognizerPage"),
+        ("错误码翻译入口", "explainError"),
+    ],
     "W9-A 截图双通道（pool 池条目精确匹配）": [
         ("无障碍截屏服务方法名", "takeScreenshotViaA11y"),
         ("路由纯函数名", "canUseA11yScreenshot"),
@@ -314,6 +326,10 @@ POOL_GROUPS = {
 # 反向判据：这些符号必须**不在**池中（删除/替换成功的证据，防旧码残留）
 ABSENT_POOL = [
     ("旧条数压缩方法 maybeCompact 已移除", "maybeCompact"),
+    # 2026-11-14：桌宠的错误码翻译表搬到 core 之后，旧的两套说法都该消失。
+    # 「这次语音被取消了」是修前 ERROR_CLIENT 的文案——它把一个信息量最大的错误码
+    # 说成了「用户主动取消」，用户据此什么都做不了。
+    ("旧 ERROR_CLIENT 文案已移除", "这次语音被取消了"),
     ("屏幕捕获服务已移除", "Lcom/beichen/polaris/automation/ScreenCaptureService;"),
     ("屏幕捕获桥已移除", "Lcom/beichen/polaris/automation/ScreenshotBridge;"),
     ("屏幕捕获清理策略已移除", "ScreenCaptureStartPolicy"),
@@ -322,6 +338,14 @@ ABSENT_POOL = [
 ]
 
 BYTES_GROUPS = {
+    "语音能力文案（bytes 子串）": [
+        ("没装语音服务的提示", "本机没有语音识别服务，暂时只能用文字"),
+        ("没选默认引擎的提示", "系统还没选定语音识别服务"),
+        ("没有系统识别页的提示", "本机没有系统语音识别页"),
+        ("权限缺失的提示", "没有麦克风权限。去系统设置给「北辰」打开麦克风后重试"),
+        ("ERROR_CLIENT 的新文案", "识别服务连不上，去系统设置里确认已选定语音识别服务"),
+        ("语音诊断入口", "语音诊断"),
+    ],
     "W9-A 文案（描述 / 失败指引，长常量片段，bytes 子串）": [
         ("描述：已授予无障碍即可使用", "已授予无障碍权限即可使用"),
         ("指引：明确无需屏幕捕捉权限", "无需屏幕捕捉权限"),
