@@ -53,6 +53,15 @@ enum class AutoResumeReason {
     /** 此刻已有回合在跑，不能插队。 */
     BUSY,
 
+    /**
+     * 用户正在输入框里打字，不能插队。
+     *
+     * 自动续跑要往输入框写一句「继续」再走 `send()`。而聊天页的输入框是自动聚焦的，
+     * 冷启动后几百毫秒内用户很可能已经在打字了——那一下会把用户敲了一半的字
+     * 整个替换掉，**这是数据丢失**，比不自动续跑严重得多。
+     */
+    INPUT_BUSY,
+
     /** 用户关掉了「自动续跑」。 */
     DISABLED,
 
@@ -98,6 +107,8 @@ data class AutoResumeInput(
     val hasModel: Boolean,
     /** 是否已有回合在跑。 */
     val isRunning: Boolean,
+    /** 输入框是否为空。为 false 时不续跑——自动续跑要往输入框写「继续」，会覆盖用户正在打的字。 */
+    val inputBlank: Boolean = true,
     /** 同一任务允许自动续跑的次数上限。 */
     val maxAttempts: Int = AutoResumePolicy.DEFAULT_MAX_ATTEMPTS,
     /** 中断超过多久就不再自动续跑。 */
@@ -142,6 +153,9 @@ object AutoResumePolicy {
         // 正在跑别的回合：不插队、也不提示。用户眼前已经有事在发生，
         // 这时候弹「上次任务被中断」只会制造困惑。
         if (input.isRunning) return skip(AutoResumeReason.BUSY)
+        // 用户正在输入框里打字：自动续跑要往输入框写「继续」，那会把敲了一半的字清空。
+        // 数据丢失比不自动续跑严重得多，宁可这一轮不跑——下次冷启动还会再来。
+        if (!input.inputBlank) return skip(AutoResumeReason.INPUT_BUSY)
         // 用户自己关的开关。原中断提示（「可以说继续」）已经够用，不必再补一句。
         if (!input.enabled) return skip(AutoResumeReason.DISABLED)
 

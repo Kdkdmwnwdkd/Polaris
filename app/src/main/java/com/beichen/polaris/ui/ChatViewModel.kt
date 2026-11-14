@@ -469,6 +469,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 enabled = settingsFacade.autoResume.value,
                 hasModel = modelReady.value,
                 isRunning = isRunning.value,
+                // 输入框非空 = 用户正在打字。自动续跑要往输入框写「继续」，
+                // 那会把敲了一半的字清掉——宁可这一轮不跑。
+                inputBlank = input.value.isBlank(),
             )
         )
         if (verdict.message.isNotBlank()) _interruptedNotice.value = verdict.message

@@ -130,20 +130,22 @@
 #   ③ 打断提示改瞬时（showInterruptNotice + 常量，11 行）——原来它复用「恢复提示」
 #      的横幅，用户得手动点「知道了」，而这条提示本该像 toast 一样自己走。
 # +16 里 9 行是注释。真正的新逻辑只有「5 秒后若内容没被覆盖就清空」一条。
-# 2026-11-14 上调（ChatViewModel +79）：自动续跑（进程被杀后冷启动替用户接着做）。
+# 2026-11-14 上调（ChatViewModel +82）：自动续跑（进程被杀后冷启动替用户接着做）。
 # AgentRunService 的边界一直写着「进程真被杀时，任务不会自动续跑」，用户回来只能自己
 # 打字「继续」。现在把它做成真的动作，但每触发一次就是一次真实请求，所以判定必须极保守。
 # 增量分布：
-#   ① 决策表**不在这里**——全部在 core/agent/AutoResumePolicy.kt（纯 Kotlin，214 行，
-#      可被 JVM harness 真跑）。这里只有取状态 + 执行，共 30 行；
+#   ① 决策表**不在这里**——全部在 core/agent/AutoResumePolicy.kt（纯 Kotlin，228 行，
+#      可被 JVM harness 真跑）。这里只有取状态 + 执行，共 31 行；
 #   ② 时序守卫：runStateReady 这一个 Deferred + 类体末尾那个 init，9 行。
 #      不这么做，autoResumeIfPossible 会在 IO 协程里读到尚未初始化的
 #      _activeConversationId——2026-11-09 模拟器上就是这么 NPE 的；
 #   ③ send() 里多带一个 autoResumeAttempts 字段（含 4 行注释），不带它等于每轮
 #      把熔断计数清零，「一跑就被杀」的任务会被无限自动重试；
-#   ④ 转发层 4 行 + 设置开关的 facade/契约/页面共 12 行（不在本文件）。
+#   ④ 判定输入里多一个 inputBlank（含 2 行注释）：自动续跑要往输入框写「继续」，
+#      而聊天页输入框自动聚焦——用户正在打的字会被清空，那是数据丢失；
+#   ⑤ 转发层 4 行 + 设置开关的 facade/契约/页面共 12 行（不在本文件）。
 # 真正的新逻辑只有「判完就发一句『继续』」这一条；判定本身在 core，不占本文件。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3720
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3723
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3186
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1532

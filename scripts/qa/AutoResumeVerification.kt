@@ -60,6 +60,7 @@ private fun input(
     enabled: Boolean = true,
     hasModel: Boolean = true,
     running: Boolean = false,
+    blank: Boolean = true,
     now: Long = NOW,
 ) = AutoResumeInput(
     state = st,
@@ -69,6 +70,7 @@ private fun input(
     enabled = enabled,
     hasModel = hasModel,
     isRunning = running,
+    inputBlank = blank,
 )
 
 private fun expect(name: String, verdict: com.beichen.polaris.core.agent.AutoResumeVerdict,
@@ -105,6 +107,13 @@ fun main() {
     expect("B7 已有回合在跑 → 不插队（与 B1 只差 isRunning）",
         AutoResumePolicy.decide(input(running = true)),
         AutoResumeDecision.SKIP, AutoResumeReason.BUSY)
+
+    // 单字段对照：B1 与 B8 只差 inputBlank 一个布尔。
+    // 聊天页输入框自动聚焦，冷启动后几百毫秒用户很可能已经在打字；
+    // 自动续跑要往输入框写「继续」，那会把敲了一半的字整个清掉——数据丢失。
+    expect("B8 用户正在输入框里打字 → 不插队（与 B1 只差 inputBlank）",
+        AutoResumePolicy.decide(input(blank = false)),
+        AutoResumeDecision.SKIP, AutoResumeReason.INPUT_BUSY)
 
     expect("B8 用户关了开关 → 静默跳过（不重复唠叨）",
         AutoResumePolicy.decide(input(enabled = false)),
@@ -159,6 +168,7 @@ fun main() {
         listOf(
             AutoResumePolicy.decide(input(st = null)),
             AutoResumePolicy.decide(input(running = true)),
+            AutoResumePolicy.decide(input(blank = false)),
             AutoResumePolicy.decide(input(enabled = false)),
         ).all { it.message.isEmpty() })
     check("F2 PROMPT_ONLY 一律有话说（不让用户以为功能坏了）",

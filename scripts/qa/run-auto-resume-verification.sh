@@ -102,6 +102,14 @@ else
   fail "A11 找不到 buildResumeContext —— 续跑只剩一句空话"
 fi
 
+# 自动续跑要往输入框写「继续」。聊天页输入框自动聚焦，用户很可能在冷启动后
+# 几百毫秒内已经在打字——那一下会把敲了一半的字整个清掉。必须让决策器知道这件事。
+if grep -q 'inputBlank = input.value.isBlank()' "$VM"; then
+  pass "A12 判定了输入框是否为空（否则会清掉用户正在打的字）"
+else
+  fail "A12 没有传 inputBlank —— 用户输入到一半的字会被自动续跑清空"
+fi
+
 echo ""
 echo "[B] 行为：真编真跑（决策表 + 熔断端到端）"
 

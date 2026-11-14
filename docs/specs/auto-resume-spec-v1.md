@@ -2,7 +2,7 @@
 
 > 状态：**已实现**（2026-11-14）｜实现位置：`core/agent/AutoResumePolicy.kt` +
 > `app/.../ui/ChatViewModel.kt` 的 `autoResumeIfPossible`
-> 验证：`scripts/qa/run-auto-resume-verification.sh`（11 条结构 + 39 条行为）
+> 验证：`scripts/qa/run-auto-resume-verification.sh`（12 条结构 + 29 条行为）
 
 ---
 
@@ -93,6 +93,7 @@
 | 磁盘上没有运行态 | SKIP | `NO_STATE` |
 | 状态不是 interrupted | SKIP | `NOT_INTERRUPTED` |
 | 此刻已有回合在跑 | SKIP | `BUSY` |
+| 用户正在输入框里打字 | SKIP | `INPUT_BUSY` |
 | 用户关了开关 | SKIP | `DISABLED` |
 | 没留下原始请求 | PROMPT_ONLY | `NO_PROMPT` |
 | 已自动续跑 ≥ 2 次 | PROMPT_ONLY | `ATTEMPT_LIMIT` |
@@ -113,10 +114,18 @@
 
 ### 3.2 判定顺序
 
-先判「能不能跑」（状态 / 未完成 / 不忙），再判「该不该跑」（开关 / 熔断 / 时效），
+先判「能不能跑」（状态 / 未完成 / 不忙 / 用户没在打字），再判「该不该跑」（开关 / 熔断 / 时效），
 最后判「跑得成吗」（会话 / 模型 / 有没有原始请求）。
 
 顺序反了会出现「明明正在跑别的任务，却弹一句『上次任务已过期』」这种噪声。
+
+### 3.2.1 为什么「用户正在打字」也要拦住
+
+自动续跑是**往输入框写一句「继续」**再走 `send()`。而聊天页的输入框是自动聚焦的，
+冷启动后几百毫秒内用户很可能已经在打字了——那一下会把敲了一半的字整个替换掉。
+
+**这是数据丢失，比不自动续跑严重得多。** 所以判定器拿到 `inputBlank`：
+输入框非空就跳过这一轮（`INPUT_BUSY`）。下次冷启动还会再来，不影响功能可用性。
 
 ### 3.3 熔断：为什么上限是 2
 
