@@ -1,5 +1,9 @@
 package com.beichen.polaris.qa
 
+import com.beichen.polaris.core.voice.EngineCapability
+import com.beichen.polaris.core.voice.EngineFit
+import com.beichen.polaris.core.voice.EngineSelector
+import com.beichen.polaris.core.voice.LanguageTag
 import com.beichen.polaris.core.voice.SpeechCapability
 import com.beichen.polaris.core.voice.SpeechCapabilityPolicy
 import com.beichen.polaris.core.voice.SpeechRemedy
@@ -276,9 +280,20 @@ object SpeechCapabilityVerification {
             languageSupported = false,
         )
         check(
-            "B19 语言不支持 → 出路是「换语言 / 装识别包」",
+            "B19 语言不支持 → 出路是「换识别服务」（不是换系统语言）",
             langBad is SpeechCapability.LanguageUnsupported &&
-                langBad.remedy == SpeechRemedy.ChangeLanguage,
+                langBad.remedy == SpeechRemedy.SwitchEngine,
+            "remedy=${(langBad as? SpeechCapability.LanguageUnsupported)?.remedy}",
+        )
+        // 为什么钉死「换引擎」而不是「换语言」：
+        // 换系统语言会把整台手机所有应用变成另一种语言，只为用一次语音输入；
+        // 而真机上「不支持当前语言」绝大多数是当前默认引擎的问题——
+        // 设备上常常还装着另一个认中文的引擎，换过去就好了。
+        // 这条断言防的是「把代价不对等的出路又写回去」。
+        check(
+            "B19b 出路是换引擎而不是换系统语言（代价不对等）",
+            langBad is SpeechCapability.LanguageUnsupported &&
+                langBad.remedy != SpeechRemedy.ChangeLanguage,
             "remedy=${(langBad as? SpeechCapability.LanguageUnsupported)?.remedy}",
         )
 
@@ -317,6 +332,154 @@ object SpeechCapabilityVerification {
             "B25 未知错误码的文案保留原码（便于对日志）",
             SpeechCapabilityPolicy.explainError(999) == "识别失败（错误码 999）",
             "msg=${SpeechCapabilityPolicy.explainError(999)}",
+        )
+
+        // ———— [C] 引擎选择：设备上有多个引擎时挑哪个 ————
+        //
+        // 真机日志（2026-11-14）：
+        //   识别服务 2 个：com.google.android.tts/…GoogleTTSRecognitionService、
+        //                  com.qualcomm.qti.voiceai.speech/…SpeechRecognitionService
+        //   语音能力检查通过（引擎已选=true，语言支持=null）
+        //   识别失败 code=12 → 语音识别服务不支持当前语言
+        //
+        // 也就是说：两个引擎都在，设置里也选了，但选的那个不认中文。
+        // 这段断言钉死「这种情况下该挑哪个」。
+        println()
+        println("[C] 行为：引擎选择")
+
+        fun engine(
+            name: String,
+            offline: Boolean = false,
+            supported: Boolean = false,
+            online: Boolean = false,
+            default: Boolean = false,
+        ) = EngineCapability(
+            component = name,
+            installedOffline = offline,
+            supportedOffline = supported,
+            online = online,
+            isDefault = default,
+        )
+
+        check(
+            "C1 离线包装了 → ReadyOffline（最强证据）",
+            EngineSelector.fit(engine("a", offline = true)) == EngineFit.ReadyOffline,
+        )
+        check(
+            "C2 只有在线 → ReadyOnline（能用但依赖网络）",
+            EngineSelector.fit(engine("a", online = true)) == EngineFit.ReadyOnline,
+        )
+        check(
+            "C3 声称支持但没装包 → NeedsDownload（差一次下载）",
+            EngineSelector.fit(engine("a", supported = true)) == EngineFit.NeedsDownload,
+        )
+        check(
+            "C4 什么支持都没有 → Unsupported",
+            EngineSelector.fit(engine("a")) == EngineFit.Unsupported,
+        )
+        check(
+            "C5 离线已装且也在线 → 仍判 ReadyOffline（离线优先：不耗流量、断网也能用）",
+            EngineSelector.fit(engine("a", offline = true, online = true)) == EngineFit.ReadyOffline,
+        )
+
+        check(
+            "C6 没有任何引擎 → 挑不出来（返回 null，调用方据此给提示）",
+            EngineSelector.pick(emptyList()) == null,
+        )
+        check(
+            "C7 全都不支持 → null（不能硬挑一个假装能用）",
+            EngineSelector.pick(listOf(engine("a"), engine("b"))) == null,
+        )
+
+        // 这一条最要紧：默认引擎能用时**不许换**。
+        // 换引擎会改变识别质量与断句习惯，用户没要求换，我们不该自作主张。
+        val defaultOnline = engine("default", online = true, default = true)
+        val otherOffline = engine("other", offline = true)
+        check(
+            "C8 默认引擎能用就保留（哪怕另一个是离线包也不换）",
+            EngineSelector.pick(listOf(defaultOnline, otherOffline)) == defaultOnline,
+            "picked=${EngineSelector.pick(listOf(defaultOnline, otherOffline))?.component}",
+        )
+
+        // 真机上的那一幕：默认的不认中文，另一个认 → 必须换过去。
+        val defaultBad = engine("com.google.android.tts/X", default = true)
+        val qualcommOk = engine("com.qualcomm.qti.voiceai.speech/Y", offline = true)
+        check(
+            "C9 默认引擎不支持中文 → 换到支持的那个（真机上那一幕）",
+            EngineSelector.pick(listOf(defaultBad, qualcommOk)) == qualcommOk,
+            "picked=${EngineSelector.pick(listOf(defaultBad, qualcommOk))?.component}",
+        )
+
+        val defaultNeedsDownload = engine("default", supported = true, default = true)
+        check(
+            "C10 默认要下载、另一个离线已装 → 用离线的（别让用户先下包）",
+            EngineSelector.pick(listOf(defaultNeedsDownload, otherOffline)) == otherOffline,
+        )
+        check(
+            "C11 全都得下载 → 仍挑一个（能用，只是差下载）",
+            EngineSelector.pick(listOf(engine("a", supported = true), engine("b", supported = true)))
+                ?.component == "a",
+        )
+        check(
+            "C12 在线可用优先于需下载（少一步操作）",
+            EngineSelector.pick(
+                listOf(engine("needs", supported = true), engine("online", online = true)),
+            )?.component == "online",
+        )
+
+        // languageVerdict 的三种输入必须给三种答案。
+        // 「空表」不能当成「都不支持」——它的真实含义是「没问到」。
+        // 混为一谈会让低版本系统上的用户每次都被拦住，而那台设备可能好得很。
+        check("C13 没探测过（null）→ 不下结论", EngineSelector.languageVerdict(null) == null)
+        check(
+            "C14 探测不可用（空表）→ 不下结论（不是「不支持」）",
+            EngineSelector.languageVerdict(emptyList()) == null,
+        )
+        check(
+            "C15 探测过且没有能用的 → 明确不支持",
+            EngineSelector.languageVerdict(listOf(engine("a"))) == false,
+        )
+        check(
+            "C16 探测过且有能用的 → 支持",
+            EngineSelector.languageVerdict(listOf(engine("a", online = true))) == true,
+        )
+
+        // ———— [D] 语言标签比较 ————
+        //
+        // 引擎回报中文有四种写法：zh、zh-CN、zh-Hans-CN、cmn-Hans-CN。
+        // 用 == 比会把后两种判成不支持，然后给用户一句「换系统语言」——
+        // 而它其实完全能识别。这类误判只在真机上出现（引擎说了算）。
+        println()
+        println("[D] 行为：语言标签比较")
+
+        check("D1 引擎给 zh，我们要 zh-CN → 覆盖", LanguageTag.covers("zh", "zh-CN"))
+        check("D2 引擎给 zh-CN，我们要 zh → 覆盖", LanguageTag.covers("zh-CN", "zh"))
+        check(
+            "D3 引擎给 zh-Hans-CN（带文种）→ 覆盖",
+            LanguageTag.covers("zh-Hans-CN", "zh-CN"),
+        )
+        check(
+            "D4 引擎给 cmn-Hans-CN（普通话的 ISO 639-3 代码）→ 覆盖",
+            LanguageTag.covers("cmn-Hans-CN", "zh-CN"),
+        )
+        check("D5 引擎给 zh_CN（下划线写法）→ 覆盖", LanguageTag.covers("zh_CN", "zh-CN"))
+        check("D6 引擎给 en-US，我们要中文 → 不覆盖", !LanguageTag.covers("en-US", "zh-CN"))
+        check("D7 引擎给空串 → 不覆盖（没有证据不能当成支持）", !LanguageTag.covers("", "zh-CN"))
+        check(
+            "D8 目标为空 → 视为不限制（引擎报什么都能用）",
+            LanguageTag.covers("en-US", ""),
+        )
+        check(
+            "D9 一组里只要有一个覆盖就算支持",
+            LanguageTag.anyCovers(listOf("en-US", "zh-Hans-CN"), "zh-CN"),
+        )
+        check(
+            "D10 一组里一个都不覆盖 → 不支持",
+            !LanguageTag.anyCovers(listOf("en-US", "ja-JP"), "zh-CN"),
+        )
+        check(
+            "D11 规范化：zh_CN 与 zh-CN 等价",
+            LanguageTag.canonical("zh_CN") == LanguageTag.canonical("zh-CN"),
         )
 
         println()

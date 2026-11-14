@@ -68,6 +68,12 @@ POOL_GROUPS = {
         ("判定入口方法", "decide"),
         ("路径判别方法", "hasSystemRecognizerPage"),
         ("错误码翻译入口", "explainError"),
+        ("引擎能力数据", "Lcom/beichen/polaris/core/voice/EngineCapability;"),
+        ("引擎适配档位", "Lcom/beichen/polaris/core/voice/EngineFit;"),
+        ("引擎选择逻辑", "Lcom/beichen/polaris/core/voice/EngineSelector;"),
+        ("语言标签比较", "Lcom/beichen/polaris/core/voice/LanguageTag;"),
+        ("逐引擎探测方法", "probeEngines"),
+        ("指定引擎创建", "createSpeechRecognizer"),
     ],
     "W9-A 截图双通道（pool 池条目精确匹配）": [
         ("无障碍截屏服务方法名", "takeScreenshotViaA11y"),
@@ -330,6 +336,9 @@ ABSENT_POOL = [
     # 「这次语音被取消了」是修前 ERROR_CLIENT 的文案——它把一个信息量最大的错误码
     # 说成了「用户主动取消」，用户据此什么都做不了。
     ("旧 ERROR_CLIENT 文案已移除", "这次语音被取消了"),
+    # 2026-11-14 第二轮：语言不支持的出路从「换系统语言」改成「换引擎」。
+    # 旧文案把整台手机变成另一种语言的代价推给用户，只为用一次语音输入。
+    ("旧「换个系统语言试试」文案已移除", "换个系统语言试试"),
     ("屏幕捕获服务已移除", "Lcom/beichen/polaris/automation/ScreenCaptureService;"),
     ("屏幕捕获桥已移除", "Lcom/beichen/polaris/automation/ScreenshotBridge;"),
     ("屏幕捕获清理策略已移除", "ScreenCaptureStartPolicy"),
@@ -345,6 +354,10 @@ BYTES_GROUPS = {
         ("权限缺失的提示", "没有麦克风权限。去系统设置给「北辰」打开麦克风后重试"),
         ("ERROR_CLIENT 的新文案", "识别服务连不上，去系统设置里确认已选定语音识别服务"),
         ("语音诊断入口", "语音诊断"),
+        ("语言不支持的新文案（指向换引擎）", "当前的语音识别服务不支持中文"),
+        ("所有引擎都不认中文的提示", "这台设备上的语音识别服务都不支持中文"),
+        ("引擎适配度文案（离线）", "离线可用"),
+        ("引擎适配度文案（需下载）", "支持但没下语言包"),
     ],
     "W9-A 文案（描述 / 失败指引，长常量片段，bytes 子串）": [
         ("描述：已授予无障碍即可使用", "已授予无障碍权限即可使用"),

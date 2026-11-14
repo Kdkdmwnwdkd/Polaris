@@ -74,8 +74,15 @@ fun main() {
         // 2026-11-09 main 构建就这样红过一次（run 42643097373），重跑即绿。
         store.create()
         val id = store.create()
-        val ok = waitUntil(200) { f.exists() && f.readText().contains(id) }
-        assertTrue("200ms 内已落盘", ok)
+        // 时限从 200 提到 320：断言的**目标**是「没等 400ms 去抖窗口」，
+        // 不是「在某个绝对时长内写完」。320 仍严格小于 400，语义不变；
+        // 但留出了 120ms 余量给「预热带不走的那部分」——执行器线程池首次真正
+        // 调度、文件系统刷元数据。全量里 124 个 harness 并行跑时，
+        // 这两项在 200ms 预算里会偶发超时（2026-11-14 全量就这样红过一次，
+        // 单独连跑三次全绿）。放宽到 320 之后，观测到的正常耗时仍在 40–90ms，
+        // 与「等窗口」的 ≥400ms 有充足间隔。
+        val ok = waitUntil(320) { f.exists() && f.readText().contains(id) }
+        assertTrue("320ms 内已落盘（去抖窗口是 400ms）", ok)
         dir.deleteRecursively()
     }
 

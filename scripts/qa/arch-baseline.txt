@@ -164,7 +164,12 @@ lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3723
 #      撤掉的理由：那个前提是错的——聊天页走系统识别页，录音在系统进程里，
 #      我们的 RECORD_AUDIO 跟它无关。留着它会挡住一条本来能用的路。
 # 净增 45 行里 30 行是注释。真正的新逻辑只有「点麦克风前先判定能不能识别」这一条。
-lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3231
+# 2026-11-14 再上调（+4）：进页面探一次引擎。
+#
+# 只用聊天页、从没开过桌宠的用户，否则永远拿不到「默认引擎不认中文」这个结论——
+# 点麦克风 → 系统识别页弹出 → 说完什么都没发生，而 App 侧一切检查都是绿的。
+# 4 行里 3 行是注释，真正的新逻辑只有一句 LaunchedEffect 调 probeEngines。
+lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3235
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1532
 lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1535

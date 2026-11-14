@@ -16,8 +16,10 @@ cd "$ROOT"
 
 CORE=core/src/main/java/com/beichen/polaris/core
 POLICY="$CORE/voice/SpeechCapabilityPolicy.kt"
+ENGINE="$CORE/voice/RecognitionEngine.kt"
 PROBE=$(find app/src/main -name "SpeechProbe.kt" 2>/dev/null | head -1)
 PET_VOICE=$(find app/src/main -name "PetVoice.kt" 2>/dev/null | head -1)
+PET_OVERLAY=$(find app/src/main -name "PetOverlay.kt" 2>/dev/null | head -1)
 CHAT_SCREEN=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
 MANIFEST=app/src/main/AndroidManifest.xml
 
@@ -234,6 +236,45 @@ else
   fail "A16 路径维度没住在 core —— 改要求要改两个文件，漏改的那个不会报错"
 fi
 
+# A17 引擎选择必须住在 core（纯逻辑），且零 Android 依赖。
+# 为什么要单独一条：这段逻辑挑错引擎**不报错**，只是「语音还是不能用」——
+# 和判定表一样属于「错了没声音」的那类，必须能被 JVM 断言。
+if [ -f "$ENGINE" ] && ! grep -qE '^import android\.' "$ENGINE" &&
+   grep -qF "object EngineSelector" "$ENGINE"; then
+  pass "A17 引擎选择在 core 且零 Android 依赖（可独立断言）"
+else
+  fail "A17 引擎选择缺失或引了 android.* —— 挑错引擎不会报错，只会静默失败"
+fi
+
+# A18 桌宠必须真的把识别**指向**选中的引擎，而不是只记录了选择。
+# 只记录不使用的症状是：日志里写着「已切换到 X」，实际还在用默认引擎——
+# 日志与实际行为不一致，比没有日志更误导。
+if [ -n "$PET_VOICE" ] &&
+   grep -qE 'createSpeechRecognizer\(app, *component\)' "$PET_VOICE"; then
+  pass "A18 桌宠用 createSpeechRecognizer(ctx, component) 指定引擎"
+else
+  fail "A18 桌宠只记录选择、不指定引擎 —— 日志会说谎"
+fi
+
+# A19 桌宠起来时必须探一次「哪个引擎认当前语言」。
+# 不探的话，默认引擎不认中文时用户只会收到一个错误码，
+# 而设备上明明还装着另一个能用的引擎。
+if [ -n "$PET_OVERLAY" ] && grep -qF "refreshEngine()" "$PET_OVERLAY"; then
+  pass "A19 桌宠启动时探测引擎（不是在长按时才探）"
+else
+  fail "A19 桌宠没有在启动时探测引擎 —— 默认引擎不认中文时用户只会收到错误码"
+fi
+
+# A20 语言标签比较必须处理 cmn / 下划线这类真实写法。
+# 引擎回报 `cmn-Hans-CN`（普通话）时，用 == 比 `zh-CN` 会判成不支持，
+# 然后提示「换系统语言」——而实际上它完全能识别。
+# 这是只有真机才暴露的问题：单测里引擎返回什么由我们说了算。
+if [ -f "$ENGINE" ] && grep -qF "cmn" "$ENGINE" && grep -qF 'replace('"'"'_'"'"', '"'"'-'"'"')' "$ENGINE"; then
+  pass "A20 语言标签比较处理 cmn / 下划线写法"
+else
+  fail "A20 语言标签按 == 比较 —— 引擎返回 cmn-Hans-CN 时会被误判成不支持"
+fi
+
 echo ""
 echo "[B] 行为：真编真跑判定表"
 
@@ -261,6 +302,7 @@ COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANN"
 java -cp "$COMPILER_CP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -no-reflect -classpath "$STDLIB" -d "$OUT" -nowarn \
   "$POLICY" \
+  "$ENGINE" \
   scripts/qa/SpeechCapabilityVerification.kt \
   2>&1 | grep -v '^warning:' | head -25
 
