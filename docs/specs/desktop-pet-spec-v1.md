@@ -344,6 +344,27 @@ e: PetPanel.kt: Restricted suspending functions can only invoke member or
 `RECORD_AUDIO` 权限时不能带 microphone 位（Android 14 会抛 `SecurityException`）。
 这条写在这里是因为它是「改 targetSdk 时最容易漏、且只在录音那一刻才炸」的一项。
 
+**2026-11-14 更正（模拟器实测）**：上面那句「targetSdk 28 下不会崩」只说对了一半。
+真的跑起来，Android 14 会打这条日志：
+
+```
+W ActivityManager: Foreground service started from background can not have
+location/camera/microphone access: service com.beichen.polaris/.pet.PetOverlayService
+```
+
+它判的是 **uidState（服务是从后台起的）**，不是 targetSdk。也就是说：
+
+| 入口 | 麦克风 |
+|---|---|
+| 通知上的「说一句」（用户在点） | 可用 |
+| 快捷设置磁贴（多数 ROM 算用户交互） | 大概率可用，待真机 |
+| `START_STICKY` 自愈重建 | **被平台拒绝** |
+| 第三方拉起 | 被平台拒绝 |
+
+影响是「服务被系统重建之后，第一次长按说话会说不出话」。代码不会静默（错误会映射成中文提示），
+但这是个功能退化点。真要修，只有两条路：重建后**不自动进入可语音态**（现状已接近，因为录音是用户点了才起），
+或者按上一段把 `microphone` 类型补齐（那就要先解决 targetSdk 28 与容器 execve 的矛盾）。
+
 ### 11.6 真机待验
 
 见 `docs/ops/DEVICE-VERIFICATION-PENDING.md` 的 **P12**（9 条）。其中只有一条必须真机：

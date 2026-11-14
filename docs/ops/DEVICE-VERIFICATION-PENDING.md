@@ -1396,6 +1396,35 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ---
 
+## P14 已在模拟器代跑的那部分（2026-11-14）
+
+> 详见 `docs/archive/reports/模拟器实测-2026-11-14.md`。
+> 环境：InstaBox 云机 + 无头模拟器（Android 14 AOSP，**无 KVM，纯 QEMU TCG**）。
+
+**结论：28 条里 11 条已经在模拟器上验掉了，不必再上真机。**
+
+| 已验 | 证据 |
+|---|---|
+| P11-1 / P11-2 / P11-3 / P11-7 / P11-8 / P11-9 / P11-10 | 窗口 frame 变化、通知 dump、`ServiceRecord`、pref 值，逐条都有实测输出 |
+| P11-4 | AOSP 上通过（气泡避让 IME）；**ROM 差异仍需真机** |
+| P11-5（部分） | 发送链路通、错误可见（`Unable to resolve host api.openai.com`）；"有回答 + 朗读"未验 |
+| P13-1（部分） | 磁贴被系统识别（`nonLocalizedLabel=北辰`）；实际添加需 UI |
+| P13-3 | `action.LISTEN` 唤起后气泡展开、**不弹键盘**（与点形象形成对照） |
+
+**这轮抓到一个真问题**：Android 14 把「从后台启动的前台服务」的麦克风权限关掉，且不看 targetSdk。
+`spec §11.5` 的"targetSdk 28 下不应触发"是错的。影响 `START_STICKY` 自愈后的第一次语音。
+日志原文：
+
+```
+W ActivityManager: Foreground service started from background can not have
+location/camera/microphone access: service com.beichen.polaris/.pet.PetOverlayService
+```
+
+**仍然必须真机的**：P12 全部（本镜像无 RecognitionService）、P11-6（要模型可达）、
+P13-2/5/6/7/8/9（磁贴点击 / 通知按钮 / 锁屏 / 撤权限，`cmd statusbar` 在该 build 上不支持 add-tile）。
+
+---
+
 ## P11 桌面助手悬浮窗（桌宠一期，2026-11-13 落地）
 
 > 代码路径：`app/src/main/java/com/beichen/polaris/pet/`，守卫 `scripts/qa/run-desktop-pet-verification.sh`。
