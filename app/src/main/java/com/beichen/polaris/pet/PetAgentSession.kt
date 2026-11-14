@@ -8,6 +8,7 @@ import com.beichen.polaris.core.ConfigStore
 import com.beichen.polaris.core.LLMClient
 import com.beichen.polaris.core.LLMConfig
 import com.beichen.polaris.core.ProviderManager
+import com.beichen.polaris.core.SystemMessage
 import com.beichen.polaris.core.ToolRegistry
 import com.beichen.polaris.core.agent.RealAgentLoop
 import com.beichen.polaris.core.workspace.WorkspaceStore
@@ -139,7 +140,11 @@ class PetAgentSession(context: Context) {
                 .orEmpty()
 
             history.clear()
-            history.addAll(messages.takeLast(MAX_HISTORY))
+            // 只留对话，不留 system：loop.send 返回的是整段上下文，开头是它自己
+            // prepend 的 systemPrompt。原样存回去，下一轮它会作为 prior 再传一遍，
+            // loop 又 prepend 一次——模型看到两份同样的指令，每次都多付这段 prompt。
+            // （实测第三轮「看起来好了」，只是 takeLast 恰好把旧 system 挤出去了。）
+            history.addAll(messages.filterNot { it is SystemMessage }.takeLast(MAX_HISTORY))
 
             AgentLogger.i(TAG, "桌宠回合完成：${System.currentTimeMillis() - started}ms，${answer.length} 字")
             if (answer.isBlank()) {
