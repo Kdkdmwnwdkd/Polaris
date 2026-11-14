@@ -26,6 +26,18 @@ package com.beichen.polaris.core.voice
  * @property supportedOffline 引擎**声称支持**当前语言的离线识别，但包没装。
  * @property online 引擎支持当前语言的**在线**识别。
  * @property isDefault 是否是系统当前选定的那一个（`VOICE_RECOGNITION_SERVICE`）。
+ * @property probed 这一项**真的问到了**吗。
+ *
+ *        为 `false` 时上面三个布尔值全部无意义——它们只是构造参数的默认值。
+ *        这不是洁癖：2026-11-14 的真机诊断报告里，设备上有 2 个识别服务，
+ *        报告却只列出 1 个。被吞掉的那个正是系统默认引擎（Google TTS），
+ *        它没在 800ms 内应答，于是被当成「不存在」从列表里删掉了。
+ *
+ *        删掉一项的后果不是「少一行字」，而是**结论反转**：剩下的那项
+ *        （Qualcomm）明确不支持中文，于是 `pick` 返回 null，报告宣布
+ *        「没有能用的」——而我们其实从没问过那个最该问的引擎。
+ *
+ *        所以「没问到」必须作为第三种答案留下来，不能被折叠成「不支持」。
  */
 data class EngineCapability(
     val component: String,
@@ -33,6 +45,7 @@ data class EngineCapability(
     val supportedOffline: Boolean = false,
     val online: Boolean = false,
     val isDefault: Boolean = false,
+    val probed: Boolean = true,
 )
 
 /**
@@ -54,12 +67,39 @@ enum class EngineFit(
     /** 引擎声称支持，但离线包没装——可以触发下载，用户点一下就行。 */
     NeedsDownload(2),
 
+    /**
+     * 引擎**没回答**（超时、报错、或系统/引擎没实现这个查询）。
+     *
+     * 既不是支持，也不是不支持，而是一份**缺失的证据**。
+     * 排在 [Unsupported] 之前：一个没回答的引擎值得试一次，
+     * 而一个明确说了「不认中文」的引擎不值得。
+     *
+     * 为什么单独一档而不是并进 [Unsupported]：并进去就是拿「不知道」
+     * 当「不行」用，后果是本来能用的引擎被判死、用户被拦住——
+     * 2026-11-14 的真机报告正是这么错的。
+     */
+    Unknown(3),
+
     /** 不支持当前语言。 */
-    Unsupported(3),
+    Unsupported(4),
     ;
 
     /** 已经能用了（不需要用户再做什么）。 */
     val isReady: Boolean get() = this == ReadyOffline || this == ReadyOnline
+
+    /**
+     * 这个档位是否**明确**判定为「不支持当前语言」。
+     *
+     * 单独一个属性，是为了让「没问到」与「不支持」的区别落在**类型**上，
+     * 而不是落在文案上。文案随时会改，而两者的处理方式必须永远不同：
+     * 明确不支持 → 别浪费用户的时间，去换引擎；
+     * 没问到 → 放行试一次，因为我们没有证据说它不行。
+     *
+     * 用 `describe(fit).contains("不支持")` 那种写法守不住这条：
+     * 改一个措辞它就红了，而判错档位时它可能照样绿。
+     */
+    val isDefinitelyUnsupported: Boolean get() = this == Unsupported
+
 }
 
 /**
@@ -72,6 +112,9 @@ object EngineSelector {
 
     /** 引擎对当前语言的适配程度。判定顺序即优先级，先命中先返回。 */
     fun fit(engine: EngineCapability): EngineFit = when {
+        // 没问到就没有依据。必须排在最前：下面三个布尔在没问到时是默认值
+        // （全 false），落到 else 分支就会被说成「不支持当前语言」。
+        !engine.probed -> EngineFit.Unknown
         // 离线包装了就一定认这个语言，这是最强证据。
         engine.installedOffline -> EngineFit.ReadyOffline
         // 支持在线识别：能用，但断网就废。
@@ -87,10 +130,12 @@ object EngineSelector {
      * 规则（顺序有讲究）：
      * 1. **默认引擎能用就别换**。换引擎会改变识别质量与断句习惯，
      *    用户没要求换，我们不该自作主张——只在默认那个不能用时才动手。
-     * 2. 否则按「离线已装 → 在线可用 → 需下载」挑最优。
-     * 3. 全都不支持 → null（调用方据此给「换引擎」的提示，而不是硬着头皮录音）。
+     * 2. 否则按「离线已装 → 在线可用 → 需下载 → 未应答」挑最优。
+     *    「未应答」排在「明确不支持」之前：没回答的引擎值得试一次。
+     * 3. 全都明确不支持 → null（调用方据此给「换引擎」的提示，而不是硬着头皮录音）。
      *
-     * @return 选中的引擎；null = 这台设备上没有任何引擎认当前语言。
+     * @return 选中的引擎；null = 这台设备上**所有**引擎都明确说了不支持当前语言。
+     *         注意 null 与「有引擎但没问到」不是一回事——后者会返回那个未应答的引擎。
      */
     fun pick(engines: List<EngineCapability>): EngineCapability? {
         if (engines.isEmpty()) return null
@@ -110,11 +155,15 @@ object EngineSelector {
      * - `null`（还没探过）→ `null`，**不据此下结论**。拿不到信息就放行，
      *   让引擎自己报错码，而不是凭猜测拦住用户。
      * - 空表（探测不可用：系统版本低、查询不到服务）→ `null`，同上。
-     * - 有结果 → 有没有任何一个能用。
+     * - 有结果 → 只要有一个引擎**不是明确不支持**就算能试。
      *
      * 空表不能当成「都不支持」：它的真实含义是「没问到」。
      * 把「没问到」当成「不支持」会让低版本系统上的用户每次都被拦住——
      * 而那台设备可能好得很。
+     *
+     * 同理，**单个引擎没问到**也不能当成它不支持（见 [EngineCapability.probed]）。
+     * 整张表里只要有一项是 [EngineFit.Unknown]，这里就给 `true`：
+     * 我们没有证据说它不行，那就让它自己回答。
      */
     fun languageVerdict(probed: List<EngineCapability>?): Boolean? = when {
         probed == null -> null
@@ -127,6 +176,9 @@ object EngineSelector {
         EngineFit.ReadyOffline -> "离线可用"
         EngineFit.ReadyOnline -> "仅在线可用（断网就废）"
         EngineFit.NeedsDownload -> "支持但没下语言包"
+        // 措辞上要和「不支持」明显区分：用户看到「不支持」会去换引擎，
+        // 而这里的正确处理是「先试一次」。
+        EngineFit.Unknown -> "没问到（引擎没在超时内应答，或没实现这个查询；先按默认试）"
         EngineFit.Unsupported -> "不支持当前语言"
     }
 

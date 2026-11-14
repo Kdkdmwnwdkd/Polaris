@@ -302,11 +302,20 @@ class PetVoiceInput(
         probe.probeEngines { engines ->
             val chosen = EngineSelector.pick(engines)
             preferredEngine = if (chosen == null || chosen.isDefault) null else chosen.component
-            if (engines.isNotEmpty() && chosen == null) {
-                AgentLogger.w(
+            when {
+                // 查不到服务 / 系统版本低：不动，`start()` 里还会按默认路径再判一次。
+                engines.isEmpty() -> Unit
+                // 只有「每个引擎都明确说不支持」才会走到这里。
+                chosen == null -> AgentLogger.w(
                     TAG,
                     "没有引擎支持当前语言（${probe.currentLanguageTag()}）：" +
                         engines.joinToString("、") { it.component },
+                )
+                // 没问到 ≠ 不支持。这种情况**不换引擎**，让它按自己的方式试一次——
+                // 我们没有证据说它不行（见 EngineCapability.probed）。
+                !chosen.probed -> AgentLogger.w(
+                    TAG,
+                    "引擎 ${chosen.component} 未在超时内应答，先按默认路径试一次",
                 )
             }
         }
@@ -383,8 +392,19 @@ class PetVoiceInput(
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, app.packageName)
-        // 只是个 hint：支持离线识别的引擎走离线（更快、不费流量），不支持的原样忽略。
-        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+        // 这里**故意不传** EXTRA_PREFER_OFFLINE。
+        //
+        // 以前传了 true，想法是「有离线包就用离线，更快、不费流量」。但它是
+        // **prefer**，在厂商实现里常被当成 **require**：Google 的识别服务在没装
+        // 当前语言离线包时，收到这个 extra 会直接回
+        // ERROR_LANGUAGE_NOT_SUPPORTED(12)，而不是退回在线识别。
+        //
+        // 2026-11-14 的真机日志正好是这一幕：桌宠每按一次就是 code=12，
+        // 而同机的在线识别本来是能用的。也就是说，这一行 extra 可能一直在
+        // 把「能用」变成「不能用」——代价（一次几百 KB 流量）完全不对等。
+        //
+        // 不传之后由识别服务自己决定走离线还是在线：装了离线包它照样会优先用，
+        // 没装才会走网络。这个决定应该由引擎做，不该由我们替它做。
     }
 
     /**

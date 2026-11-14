@@ -598,19 +598,24 @@ fun SettingsScreen(
                     title = "语音诊断",
                     description = "查本机的语音识别环境：权限、识别服务、默认引擎、语言",
                     onClick = {
-                        val report = VoiceDiagnostics.buildReport(context)
-                        VoiceDiagnostics.logReport(context)
-                        runCatching {
-                            val cm = context.getSystemService(android.content.ClipboardManager::class.java)
-                            cm?.setPrimaryClip(
-                                android.content.ClipData.newPlainText("北辰语音诊断", report)
-                            )
+                        // 先探一遍再出报告，不读缓存——用户点它就是要看**现在**的结论。
+                        // 探测要连上每个引擎问一句（最坏 2.5 秒/个，并行），
+                        // 所以先给一句反馈：点完没动静的话用户会以为按钮坏了，
+                        // 再点一次就排了两轮探测。
+                        Toast.makeText(context, "正在探测语音引擎…", Toast.LENGTH_SHORT).show()
+                        VoiceDiagnostics.buildReportAsync(context) { report ->
+                            runCatching {
+                                val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                                cm?.setPrimaryClip(
+                                    android.content.ClipData.newPlainText("北辰语音诊断", report)
+                                )
+                            }
+                            Toast.makeText(
+                                context,
+                                "诊断报告已复制到剪贴板，也写进了日志",
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
-                        Toast.makeText(
-                            context,
-                            "诊断报告已复制到剪贴板，也写进了日志",
-                            Toast.LENGTH_LONG
-                        ).show()
                     }
                 )
                 // 存活自检：给没有电脑、拉不了 adb 的用户一个自测入口。

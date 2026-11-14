@@ -275,6 +275,65 @@ else
   fail "A20 语言标签按 == 比较 —— 引擎返回 cmn-Hans-CN 时会被误判成不支持"
 fi
 
+# A21 桌宠**不得**传 EXTRA_PREFER_OFFLINE。
+#
+# 这个名字听起来无害（prefer = 偏好），但在厂商实现里常被当成 require：
+# 当前语言的离线包没装时，引擎会直接回 ERROR_LANGUAGE_NOT_SUPPORTED(12)，
+# 而不是退回在线识别。2026-11-14 的真机日志正是「每按一次就 code=12」，
+# 而同机的在线识别本来是能用的。
+#
+# 断言查的是**代码**（排除注释行）：注释里讨论这个 extra 是应该写的，
+# 把它也算进去就变成「不许提这个词」。
+if [ -n "$PET_VOICE" ] &&
+   ! grep -vE '^[[:space:]]*//' "$PET_VOICE" | grep -qF "EXTRA_PREFER_OFFLINE"; then
+  pass "A21 桌宠不传 EXTRA_PREFER_OFFLINE（否则只有在线中文的引擎会被逼成 code=12）"
+else
+  fail "A21 桌宠仍在传 EXTRA_PREFER_OFFLINE —— 没装离线包的中文识别会被直接拒掉"
+fi
+
+# A22 探测失败的引擎必须**保留在清单里**，标成「没问到」。
+#
+# 2026-11-14 的诊断报告：设备 2 个识别服务，报告只列出 1 个。被吞掉的正是
+# 系统默认引擎（它没在超时内应答）。后果不是「少一行字」而是**结论反转**：
+# 剩下那项明确不支持中文 → 报告宣布「没有能用的」→ 语音被拦住，
+# 而我们从未问过最该问的那个引擎。
+if [ -n "$PROBE" ] && grep -qF "probed = false" "$PROBE" &&
+   ! grep -qF "oneDone(null)" "$PROBE"; then
+  pass "A22 探测失败的引擎被保留为「未应答」（不是从清单里删掉）"
+else
+  fail "A22 探测失败仍被丢弃 —— 诊断会少一个引擎，结论可能反转成「没有能用的」"
+fi
+
+# A23 诊断报告必须**强制重探**，不能读 15 秒前的缓存。
+# 用户点「语音诊断」要的是这一秒的结论；缓存里可能正好存着上一轮
+# 冷启动超时的那份残缺结果——读它等于把一次失败原样复述，还看起来像证据。
+DIAG=$(find app/src/main -name "VoiceDiagnostics.kt" 2>/dev/null | head -1)
+if [ -n "$DIAG" ] && grep -qF "force = true" "$DIAG"; then
+  pass "A23 诊断报告强制重探引擎（不读节流缓存）"
+else
+  fail "A23 诊断报告读缓存 —— 会复述上一轮的残缺结果，用户以为那就是现状"
+fi
+
+# A24 诊断入口必须是异步的（探测要连服务，最坏 2.5 秒/引擎）。
+# 同步版只能在**探测之前**出报告，也就是永远拿不到引擎那一维——
+# 那一段会一直显示「未探测」，而用户点它就是为了看这一段。
+SETTINGS=app/src/main/java/com/beichen/polaris/ui/SettingsScreen.kt
+if [ -f "$SETTINGS" ] && grep -qF "buildReportAsync" "$SETTINGS"; then
+  pass "A24 语音诊断入口异步出报告（探测完成后才生成）"
+else
+  fail "A24 语音诊断仍是同步生成 —— 引擎那一段永远是「未探测」"
+fi
+
+# A25 语言这一维只对「自己录音」的路径算数。
+# 聊天页走系统识别页，页面里能自己换语言、自己下语言包；
+# 拿引擎侧的探测去否定它，等于把一条本来能用的路自己堵死。
+if [ -n "$POLICY" ] &&
+   grep -qF "path == VoicePath.SelfRecorded && languageSupported == false" "$POLICY"; then
+  pass "A25 语言判定限定在「自己录音」路径（聊天页不被误拦）"
+else
+  fail "A25 语言判定对所有路径生效 —— 聊天页会被自己的探测结论挡住"
+fi
+
 echo ""
 echo "[B] 行为：真编真跑判定表"
 

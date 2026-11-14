@@ -126,7 +126,7 @@ enum class VoicePath {
  * | 没有系统识别页（**只走系统页的路径**） | 一按就说「本机没有语音识别页」 | 启用系统语音助手 |
  * | 系统没选默认引擎 | 一按就静默失败 / 立刻报错 | 去系统设置选默认引擎 |
  * | 麦克风被占用 | 一按就说「另一个应用正在录音」 | 等对方结束 |
- * | 引擎不认这个语言 | 一按就报「语言不支持」 | 换系统语言 |
+ * | 引擎不认这个语言（**只对自己录音的路径**） | 一按就报「语言不支持」 | 换识别引擎 / 给它下中文包 |
  *
  * 之前这些判断散在三个地方（[PetVoice.start] 的两处 if、[ChatScreen] 的一处），
  * 各自写各自的文案，结论还互相矛盾：桌宠认为「没服务」时，聊天页可能认为「有服务」。
@@ -210,6 +210,7 @@ object SpeechCapabilityPolicy {
      *        `Settings.Secure.VOICE_RECOGNITION_SERVICE` 非空）。
      *        为 null 表示「查不到这个信息」——不据此下结论。
      * @param languageSupported 引擎是否认这个语言。为 null 表示「还没问过」。
+     *        **只在 [VoicePath.SelfRecorded] 时算数**，见下面「为什么系统页不判语言」。
      * @param hasMicPermission 麦克风权限是否已授予。**只在 [VoicePath.SelfRecorded] 时算数**，
      *        默认 true 表示「这一维对本次判定不适用，不构成阻塞」。
      * @param hasSystemRecognizerPage 是否有 App 声明了处理
@@ -273,7 +274,18 @@ object SpeechCapabilityPolicy {
                 SpeechRemedy.SelectDefaultEngine,
             )
         }
-        if (languageSupported == false) {
+        // 语言这一维同样**只对自己录音的路径**算数。
+        //
+        // 为什么系统页不判：系统识别页（Google 语音输入、厂商助手）自带语言选择，
+        // 页面里能换语言、能下载语言包，而且它的在线识别能力与
+        // `checkRecognitionSupport` 问出来的那份清单并不等价。我们拿 service 侧的
+        // 探测结论去否定页面能不能用，等于**替系统页面做了它自己会做的决定**——
+        // 2026-11-14 的真机报告里，聊天页就这样被判成了「不支持中文」，
+        // 而那条路本来是通到系统识别页的。拦住一条本来能用的路，比不拦更糟。
+        //
+        // 桌宠不一样：它自己建 SpeechRecognizer、自己指定引擎，语言不认就真的录不出东西，
+        // 所以那一维必须在这里拦住，否则用户按下麦克风只会拿到 code=12。
+        if (path == VoicePath.SelfRecorded && languageSupported == false) {
             return SpeechCapability.LanguageUnsupported(
                 "language_unsupported",
                 MSG_LANGUAGE_UNSUPPORTED,

@@ -177,10 +177,14 @@ class SpeechProbe(context: Context) {
      * - 结果回调在主线程。
      *
      * @param language BCP-47 语言标签，默认取系统语言。
+     * @param force 跳过 15 秒节流，强制重探。诊断报告用：用户点「语音诊断」的那一刻
+     *        就是要看**现在**的结论，读到一份 14 秒前、且当时有引擎没应答的缓存
+     *        等于白点。
      * @param onDone 探测完成。低版本系统或查询不到服务时给空列表。
      */
     fun probeEngines(
         language: String = currentLanguageTag(),
+        force: Boolean = false,
         onDone: (List<EngineCapability>) -> Unit,
     ) {
         // checkRecognitionSupport 是 API 33 才有的。低版本上「引擎认不认这个语言」
@@ -196,7 +200,7 @@ class SpeechProbe(context: Context) {
         // （要连服务）。15 秒内复用结果。装完语言包想立刻看到效果的话，
         // 退出再进一次聊天页即可（超过节流窗口就会重探）。
         val cached = sharedEngines
-        if (cached != null && System.currentTimeMillis() - lastProbeAt < PROBE_THROTTLE_MS) {
+        if (!force && cached != null && System.currentTimeMillis() - lastProbeAt < PROBE_THROTTLE_MS) {
             onDone(cached)
             return
         }
@@ -215,8 +219,8 @@ class SpeechProbe(context: Context) {
         var finished = 0
         var delivered = false
 
-        fun oneDone(capability: EngineCapability?) {
-            if (capability != null) results.add(capability)
+        fun oneDone(capability: EngineCapability) {
+            results.add(capability)
             finished++
             if (finished < total || delivered) return
             delivered = true
@@ -238,24 +242,31 @@ class SpeechProbe(context: Context) {
             val key = "$pkg/$cls"
             var settled = false
 
+            /** 没问到时的占位项。**必须留在列表里**，理由见 [EngineCapability.probed]。 */
+            fun unanswered(): EngineCapability = EngineCapability(
+                component = key,
+                isDefault = key == defaultComponent,
+                probed = false,
+            )
+
             val recognizer = runCatching {
                 SpeechRecognizer.createSpeechRecognizer(app, ComponentName(pkg, cls))
             }.getOrNull()
             if (recognizer == null) {
                 AgentLogger.w(TAG, "无法为引擎 $key 创建识别器")
-                oneDone(null)
+                oneDone(unanswered())
                 return@forEach
             }
 
             // 回调与超时可能都到，用 settled 保证只结算一次。
-            fun settle(capability: EngineCapability?) {
+            fun settle(capability: EngineCapability) {
                 if (settled) return
                 settled = true
                 runCatching { recognizer.destroy() }
                 oneDone(capability)
             }
 
-            handler.postDelayed({ settle(null) }, PROBE_TIMEOUT_MS)
+            handler.postDelayed({ settle(unanswered()) }, PROBE_TIMEOUT_MS)
 
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(
@@ -270,6 +281,16 @@ class SpeechProbe(context: Context) {
                     mainExecutor,
                     object : RecognitionSupportCallback {
                         override fun onSupportResult(support: RecognitionSupport) {
+                            // 四个列表原样落日志。这一行是本轮修复的取证点：
+                            // 真机上「引擎不认中文」到底是四个列表都空、还是只有
+                            // 离线列表空、还是引擎根本没实现这个查询，只能靠它分辨。
+                            // 转成布尔值之后就再也看不出来了。
+                            AgentLogger.i(
+                                TAG,
+                                "引擎 $key 回答 $language：离线已装=${support.installedOnDeviceLanguages}" +
+                                    "，可离线=${support.supportedOnDeviceLanguages}" +
+                                    "，在线=${support.onlineLanguages}",
+                            )
                             settle(
                                 EngineCapability(
                                     component = key,
@@ -285,17 +306,20 @@ class SpeechProbe(context: Context) {
                             )
                         }
 
-                        // 引擎自己报错（未初始化、内部异常）也走这里。
-                        // 不处理的话这一项会一直等超时，白拖 800ms。
+                        // 引擎自己报错（未初始化、内部异常、没实现这个查询）也走这里。
+                        // 不处理的话这一项会一直等超时，白拖一整个超时窗口。
+                        //
+                        // 注意 settle 的是「未应答」而不是「不支持」：引擎报错说明
+                        // 它没给出答案，不说明它不会中文。两者混为一谈就会误判。
                         override fun onError(error: Int) {
-                            AgentLogger.w(TAG, "引擎 $key 查询语言支持报错：$error")
-                            settle(null)
+                            AgentLogger.w(TAG, "引擎 $key 查询语言支持报错：$error（按未应答处理）")
+                            settle(unanswered())
                         }
                     },
                 )
             }.onFailure { e ->
                 AgentLogger.w(TAG, "询问引擎 $key 的语言支持失败：${e.message}")
-                settle(null)
+                settle(unanswered())
             }
         }
     }
@@ -401,23 +425,28 @@ class SpeechProbe(context: Context) {
      */
     fun currentLanguageTag(): String = Locale.getDefault().toLanguageTag()
 
-    private companion object {
-        const val TAG = "SpeechProbe"
+    companion object {
+        private const val TAG = "SpeechProbe"
 
         /** `Settings.Secure.VOICE_RECOGNITION_SERVICE`，API 29 起可读。 */
-        const val VOICE_RECOGNITION_SERVICE = "voice_recognition_service"
+        private const val VOICE_RECOGNITION_SERVICE = "voice_recognition_service"
 
         /**
          * 单个引擎的探测超时。
          *
-         * 800ms 是取舍：引擎正常应答在 100–300ms，但要先绑定服务；
-         * 完全不应答的引擎（被停用、未初始化）必须尽快放过，
-         * 否则 3 个引擎能让启动拖到 3 秒以上。
+         * 2500ms 是**实测改出来的**：早先写 800ms，理由是「引擎正常应答 100–300ms」——
+         * 那是服务已经热着时的数字。冷启动时要先 bind 服务、再让引擎初始化识别器，
+         * 魅族 20 上的 Google TTS 就是在这个窗口里超时的，于是它被当成不存在，
+         * 报告里只剩另一个明确不支持中文的引擎，结论变成「没有能用的」。
+         *
+         * 放宽的代价很小：探测全程在后台跑（桌宠启动时探一次，不阻塞长按），
+         * 多个引擎并行问，最坏也就多等 1.7 秒，而且结果会被缓存 15 秒。
+         * 而误判的代价是用户当场用不了语音——这个交换不划算才怪。
          */
-        const val PROBE_TIMEOUT_MS = 800L
+        const val PROBE_TIMEOUT_MS = 2_500L
 
         /**
-         * 引擎探测结果的**进程级**缓存。
+         * 探测结果的**进程级**缓存。
          *
          * 为什么不是实例字段：探测结果描述的是「这台设备上的引擎认不认当前语言」，
          * 与哪个 [SpeechProbe] 对象无关。做成实例字段的话，
@@ -425,13 +454,22 @@ class SpeechProbe(context: Context) {
          * 而那一刻恰恰是最需要看到结果的时刻。
          */
         @Volatile
-        var sharedEngines: List<EngineCapability>? = null
+        private var sharedEngines: List<EngineCapability>? = null
 
         /** 上次探测完成的时间，用于节流。 */
         @Volatile
-        var lastProbeAt = 0L
+        private var lastProbeAt = 0L
 
         /** 探测节流窗口：窗口内复用上次结果，不重复绑定引擎。 */
-        const val PROBE_THROTTLE_MS = 15_000L
+        private const val PROBE_THROTTLE_MS = 15_000L
+
+        /**
+         * 单个引擎的探测超时（毫秒），只读对外。
+         *
+         * 诊断报告要把它写出来：用户看到某个引擎「没问到」时，
+         * 需要知道这是「等了 2.5 秒也没回」而不是「它不支持」——
+         * 两者对应的动作完全不同（再点一次 / 去换引擎）。
+         */
+        val probeTimeoutMs: Long get() = PROBE_TIMEOUT_MS
     }
 }

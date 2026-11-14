@@ -123,6 +123,12 @@ object VoiceDiagnostics {
         } else if (engines.isEmpty()) {
             sb.appendLine("  探测不可用（系统版本低于 13，或查询不到识别服务）")
         } else {
+            // 每一项都要打出来，**包括没应答的**。
+            //
+            // 2026-11-14 的报告里设备有 2 个服务、这里只列了 1 个：被吞掉的正是
+            // 系统默认引擎。它没在超时内应答，旧代码把它当成不存在从列表里删了，
+            // 于是结论从「没问到」悄悄变成了「没有能用的」。诊断报告的价值全在
+            // 「把事实摆全」，少一行就可能把用户引到错误的修法上。
             engines.forEach { e ->
                 val fit = EngineSelector.fit(e)
                 val mark = if (e.isDefault) "[系统默认] " else ""
@@ -131,9 +137,22 @@ object VoiceDiagnostics {
             }
             val chosen = EngineSelector.pick(engines)
             sb.appendLine(
-                "  当前应使用：${chosen?.let { "${it.component}（${EngineSelector.describe(EngineSelector.fit(it))}）" }
-                    ?: "没有能用的 ← ${EngineSelector.MSG_NO_ENGINE_FOR_LANGUAGE}"}"
+                "  当前应使用：" + when {
+                    chosen == null -> "没有能用的 ← ${EngineSelector.MSG_NO_ENGINE_FOR_LANGUAGE}"
+                    // 没问到 ≠ 不支持：不给结论，按默认路径试。
+                    !chosen.probed ->
+                        "${chosen.component}（未应答，先按系统默认试一次；" +
+                            "失败会自动回落到错误码提示）"
+                    else -> "${chosen.component}（${EngineSelector.describe(EngineSelector.fit(chosen))}）"
+                }
             )
+            if (engines.any { !it.probed }) {
+                sb.appendLine(
+                    "  ← 标记为「没问到」的引擎不是不支持，是它没在 " +
+                        "${SpeechProbe.probeTimeoutMs} 毫秒内回答。多半是冷启动还没绑好服务，" +
+                        "再点一次诊断即可（不要据此判定它不能用）"
+                )
+            }
         }
 
         // —— 结论：两条路分开说 ——
@@ -141,11 +160,43 @@ object VoiceDiagnostics {
         // 为什么分开：两条路的前置条件不同（谁来录音），
         // 合成一句「语音可用/不可用」会把「桌宠能用但聊天页不能用」这种
         // 最常见的情况说成「全都不能用」，用户就没法判断该修哪边。
+        //
+        // 语言那一维只对桌宠算数：聊天页走的是系统识别页，页面上能自己换语言、
+        // 自己下语言包，我们拿引擎侧的探测结论去否定它属于越权判定
+        // （2026-11-14 的报告就是这么把聊天页误判成「不支持中文」的）。
         sb.appendLine("")
         sb.appendLine("结论（桌宠 · 自己录音）：${describe(probe.check(VoicePath.SelfRecorded))}")
         sb.appendLine("结论（聊天页 · 系统识别页）：${describe(probe.check(VoicePath.SystemPage))}")
+        sb.appendLine(
+            "  ← 聊天页那条路的语言由系统识别页自己处理，所以这里只看「能不能弹出识别页」；" +
+                "桌宠自己建识别器，语言必须提前判。"
+        )
 
         return sb.toString()
+    }
+
+    /**
+     * 先探一遍引擎，再出报告。
+     *
+     * 为什么不直接读缓存：用户点「语音诊断」的目的是**现在**这一秒的结论。
+     * 缓存可能是 14 秒前桌宠启动时探的，而那一轮里默认引擎正好在冷启动中超时
+     * ——读缓存等于把一次失败原样复述给用户，还会让「没问到」看起来像「不支持」。
+     *
+     * 强制重探（[SpeechProbe.probeEngines] 的 `force`）绕过节流，
+     * 回调在主线程，探测完成后才能拿到完整清单。
+     */
+    fun buildReportAsync(context: Context, onReady: (String) -> Unit) {
+        val app = context.applicationContext
+        SpeechProbe(app).probeEngines(force = true) {
+            val report = buildReport(app)
+            // 日志与报告用**同一份文本**：分两次生成的话，两次之间缓存可能被别的
+            // 线程刷新，开发者看到的日志与用户复制的报告就会不一致——那种不一致
+            // 会让「按报告排查」变成按一份过期的快照排查。
+            report.lines().forEach { line ->
+                if (line.isNotBlank()) AgentLogger.i(TAG, line)
+            }
+            onReady(report)
+        }
     }
 
     /**

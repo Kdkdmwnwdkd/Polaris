@@ -482,6 +482,144 @@ object SpeechCapabilityVerification {
             LanguageTag.canonical("zh_CN") == LanguageTag.canonical("zh-CN"),
         )
 
+        // ———— [E] 未应答的引擎：没问到 ≠ 不支持 ————
+        //
+        // 这一段是 2026-11-14 真机诊断报告的直接产物：设备 2 个识别服务，
+        // 报告只列出 1 个（默认那台没应答被丢弃），于是结论从「没问到」
+        // 变成了「没有能用的」。这类错误的代价是用户当场用不了语音，
+        // 而且看起来「有证据」——比报错更糟。
+        println()
+        println("[E] 行为：未应答的引擎（没问到 ≠ 不支持）")
+
+        val tts = EngineCapability(
+            component = "com.google.android.tts/.GoogleTTSRecognitionService",
+            isDefault = true,
+            probed = false,
+        )
+        val qualcomm = EngineCapability(
+            component = "com.qualcomm.qti.voiceai.speech/.SpeechRecognitionService",
+        )
+
+        check("E1 没问到 → 判 Unknown（不是 Unsupported）", EngineSelector.fit(tts) == EngineFit.Unknown)
+        check(
+            "E2 probed=false 时其余布尔一律不看（它们是默认值，不是证据）",
+            EngineSelector.fit(
+                EngineCapability(component = "x", installedOffline = true, probed = false)
+            ) == EngineFit.Unknown,
+        )
+        check(
+            "E3 未应答优先于明确不支持（没回答的值得试一次）",
+            EngineSelector.pick(listOf(tts, qualcomm))?.component == tts.component,
+        )
+        check(
+            "E4 真机那一幕：默认引擎未应答 + 另一个不支持中文 → 仍选默认，且不判死",
+            EngineSelector.pick(listOf(tts, qualcomm))?.isDefault == true &&
+                EngineSelector.languageVerdict(listOf(tts, qualcomm)) == true,
+        )
+        check(
+            "E5 确定的可用（在线）优先于未应答",
+            EngineSelector.pick(
+                listOf(tts, EngineCapability(component = "a", online = true))
+            )?.component == "a",
+        )
+        check(
+            "E6 离线已装优先于未应答",
+            EngineSelector.pick(
+                listOf(tts, EngineCapability(component = "a", installedOffline = true))
+            )?.component == "a",
+        )
+        check(
+            "E7 未应答排在 NeedsDownload 之后（能下包就别赌未知）",
+            EngineSelector.pick(
+                listOf(tts, EngineCapability(component = "a", supportedOffline = true))
+            )?.component == "a",
+        )
+        check(
+            "E8 只有未应答的引擎 → 判定仍然是「可以试」",
+            EngineSelector.languageVerdict(listOf(tts)) == true,
+        )
+        check(
+            "E9 明确不支持 + 未应答 → 可以试",
+            EngineSelector.languageVerdict(listOf(qualcomm, tts)) == true,
+        )
+        check(
+            "E10 全都明确不支持 → 仍然判不支持（不能放松这一条）",
+            EngineSelector.languageVerdict(listOf(qualcomm, qualcomm)) == false,
+        )
+        check(
+            "E11 Unknown 的排序值在 NeedsDownload 与 Unsupported 之间",
+            EngineFit.Unknown.rank > EngineFit.NeedsDownload.rank &&
+                EngineFit.Unknown.rank < EngineFit.Unsupported.rank,
+        )
+        check(
+            "E12 「没问到」与「不支持」的区别落在类型上（不靠文案长相）",
+            !EngineFit.Unknown.isDefinitelyUnsupported &&
+                EngineFit.Unsupported.isDefinitelyUnsupported &&
+                !EngineFit.ReadyOnline.isDefinitelyUnsupported,
+        )
+
+        // ———— [F] 两条路：语言这一维只对桌宠算数 ————
+        //
+        // 聊天页走系统识别页，页面里能自己换语言、自己下语言包。
+        // 我们拿引擎侧的探测结论去否定它，等于把一条本来能用的路自己堵死——
+        // 2026-11-14 的报告里聊天页就是这样被误判成「不支持中文」的。
+        println()
+        println("[F] 行为：语言判定只对自己录音的路径生效")
+
+        expect(
+            "F1 桌宠（自己录音）+ 引擎不认中文 → 拦下并给出路",
+            SpeechCapabilityPolicy.decide(
+                path = VoicePath.SelfRecorded,
+                hasRecognitionService = true,
+                hasDefaultEngine = true,
+                languageSupported = false,
+                hasMicPermission = true,
+            ),
+            "language_unsupported",
+        )
+        expect(
+            "F2 聊天页（系统识别页）+ 同一份探测结果 → 不许拦（页面自己处理语言）",
+            SpeechCapabilityPolicy.decide(
+                path = VoicePath.SystemPage,
+                hasRecognitionService = true,
+                hasDefaultEngine = true,
+                languageSupported = false,
+            ),
+            "available",
+        )
+        check(
+            "F3 聊天页被放行时不能带 SwitchEngine 出路（否则 UI 会弹「去换引擎」按钮骗人）",
+            SpeechCapabilityPolicy.decide(
+                path = VoicePath.SystemPage,
+                hasRecognitionService = true,
+                hasDefaultEngine = true,
+                languageSupported = false,
+            ) !is SpeechCapability.LanguageUnsupported,
+        )
+        expect(
+            "F4 桌宠语言未知（null）→ 放行，让引擎自己报错码",
+            SpeechCapabilityPolicy.decide(
+                path = VoicePath.SelfRecorded,
+                hasRecognitionService = true,
+                hasDefaultEngine = true,
+                languageSupported = null,
+                hasMicPermission = true,
+            ),
+            "available",
+        )
+        check(
+            "F5 语言不支持时出路必须是换引擎，不是换系统语言",
+            (
+                SpeechCapabilityPolicy.decide(
+                    path = VoicePath.SelfRecorded,
+                    hasRecognitionService = true,
+                    hasDefaultEngine = true,
+                    languageSupported = false,
+                    hasMicPermission = true,
+                ) as SpeechCapability.LanguageUnsupported
+                ).remedy == SpeechRemedy.SwitchEngine,
+        )
+
         println()
         println("=== 合计: ${passed + failed} 条，通过 $passed / 失败 $failed ===")
         if (failed > 0) {
