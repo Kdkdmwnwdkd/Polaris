@@ -145,8 +145,26 @@
 #      而聊天页输入框自动聚焦——用户正在打的字会被清空，那是数据丢失；
 #   ⑤ 转发层 4 行 + 设置开关的 facade/契约/页面共 12 行（不在本文件）。
 # 真正的新逻辑只有「判完就发一句『继续』」这一条；判定本身在 core，不占本文件。
+# 2026-11-14 撤销并重记（ChatViewModel 回到 3723）：语音识别能力判定。
+# 之前两条语音入口各自判断「这台机器能不能识别」，各自写文案——桌宠说「没有语音识别服务」、
+# 聊天页可能说「有服务」，用户会以为其中一边坏了。现在统一到 core/voice/SpeechCapabilityPolicy。
+# 当时在本文件加了 17 行转发层（micGranted / refreshMicPermission / micPermission），
+# 现在**全部撤掉**：它们只服务于「聊天页当场申请麦克风权限」那个功能，
+# 而那个功能的前提是错的（聊天页走系统识别页，录音在系统进程里，我们的权限与它无关）。
+# 能力判定本身在 core，不占本文件；本文件回到 3723 行。
 lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3723
-lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3186
+# 2026-11-14 重记（ChatScreen +45）：语音输入的能力预检与编排。
+# 增量分布：
+#   ① 能力预检：约 12 行（含 8 行注释）。系统识别页一旦弹出，用户就进入了一个
+#      走不出来的流程（有的 ROM 上那个页面没有「取消」），所以先自己判定；
+#   ② 发起识别的编排：约 10 行。构造 Intent 与「判定→动作」的映射抽到
+#      ui/VoiceInputLogic.kt（本文件只管「怎么发」，那里管「发什么」）；
+#   ③ 其余是压缩后的净增量（原本散在页面里的实现搬走了），以及**撤掉**了
+#      「缺权限就当场申请」那一套（launcher + 回调 + 状态，约 35 行，含注释）。
+#      撤掉的理由：那个前提是错的——聊天页走系统识别页，录音在系统进程里，
+#      我们的 RECORD_AUDIO 跟它无关。留着它会挡住一条本来能用的路。
+# 净增 45 行里 30 行是注释。真正的新逻辑只有「点麦克风前先判定能不能识别」这一条。
+lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3231
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1532
 lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1535

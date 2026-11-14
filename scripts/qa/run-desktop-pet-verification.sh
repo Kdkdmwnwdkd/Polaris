@@ -38,6 +38,8 @@ SESSION=app/src/main/java/com/beichen/polaris/pet/PetAgentSession.kt
 OVERLAY=app/src/main/java/com/beichen/polaris/pet/PetOverlay.kt
 PANEL=app/src/main/java/com/beichen/polaris/pet/PetPanel.kt
 VOICE=app/src/main/java/com/beichen/polaris/pet/PetVoice.kt
+# 探测层：两条语音入口共用的能力探测（2026-11-14 起权限判定挪到这里）
+PROBE_FILE=app/src/main/java/com/beichen/polaris/audio/SpeechProbe.kt
 TILE=app/src/main/java/com/beichen/polaris/pet/PetTileService.kt
 SETTINGS=app/src/main/java/com/beichen/polaris/ui/SettingsScreen.kt
 GRAPH=app/src/main/java/com/beichen/polaris/AppGraph.kt
@@ -354,19 +356,46 @@ else
 
   # H6 错误码必须逐条映射。全塞进「未知错误」等于没处理：
   # 用户看到「未知错误」只能再试一次，看到「没听到声音」才知道该大声点。
-  mapped=$(grep -c 'SpeechRecognizer.ERROR_' "$VOICE")
-  if [ "$mapped" -ge 8 ]; then
-    good "H6 错误码映射 $mapped 条（用户能据此知道该做什么）"
+  #
+  # 映射表现在住在 core/voice/SpeechCapabilityPolicy（2026-11-14 起）——
+  # 桌宠与聊天页共用一份，两边说法不一致会让人以为其中一边坏了。
+  # 所以这里数的是**那张表**里的分支数，不是桌宠文件里的常量出现次数。
+  #
+  # 数的范围是整个判定表文件，而不是某个函数体：那张表的 `when` 分支
+  # （"说什么" + "该做什么"）在 specFor 里，两个公开入口（explainError /
+  # remedyForError）都从它取。钉死函数名等于把实现细节写进断言——
+  # 改个函数名就红，而行为一点没变。
+  #
+  # 顺带验一件更要紧的事：桌宠真的在用那张表，而不是自己另写一套。
+  POLICY_FILE=core/src/main/java/com/beichen/polaris/core/voice/SpeechCapabilityPolicy.kt
+  if [ -f "$POLICY_FILE" ]; then
+    mapped=$(grep -cE 'ErrorCode\.[A-Z_]+ ->' "$POLICY_FILE")
+    if [ "$mapped" -ge 8 ]; then
+      good "H6 错误码映射 $mapped 条（用户能据此知道该做什么）"
+    else
+      bad "H6 错误码只映射了 $mapped 条 —— 其余会落到「识别失败」这种不可执行的文案"
+    fi
+    if grep -qF 'SpeechCapabilityPolicy.explainError(' "$VOICE"; then
+      good "H6b 桌宠走统一错误码翻译表（与聊天页说法一致）"
+    else
+      bad "H6b 桌宠没有走统一错误码翻译表 —— 同一错误码两个入口说法会不一样"
+    fi
   else
-    bad "H6 错误码只映射了 $mapped 条 —— 其余会落到「识别失败」这种不可执行的文案"
+    bad "H6 找不到统一错误码翻译表 core/voice/SpeechCapabilityPolicy.kt"
   fi
 
   # H7 权限必须查。Service 不能申请权限，只能查；不查就 start 会拿到
   # ERROR_INSUFFICIENT_PERMISSIONS，用户看到的是一句不像原因的原因。
-  if grep -q 'RECORD_AUDIO' "$VOICE"; then
-    good "H7 录音前检查麦克风权限，并给出可执行的提示"
+  #
+  # 2026-11-14：这条断言从「桌宠文件里出现 RECORD_AUDIO」改成
+  # 「桌宠走自己录音路径，且探测层确实查了麦克风权限」。
+  # 查的是**行为**（这条路径缺权限会被拦下并给引导），不是**查在哪个文件**——
+  # 桌宠文件里不再有权限代码了：权限判定挪进了统一的探测层（SpeechProbe）。
+  if grep -qF "VoicePath.SelfRecorded" "$VOICE" &&
+     grep -q "RECORD_AUDIO" "$PROBE_FILE"; then
+    good "H7 桌宠走自己录音路径，该路径的麦克风权限由探测层强制（缺权限 → 拦下并给引导）"
   else
-    bad "H7 没有检查 RECORD_AUDIO —— Service 申请不了权限，必须先查再给引导"
+    bad "H7 桌宠路径的麦克风权限没查 —— start 会拿到 ERROR_INSUFFICIENT_PERMISSIONS，用户看到的是一句不像原因的原因"
   fi
 fi
 

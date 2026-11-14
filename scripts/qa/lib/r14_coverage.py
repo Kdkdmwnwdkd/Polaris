@@ -20,6 +20,15 @@ sys.path.insert(0, os.path.join(ROOT, 'scripts/qa/lib'))
 UI = os.path.join(ROOT, 'app/src/main/java/com/beichen/polaris/ui')
 CONTRACTS = os.path.join(UI, 'contract')
 
+# 这些顶层类后面的 `xxx.yyy` 是 SDK 常量访问，不是契约成员访问。
+# 例：`Manifest.permission.RECORD_AUDIO` 里的 `permission.RECORD_AUDIO`。
+SDK_OWNERS = {
+    'Manifest', 'Build', 'Settings', 'Intent', 'Bundle', 'Uri', 'Context',
+    'Activity', 'Application', 'View', 'ViewGroup', 'Log', 'Color', 'ColorKt',
+    'Text', 'String', 'Toast', 'AlertDialog', 'Dialog', 'Notification',
+    'NotificationChannel', 'NotificationManager', 'ClipboardManager', 'ClipData',
+}
+
 
 def load():
     out = subprocess.check_output([sys.executable,
@@ -66,7 +75,31 @@ def main():
         for pname, itype in ps:
             # `vm::send` 与 `vm.send()` 一样是使用：方法引用在 Compose 回调里很常见，
             # 只认点号会把整批「通过 :: 传下去」的成员误判成死成员。
-            used = set(re.findall(r'\b' + re.escape(pname) + r'(?:\.|::)([A-Za-z_]\w*)', src))
+            #
+            # **必须排除带包名前缀的访问**：`Manifest.permission.RECORD_AUDIO` 里的
+            # `permission.RECORD_AUDIO` 会被正则当成「用了 permission 的 RECORD_AUDIO
+            # 成员」——而它其实是 Android SDK 的常量访问，跟契约成员毫无关系。
+            # 两条同名，误报的诊断信息（"屏幕越界使用 RECORD_AUDIO"）会把人引到
+            # 完全错误的方向上。
+            #
+            # 判据：成员名的**前一个标识符**是 `Manifest` / `Build` / `Settings` 这类
+            # 顶层类名时，说明访问来自 SDK 而非契约参数。
+            used = set()
+            for m in re.finditer(r'\b([A-Za-z_]\w*)\s*\.\s*' + re.escape(pname) +
+                                 r'(?:\.|::)\s*([A-Za-z_]\w*)', src):
+                # 前一个标识符是顶层类名 → 这是 SDK 常量访问，不是契约成员
+                if m.group(1) in SDK_OWNERS:
+                    continue
+                used.add(m.group(2))
+            # 裸用法（`vm.xxx`，前面不是 `某个类名.`）
+            for m in re.finditer(r'\b' + re.escape(pname) + r'(?:\.|::)\s*([A-Za-z_]\w*)', src):
+                prefix = src[:m.start()]
+                tail = prefix.rstrip()
+                if tail.endswith('.'):
+                    owner = re.search(r'([A-Za-z_]\w*)\s*\.$', tail)
+                    if owner and owner.group(1) in SDK_OWNERS:
+                        continue
+                used.add(m.group(1))
             allowed = set(closure[itype])
             under[(fn, itype)] = sorted(used - allowed)
             # 屏幕声明的是组合接口时，成员使用要沿继承链回填给每个子接口——
