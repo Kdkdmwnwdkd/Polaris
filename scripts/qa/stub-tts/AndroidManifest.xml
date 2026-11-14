@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.beichen.debug.tts">
+
+    <application android:label="StubTTS">
+        <activity
+            android:name=".DummyActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <service
+            android:name=".StubTtsService"
+            android:exported="true">
+            <!--
+                category DEFAULT 不能省：TextToSpeech 内部用
+                queryIntentServices(..., MATCH_DEFAULT_ONLY) 找引擎，
+                少了它返回空列表，客户端直接 dispatchOnInit(ERROR)，
+                而且一条日志都不打 —— 表现为「系统 TTS 未就绪」但查不到原因。
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.TTS_SERVICE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech.tts"
+                android:resource="@xml/tts_engine" />
+        </service>
+    </application>
+</manifest>

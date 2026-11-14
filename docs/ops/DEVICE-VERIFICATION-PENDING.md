@@ -1486,6 +1486,49 @@ App 里 baseUrl 填 `http://127.0.0.1:18080/v1`（`10.0.2.2` 在这条链路上�
 **仍然空白 6 条**：P12-3/4/5/6/7/8。P12-8 试过，但窗口停在展开态，拖动落进气泡内容区——
 得先收起成 84×84 才拖得动。
 
+### 第三轮（同日）：桩 TTS + 音频对端，P12 只剩 P12-4
+
+> 详见 `docs/archive/reports/模拟器实测-第三轮-2026-11-14.md`。
+
+上一轮之后，所有关于「朗读」的判据都卡在同一行日志上：`桌宠朗读失败：系统 TTS 未就绪`。
+AOSP 镜像没有任何 TTS 引擎。补法与桩识别服务同源：写一个继承 `TextToSpeechService` 的
+`com.beichen.debug.tts`（`scripts/qa/stub-tts/`），按文本长度吐等长静音 PCM。
+静音够用，因为仲裁依赖的是「播了多久」，不是「好不好听」。
+
+装上去仍失败，卡在三处，第一处最值得记：
+
+| 现象 | 真因 |
+|---|---|
+| `query-services` 能查到引擎，`tts_default_synth` 也设了，App 里却秒失败且**一条日志都没有** | `intent-filter` 缺 `<category android:name="android.intent.category.DEFAULT"/>`。`TextToSpeech` 用 `queryIntentServices(..., MATCH_DEFAULT_ONLY)`，无 DEFAULT 即返回空，`dispatchOnInit(ERROR)` 静默收场 |
+| `am startservice` 报 `app is in background uid null` | 新装的包 `stopped=true`，系统拒绝启动其服务，`bindService` 直接失败。用一个空 Activity `am start` 一次即可 |
+| 以为是 `BIND_TTS_SERVICE` 权限问题 | 不是。去掉权限声明后行为不变（客户端绑定引擎不需要该权限） |
+
+同时补了一个「另一个应用」的替身（`scripts/qa/audio-peer/`）：`mode=music` 持 `USAGE_MEDIA`
+焦点放正弦波，`mode=record` 用 `AudioRecord` 占麦克风。
+
+| 本轮新增 | 证据 |
+|---|---|
+| **P12-5** | 朗读第 4.96 秒（总长 6.82 秒）长按 → `Speak 被抢占（朗读）→ Capture`、`播报被 Capture 抢占，停止出声`、桩侧 `done written=204800/300080`（68% 处硬停）+ `onStop`、`迟到的释放被忽略：Speak#4（当前 Capture#5，被抢占）`，随后新回合照常跑完 |
+| **P12-6** | 对端持 `GAIN` 放音乐，朗读期间 `dumpsys audio` 事件日志：`ducking (strong) player piid:543` → 朗读结束 `unducking piid:543`。**对端收不到任何 focus 回调** —— Android 12+ 由系统代做 duck，不是对端没响应 |
+| **P12-7** | 对端 `AudioRecord` 录音中（`read n=1600 rms=3`）长按 → `[PetVoice] 麦克风被拒：audio_external_busy / 另一个应用正在录音`，气泡红字「另一个应用正在录音」，识别引擎压根没起 |
+| **P12-8** | 聆听中从 `(678,860)` 拖到 `(250,500)`：`frame=[636,817][720,901]` → `[636,690][720,774]`（贴边只允许垂直移动），9 秒后 `Capture#1 释放（语音输入结束）`，回合照常跑完 |
+| **P12-3（部分）** | 桩 `delay=7000`（模拟说完停 2 秒再等结果）：`onStartListening` → 7.0 秒后 `Capture#13 释放`，中间无任何提前释放或 `cancel`。**App 侧不存在 2 秒静音中断**；「两句都识别得出」取决于引擎 VAD，仍需真机 |
+| **P11-5 / P13-4 的朗读部分** | 朗读首次真的跑完：`onSynthesizeText len=31 -> 6820ms`、`done written=300080/300080`、`[Voice] Speak#2 释放（播报结束）`；焦点 `requestAudioFocus(req=3=GAIN_TRANSIENT_MAY_DUCK)` → `abandonAudioFocus` |
+
+**总账：28 条里 27 条有实测结论（其中 4 条带保留：P11-5 的语音质量、P12-3 的引擎侧、
+P13-1 的添加路径、P13-7 的无密码锁）。只剩 P12-4 一条必须真机。**
+
+**对判据说法的两处更正**：
+
+1. P12-6 原写「失败时最可能的原因：部分 ROM 不实现 ducking」。实际 Android 12+ 由系统直接 duck，
+   对端不回调是**新行为**，不是失败。`TextSpeaker.focusListener` 故意不处理 `CAN_DUCK` 是对的：
+   duck 归系统管，应用侧再压一次会叠成 0.04。
+2. P11-5 里「系统 TTS 未就绪」这条告警，下一步该查的不是语音包，而是引擎的 DEFAULT category。
+
+**system prompt 重复仍在**：本轮 15 次请求里 `req5` / `req10` 又出现 `['system','system',...]`，
+规律是「每个新进程里第一次带历史的请求」。修法同上一轮，仍未改代码。
+
+
 ---
 
 ## P11 桌面助手悬浮窗（桌宠一期，2026-11-13 落地）
