@@ -135,6 +135,30 @@ jobs:
             echo "POLARIS_SHIZUKU_ASSET=absent" >> "$GITHUB_ENV"
           fi
 
+      # 语音模型与原生推理库：离线音色（matcha 125MB）+ 声音克隆（ZipVoice 155MB）
+      # + sherpa-onnx 的 .so，全都不在仓库里（见 scripts/qa/fetch-tts-assets.py 开头）。
+      #
+      # 少了这一步，APK 依然能装、能启动，但音色页显示「模型未就绪」、
+      # 播报静默退回系统 TTS——用户拿到的是个没有声音的空壳（run 734 就是这样：
+      # 36MB，assets/tts 为空）。所以这里**故意不用 continue-on-error**：
+      # 宁可不发，也不发一个功能残缺的包。
+      - name: Cache TTS models
+        uses: actions/cache@v4
+        with:
+          path: .cache/tts
+          key: tts-assets-${{ hashFiles('scripts/qa/fetch-tts-assets.py') }}
+
+      - name: Fetch TTS runtime and models (构建时拉取，不进仓库)
+        run: |
+          python3 scripts/qa/fetch-tts-assets.py
+          # 目录「存在」不等于「有内容」：空目录也能过 ls，必须判非空。
+          du -sh app/src/main/assets/tts/matcha app/src/main/assets/tts/zipvoice
+          for d in matcha zipvoice; do
+            test -n "$(ls -A app/src/main/assets/tts/$d)" \
+              || { echo "::error::assets/tts/$d 为空，拒绝产出无声包"; exit 1; }
+          done
+          ls app/src/main/jniLibs/arm64-v8a/ | head
+
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
