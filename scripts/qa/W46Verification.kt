@@ -109,7 +109,12 @@ fun main() {
         // R-13 起超时是参数化的（build(connect, read, write, call)），不能再断言某个字面量调用；
         // 断言的是「预设值」与「调用点走了 build」，两者任一丢失都说明收口被绕开。
         assertTrue("LlmHttp 缺 readTimeout", ".readTimeout(read, TimeUnit.SECONDS)" in llmHttp)
-        assertTrue("LlmHttp 缺参数化构造", "private fun build(connect: Long, read: Long" in llmHttp)
+        // 签名可能换行排版（引入 ws 预设后多了 ping 参数，一行放不下），所以先折叠空白再比。
+        // 断言的意图是「存在一处参数化构造」，不是「恰好排成一行」——按字面比对会在
+        // 纯格式调整时误报，而误报的代价是整轮构建不发布。
+        // 折叠空白时 `build(` 与首参之间会留下一个空格，也要一并收掉。
+        val sig = llmHttp.replace(Regex("\\s+"), " ").replace("( ", "(")
+        assertTrue("LlmHttp 缺参数化构造", "fun build(connect: Long, read: Long" in sig)
         assertTrue("llm 预设 read 不是 180s", "read = 180" in llmHttp)
         assertTrue("short 预设 read 不是 30s", "read = 30" in llmHttp)
         assertTrue("download 预设 read 不是 120s", "read = 120" in llmHttp)
