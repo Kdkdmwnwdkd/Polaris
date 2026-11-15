@@ -103,43 +103,88 @@ class LocalVoiceEngine(private val context: Context) {
 
     private fun build(): OfflineTts {
         val dir = modelDir()
-        // 原生层失败时只回一句 `Invalid OfflineTtsConfig`，不说缺哪个文件；
-        // 而它失败得快（2ms），看不出是「没落盘」还是「配置不认」。先自己查一遍，
-        // 把「哪几个文件不在」直接写进异常——下次再出问题，日志本身就是答案。
-        val required = listOf(ACOUSTIC_MODEL, VOCODER, "lexicon.txt", "tokens.txt", "dict")
-        val missing = required.filter { rel ->
-            val f = File(dir, rel)
-            if (rel == "dict") !f.isDirectory || f.list()?.isNotEmpty() != true else f.length() <= 0
-        }
-        if (missing.isNotEmpty()) {
-            throw IllegalStateException("模型文件缺失：$missing（目录 ${dir.absolutePath}）")
-        }
+        checkFiles(dir)
         val ruleFsts = listOf("date.fst", "number.fst")
             .map { File(dir, it) }
             .filter { it.length() > 0 }
             .joinToString(",") { it.absolutePath }
-        val config = OfflineTtsConfig(
-            model = OfflineTtsModelConfig(
-                matcha = OfflineTtsMatchaModelConfig(
-                    acousticModel = File(dir, ACOUSTIC_MODEL).absolutePath,
-                    vocoder = File(dir, VOCODER).absolutePath,
-                    lexicon = File(dir, "lexicon.txt").absolutePath,
-                    tokens = File(dir, "tokens.txt").absolutePath,
-                    dictDir = File(dir, "dict").absolutePath,
-                    dataDir = dir.absolutePath,
-                ),
-                // 2 线程是 sherpa 官方示例的默认值：再多在手机上收益递减，
-                // 反而和前台 UI 抢核，桌宠动画会掉帧。
-                numThreads = 2,
-                debug = false,
-                provider = "cpu",
-            ),
-            ruleFsts = ruleFsts,
-            maxNumSentences = 1,
-            silenceScale = 0.2f,
+
+        // 原生层拒绝配置时只回一句 `Invalid OfflineTtsConfig: failed to create native
+        // OfflineTts`，不说是哪个字段。而 zipvoice 用同一套 JNI、同一批 .so 能成功，
+        // 差别只在 matcha 独有的 lexicon / dictDir / dataDir / ruleFsts 上。
+        //
+        // 于是在包内一次试完四种组合：失败只要 1ms，成功的那个留下来。
+        // 这不是「多试几次碰运气」，是把无法从 native 拿到的错误信息，
+        // 转换成「哪一组参数能被接受」——结果会写进日志，下一版据此收敛成一条。
+        val attempts = listOf(
+            Attempt("dataDir=模型目录、带标点规则", dir.absolutePath, ruleFsts),
+            Attempt("dataDir=空、带标点规则", "", ruleFsts),
+            Attempt("dataDir=空、无标点规则", "", ""),
+            Attempt("dataDir=模型目录、无标点规则", dir.absolutePath, ""),
         )
-        AgentLogger.i(tag, "本地 TTS 引擎初始化：$dir")
-        return OfflineTts(config = config)
+        var last: Exception? = null
+        for ((index, a) in attempts.withIndex()) {
+            try {
+                val tts = OfflineTts(config = configOf(dir, a.dataDir, a.ruleFsts))
+                AgentLogger.i(tag, "本地 TTS 引擎就绪（${a.label}）")
+                if (index > 0) {
+                    AgentLogger.w(tag, "本地 TTS 退到第 ${index + 1} 组配置：${a.label}")
+                }
+                return tts
+            } catch (e: Exception) {
+                AgentLogger.w(tag, "本地 TTS 配置被拒（${a.label}）：${e.javaClass.simpleName} ${e.message}")
+                last = e
+            }
+        }
+        throw last ?: IllegalStateException("本地 TTS 四组配置均被原生层拒绝")
+    }
+
+    private class Attempt(val label: String, val dataDir: String, val ruleFsts: String)
+
+    private fun configOf(dir: File, dataDir: String, ruleFsts: String) = OfflineTtsConfig(
+        model = OfflineTtsModelConfig(
+            matcha = OfflineTtsMatchaModelConfig(
+                acousticModel = File(dir, ACOUSTIC_MODEL).absolutePath,
+                vocoder = File(dir, VOCODER).absolutePath,
+                lexicon = File(dir, "lexicon.txt").absolutePath,
+                tokens = File(dir, "tokens.txt").absolutePath,
+                dictDir = File(dir, "dict").absolutePath,
+                dataDir = dataDir,
+            ),
+            // 2 线程是 sherpa 官方示例的默认值：再多在手机上收益递减，
+            // 反而和前台 UI 抢核，桌宠动画会掉帧。
+            numThreads = 2,
+            debug = false,
+            provider = "cpu",
+        ),
+        ruleFsts = ruleFsts,
+        maxNumSentences = 1,
+        silenceScale = 0.2f,
+    )
+
+    /**
+     * 初始化前把每个文件的字节数写进日志。
+     *
+     * 原生层的「找不到/读不了」只有一句没头没尾的报错，而磁盘上文件不完整
+     * （拷到一半被杀、空间不足）时长度照样大于 0，只看存在与否查不出来。
+     * 把长度摊开写，比对官方包就能立刻看出是哪个文件短了一截。
+     */
+    private fun checkFiles(dir: File) {
+        val required = listOf(
+            ACOUSTIC_MODEL, VOCODER, "lexicon.txt", "tokens.txt", "date.fst", "number.fst",
+        )
+        AgentLogger.i(
+            tag,
+            "本地模型体检：${required.joinToString(", ") { "$it=${File(dir, it).length()}" }}",
+        )
+        val missing = required.filter { File(dir, it).length() <= 0 }
+        val dictOk = File(dir, "dict").let { it.isDirectory && it.list()?.isNotEmpty() == true }
+        if (missing.isNotEmpty() || !dictOk) {
+            throw IllegalStateException(
+                "模型文件缺失：$missing" + if (dictOk) "" else " + dict 目录为空" +
+                    "（目录 ${dir.absolutePath}）"
+            )
+        }
     }
 
     /**

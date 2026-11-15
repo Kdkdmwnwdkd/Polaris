@@ -136,6 +136,21 @@ else
   fail "A14 缺前置自检 —— 故障又只剩一句 failed to create native OfflineTts"
 fi
 
+# 原生层拒绝配置时不说字段名，只能靠「哪一组参数能被接受」反推。
+# 这条守住那段降级尝试还在：删掉它，下次失败又变成纯黑盒。
+if grep -q 'Attempt(' "$LOCAL_ENGINE" && grep -q '配置被拒' "$LOCAL_ENGINE"; then
+  pass "A15 本地引擎带配置自愈（逐组尝试并记录被拒原因）"
+else
+  fail "A15 配置自愈被删 —— matcha 失败时无法归因"
+fi
+
+# 文件长度要摊在日志里：截断的文件长度照样 >0，只看存在与否查不出短了一截。
+if grep -q '本地模型体检' "$LOCAL_ENGINE"; then
+  pass "A16 初始化前打印各文件字节数"
+else
+  fail "A16 没有文件体检 —— 分不清「没落盘」与「落了半截」"
+fi
+
 echo ""
 echo "[B] 行为：真编真跑目录与回落链"
 
