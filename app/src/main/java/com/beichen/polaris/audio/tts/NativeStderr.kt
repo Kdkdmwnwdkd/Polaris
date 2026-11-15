@@ -86,6 +86,17 @@ object NativeStderr {
     @Synchronized
     fun clear() = recent.clear()
 
+    /**
+     * 清掉已捕获的原生行（AppGraph 对账要求每个全局 object 有 reset）。
+     *
+     * 只清缓冲，**不卸载 fd 2**：`dup2` 是单向覆盖，原始 fd 2 在 Android 上本来就
+     * 指向空设备，还原等于把报错重新丢回黑洞。`installed` / `readFd` 属于事实性状态，
+     * 重复 install 只会再建一条管道、多漏一个 fd。
+     */
+    fun reset() {
+        synchronized(this) { recent.clear() }
+    }
+
     /** 把原生层原话接在异常消息后面；没有捕获到就原样返回。 */
     fun withNative(cause: Throwable?): String {
         val base = cause?.message ?: cause?.javaClass?.simpleName ?: "未知原因"

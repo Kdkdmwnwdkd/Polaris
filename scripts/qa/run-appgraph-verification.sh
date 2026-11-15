@@ -79,9 +79,9 @@ for c in chunks:
 
 print(f"\n[A] 清单本体（解析到 {len(entries)} 条）")
 
-# 26 = 25 + 1：桌面助手引入 PetState（设置页开关 ↔ 悬浮窗 Service 的启停）。
+# 27 = 26 + 1：NativeStderr（进程级 fd 2 接管）随 TTS 诊断一起进来。
 # 数字变化必须有对应新增，不能为了让它变绿而调数字。
-check("A1 清单条数为 26", len(entries) == 26, f"实际 {len(entries)}")
+check("A1 清单条数为 27", len(entries) == 27, f"实际 {len(entries)}")
 
 names = [e["name"] for e in entries]
 dups = sorted({n for n in names if names.count(n) > 1})
