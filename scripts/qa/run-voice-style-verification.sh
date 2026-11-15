@@ -17,14 +17,10 @@ cd "$ROOT"
 CORE=core/src/main/java/com/beichen/polaris/core/voice
 CATALOG="$CORE/VoiceCatalog.kt"
 PLAN="$CORE/VoicePlan.kt"
-AVAIL="$CORE/VoiceAvailability.kt"
 SPEAKER=app/src/main/java/com/beichen/polaris/audio/TextSpeaker.kt
 VOICE_SPEECH=app/src/main/java/com/beichen/polaris/audio/tts/VoiceSpeech.kt
 LOCAL_ENGINE=app/src/main/java/com/beichen/polaris/audio/tts/LocalVoiceEngine.kt
 SCREEN=app/src/main/java/com/beichen/polaris/ui/VoiceStyleScreen.kt
-CLONE_SCREEN=app/src/main/java/com/beichen/polaris/ui/VoiceCloneScreen.kt
-CLONE_STORE=app/src/main/java/com/beichen/polaris/audio/tts/CloneVoiceStore.kt
-ZIP_ENGINE=app/src/main/java/com/beichen/polaris/audio/tts/ZipVoiceEngine.kt
 
 p=0; f=0
 pass() { echo "  PASS  $*"; p=$((p + 1)); }
@@ -85,36 +81,6 @@ else
   fail "A8 本地引擎缺模型配置或播放器不是整段播放"
 fi
 
-# 克隆的参考音频与参考文本必须同生同死：分开存，迟早出现「音频换了、文本还是旧的」，
-# 而 ZipVoice 对不上就只是「机主的声音变闷」，用户根本想不到是文本错了。
-if [ -f "$CLONE_STORE" ] && grep -qF "REF_WAV" "$CLONE_STORE" && grep -qF "REF_TEXT" "$CLONE_STORE"; then
-  pass "A9 参考音频与参考文本存在同一个目录（换一个必须换另一个）"
-else
-  fail "A9 参考音频与文本没有绑在一起 —— 会出现文本与音频不对应的静默降质"
-fi
-
-# 声音是生物识别级别的东西：不许上传。代码里出现上传路径就等于承诺被打破。
-if [ -f "$CLONE_STORE" ] && ! grep -qiE "HttpClient|OkHttp|URL\(|upload|multipart" "$CLONE_STORE" "$ZIP_ENGINE" 2>/dev/null; then
-  pass "A10 克隆链路里没有任何上传出口"
-else
-  fail "A10 克隆链路出现了网络上传 —— 声音数据不该离开设备"
-fi
-
-# 录音页必须把「要读的那句话」写出来：ZipVoice 的参考文本要逐字对应，
-# 用户自由发挥就会得到「像但发闷」的结果，而原因完全看不见。
-if [ -f "$CLONE_SCREEN" ] && grep -qF "REFERENCE_TEXT" "$CLONE_SCREEN"; then
-  pass "A11 录音页给出固定的参考文本"
-else
-  fail "A11 录音页没有固定参考文本 —— 克隆质量会不明原因下降"
-fi
-
-# 开麦前必须先停播报，否则录进去的是上一句机器音。
-if grep -qF "stopForRecording" "$CLONE_SCREEN" && grep -qF "stopForRecording" "$SPEAKER"; then
-  pass "A12 录音前先停播报"
-else
-  fail "A12 录音前没有停播报 —— 参考音频会混进上一句 TTS"
-fi
-
 echo ""
 echo "[B] 行为：真编真跑目录与回落链"
 
@@ -138,7 +104,6 @@ java -cp "$COMPILER_CP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -no-reflect -classpath "$STDLIB" -d "$OUT" -nowarn \
   "$CATALOG" \
   "$PLAN" \
-  "$AVAIL" \
   scripts/qa/VoiceStyleVerification.kt \
   2>&1 | grep -v '^warning:' | head -25
 

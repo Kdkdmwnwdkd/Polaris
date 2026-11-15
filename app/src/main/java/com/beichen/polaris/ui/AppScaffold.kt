@@ -152,8 +152,6 @@ enum class AppDest(
     VOICE("voice", "语音识别", "语音识别", Icons.Outlined.Mic),
     /** 音色子页：播报用哪个声音。与上一项（听谁的）是两件事，所以是两条路由。 */
     VOICE_STYLE("voice-style", "音色", "音色", Icons.Outlined.VolumeUp),
-    /** 录音克隆子页：录一句就把自己的声音变成一条可选音色。 */
-    VOICE_CLONE("voice-clone", "克隆我的声音", "克隆我的声音", Icons.Outlined.Mic),
     ABOUT("about", "关于", "关于", Icons.Outlined.Info);
 
     companion object {
@@ -733,12 +731,7 @@ private fun ScreenHost(
                         onDynamicColorChange
                     )
                     AppDest.VOICE -> VoiceEngineScreen(onOpenStyle = { onNavigate(AppDest.VOICE_STYLE) })
-                    AppDest.VOICE_STYLE -> VoiceStyleScreen(
-                        onOpenClone = { onNavigate(AppDest.VOICE_CLONE) }
-                    )
-                    AppDest.VOICE_CLONE -> VoiceCloneScreen(
-                        onBack = { onNavigate(AppDest.VOICE_STYLE) }
-                    )
+                    AppDest.VOICE_STYLE -> VoiceStyleScreen()
                     AppDest.ABOUT -> AboutScreen(
                         onOpenPermissionGuide = { onNavigate(AppDest.PERMISSION_GUIDE) }
                     )

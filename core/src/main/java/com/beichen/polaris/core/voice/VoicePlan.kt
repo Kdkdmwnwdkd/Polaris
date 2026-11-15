@@ -3,7 +3,7 @@ package com.beichen.polaris.core.voice
 /**
  * 一条候选被跳过的原因。
  *
- * 只列**已知的、可以提前判定的**情况：没网、模型没装、参考音频没了。
+ * 只列**已知的、可以提前判定的**两种情况：没网、模型没装。
  * 合成失败（接口 403、超时、服务端 500）不在这里——那是运行期事件，
  * 属于「试了才知道」，用 [VoiceAttemptResult.Failed] 表达。
  *
@@ -17,14 +17,6 @@ enum class VoiceSkip {
 
     /** 本地模型没下载/不完整。 */
     MODEL_MISSING,
-
-    /**
-     * 克隆音色的参考音频不在或太短。
-     *
-     * 与 [MODEL_MISSING] 分开，是因为用户能做的事不一样：一个是「等下/重装」，
-     * 一个是「重新录一句」。合并成「模型未就绪」，用户只会反复点、反复失败。
-     */
-    REFERENCE_MISSING,
 }
 
 /**
@@ -55,11 +47,6 @@ data class VoiceAttempt(
  * 等于「一断网就退回上个版本」。本地模型就是为这一步存在的：断网时它比系统好听，
  * 只是比在线平。跳过它，等于把已经付过体积代价的东西晾在那儿。
  *
- * ## 克隆音色为什么也用这条链
- *
- * 克隆是他自己的声音，掉到系统语音包落差最大——从「像自己」直接变成「电话机器人」。
- * 中间那档内置音色存在的意义，在这一条上比在任何一条上更明显。
- *
  * ## 为什么系统引擎永远排在最后而不是按「可用性」筛掉
  *
  * 系统有没有装中文语音包，只有 `TextToSpeech.setLanguage` 的返回值知道，
@@ -68,40 +55,18 @@ data class VoiceAttempt(
  */
 object VoicePlan {
 
-    /**
-     * 便捷入口：只看「有网没网、本地模型装没装」。
-     *
-     * 克隆音色永远不会从这条路进来（id 只可能是目录里的静态条目），
-     * 所以克隆那两个前提按「与本地模型同生同死」近似——真实调用请走
-     * [chain] 的 [VoiceAvailability] 重载，那里的事实是全的。
-     */
     fun chain(
         desiredId: String?,
         online: Boolean,
         localInstalled: Boolean,
-    ): List<VoiceAttempt> = chain(
-        desired = VoiceCatalog.require(desiredId),
-        availability = VoiceAvailability(
-            online = online,
-            localModel = localInstalled,
-            cloneModel = localInstalled,
-            reference = true,
-        ),
-    )
-
-    fun chain(
-        desired: VoiceProfile,
-        availability: VoiceAvailability,
     ): List<VoiceAttempt> {
+        val desired = VoiceCatalog.require(desiredId)
         val candidates = when (desired.kind) {
             // 用户选了在线：在线 → 本地 → 系统
             VoiceKind.ONLINE -> listOf(desired, VoiceCatalog.local, VoiceCatalog.system)
             // 用户选了本地：本地 → 系统。不再回在线——他选本地就是要离线，
             // 失败时偷偷联网既违背意图，也会在没网时多等一个超时。
             VoiceKind.LOCAL -> listOf(desired, VoiceCatalog.system)
-            // 用户选了克隆：克隆 → 本地 → 系统。克隆是本地的，
-            // 回在线等于「用他的声音失败后偷偷联网」，同样违背意图。
-            VoiceKind.CLONE -> listOf(desired, VoiceCatalog.local, VoiceCatalog.system)
             // 用户选了系统：就用系统。别替他升级。
             VoiceKind.SYSTEM -> listOf(VoiceCatalog.system)
         }
@@ -110,10 +75,8 @@ object VoicePlan {
             .filter { seen.add(it.id) }
             .map { profile ->
                 val skip = when {
-                    profile.kind == VoiceKind.ONLINE && !availability.online -> VoiceSkip.NO_NETWORK
-                    profile.kind == VoiceKind.LOCAL && !availability.localModel -> VoiceSkip.MODEL_MISSING
-                    profile.kind == VoiceKind.CLONE && !availability.cloneModel -> VoiceSkip.MODEL_MISSING
-                    profile.kind == VoiceKind.CLONE && !availability.reference -> VoiceSkip.REFERENCE_MISSING
+                    profile.kind == VoiceKind.ONLINE && !online -> VoiceSkip.NO_NETWORK
+                    profile.kind == VoiceKind.LOCAL && !localInstalled -> VoiceSkip.MODEL_MISSING
                     else -> null
                 }
                 VoiceAttempt(profile, skip)
