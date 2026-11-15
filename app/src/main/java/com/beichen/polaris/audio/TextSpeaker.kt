@@ -7,6 +7,7 @@ import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
+import com.beichen.polaris.audio.tts.VoiceSpeech
 import android.speech.tts.UtteranceProgressListener
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +59,17 @@ class TextSpeaker(context: Context) {
         runCatching { appContext.getSystemService(AudioManager::class.java) }.getOrNull()
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * 音色路由（在线/本地/系统）。
+     *
+     * 之所以挂在 `TextSpeaker` 上而不是让调用方各挑各的：播报态 [speaking] 是
+     * 打断仲裁的唯一事实来源，谁在出声必须由这里说。让 `ChatViewModel` 自己合成、
+     * 自己播，就会有第二份「正在说话」的判定，仲裁器看不到它。
+     *
+     * 构造很轻（不加载模型），模型与引擎在第一次真正要合成时才就位。
+     */
+    private val voice = VoiceSpeech(appContext)
 
     /** 是否持有音频焦点。speak 在主线程、onDone 在引擎线程，必须保证可见性。 */
     @Volatile
@@ -220,6 +232,40 @@ class TextSpeaker(context: Context) {
         mainHandler.postDelayed(r, delayMs)
     }
 
+    /**
+     * 音频片段的收尾。跑在播放线程上，所以只做线程安全的动作。
+     *
+     * 比对 id 的理由与 TTS 回调一致：被 `stop()` 之后，旧片段的完成回调仍可能迟到，
+     * 不比对就会把「新一句刚开始」写成「已说完」。
+     */
+    private fun onClipFinished(clipId: String) {
+        if (clipId != currentUtteranceId) return
+        currentUtteranceId = null
+        _speaking.value = false
+        finishUtterance()
+    }
+
+    /**
+     * 音频片段的卡死兜底。
+     *
+     * 时长已知，所以不必像系统引擎那样按字数估——直接按时长 + 5 秒余量。
+     * 用同一个 [watchdog] 字段：同一时刻只可能有一句在念，
+     * 两个兜底并存只会在 `stop()` 时漏掉其中一个。
+     */
+    private fun armClipWatchdog(clipId: String, durationMs: Long) {
+        disarmWatchdog()
+        val r = Runnable {
+            if (currentUtteranceId == clipId) {
+                currentUtteranceId = null
+                _speaking.value = false
+                runCatching { voice.stop() }
+                abandonFocus()
+            }
+        }
+        watchdog = r
+        mainHandler.postDelayed(r, durationMs.coerceAtLeast(1_000L) + 5_000L)
+    }
+
     private fun disarmWatchdog() {
         watchdog?.let { mainHandler.removeCallbacks(it) }
         watchdog = null
@@ -234,6 +280,20 @@ class TextSpeaker(context: Context) {
     suspend fun speak(text: String, language: String = "auto", rate: Float = 1.0f): Result<Unit> =
         withContext(Dispatchers.Main) {
             if (text.isBlank()) return@withContext Result.failure(IllegalArgumentException("文本为空"))
+
+            // 先试用户选的音色。合成失败不抛给上层——退到系统引擎，
+            // 让用户「听到难听的」而不是「什么都听不到」，同时把原因留在 [voice] 里。
+            val prepared = runCatching { voice.prepare(text.take(MAX_SPEAK_CHARS), rate) }.getOrNull()
+            if (prepared != null) {
+                val clipId = "voice_" + System.currentTimeMillis()
+                currentUtteranceId = clipId
+                requestFocus()
+                _speaking.value = true
+                armClipWatchdog(clipId, prepared.clip.durationMs)
+                voice.playAsync(prepared) { onClipFinished(clipId) }
+                return@withContext Result.success(Unit)
+            }
+
             if (!ensureReady()) {
                 return@withContext Result.failure(
                     IllegalStateException("系统 TTS 未就绪（设备可能没有语音引擎，或引擎初始化超时）")
@@ -276,6 +336,29 @@ class TextSpeaker(context: Context) {
         }
 
     /**
+     * 试听某个音色（不改用户的选择）。
+     *
+     * 与 [speak] 共用同一条播放与收尾路径：试听同样占麦克风、同样会被打断，
+     * 单独写一条「只播放不登记状态」的捷径，会让用户在试听时点麦克风录进去一段机器音。
+     */
+    suspend fun audition(profile: com.beichen.polaris.core.voice.VoiceProfile, text: String): Result<Unit> {
+        val prepared = runCatching { voice.prepareFor(profile, text, 1.0f) }.getOrNull()
+            ?: return Result.failure(
+                IllegalStateException(voice.lastDemotion() ?: "这个音色暂时发不出声")
+            )
+        val clipId = "audition_" + System.currentTimeMillis()
+        currentUtteranceId = clipId
+        requestFocus()
+        _speaking.value = true
+        armClipWatchdog(clipId, prepared.clip.durationMs)
+        voice.playAsync(prepared) { onClipFinished(clipId) }
+        return Result.success(Unit)
+    }
+
+    /** 上一次没用首选音色的原因；null = 没回落过。音色页用来解释「为什么听起来不是选的这个」。 */
+    val lastDemotion: String? get() = voice.lastDemotion()
+
+    /**
      * 立即停止播报。
      *
      * 与 `QUEUE_FLUSH` 的区别见类注释。停止后 [speaking] 立刻为 false，
@@ -283,6 +366,7 @@ class TextSpeaker(context: Context) {
      */
     fun stop() {
         disarmWatchdog()
+        runCatching { voice.stop() }
         runCatching { tts?.stop() }
         currentUtteranceId = null
         _speaking.value = false
@@ -292,6 +376,7 @@ class TextSpeaker(context: Context) {
     /** 停止并释放引擎（[AudioGraph.reset] 调用）。 */
     fun shutdown() {
         disarmWatchdog()
+        runCatching { voice.release() }
         runCatching {
             tts?.stop()
             tts?.shutdown()

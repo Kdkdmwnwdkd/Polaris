@@ -57,6 +57,7 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
@@ -149,6 +150,8 @@ enum class AppDest(
     APPEARANCE("appearance", "壁纸与颜色", "壁纸与颜色", Icons.Outlined.Palette),
     /** 语音引擎子页：桌宠的「去换引擎」要能直达（系统设置里很多机型没有这一项）。 */
     VOICE("voice", "语音识别", "语音识别", Icons.Outlined.Mic),
+    /** 音色子页：播报用哪个声音。与上一项（听谁的）是两件事，所以是两条路由。 */
+    VOICE_STYLE("voice-style", "音色", "音色", Icons.Outlined.VolumeUp),
     ABOUT("about", "关于", "关于", Icons.Outlined.Info);
 
     companion object {
@@ -727,7 +730,8 @@ private fun ScreenHost(
                         dynamicColor,
                         onDynamicColorChange
                     )
-                    AppDest.VOICE -> VoiceEngineScreen()
+                    AppDest.VOICE -> VoiceEngineScreen(onOpenStyle = { onNavigate(AppDest.VOICE_STYLE) })
+                    AppDest.VOICE_STYLE -> VoiceStyleScreen()
                     AppDest.ABOUT -> AboutScreen(
                         onOpenPermissionGuide = { onNavigate(AppDest.PERMISSION_GUIDE) }
                     )

@@ -83,6 +83,12 @@
 | `assets/bin/arm64-v8a/libtalloc.so.2` | 33 KB | Termux 官方预编译（proot 依赖） | LGPL-3.0 |
 | `assets/bin/arm64-v8a/libandroid-shmem.so` | 14 KB | Termux 官方预编译（Android 无 SysV shm 的垫片） | BSD-2-Clause |
 | `jniLibs/arm64-v8a/libproot.so` | 301 KB | 同上 proot，改名为 `.so` 以便落到 `nativeLibraryDir`（可 `execve`） | GPL-2.0 |
+| `jniLibs/arm64-v8a/libsherpa-onnx-jni.so` | ~4.7 MB | sherpa-onnx v1.12.4 官方 android 包（`scripts/qa/fetch-tts-assets.py` 取并瘦身） | Apache-2.0 |
+| `jniLibs/x86_64/libsherpa-onnx-jni.so` | ~5.1 MB | 同上（只为模拟器） | Apache-2.0 |
+| `assets/tts/matcha/*` | 72 MB | `matcha-icefall-zh-baker` + `vocos-22khz-univ.onnx`（k2-fsa 发布） | Apache-2.0（icefall 模型）；vocos 声码器 MIT |
+
+sherpa-onnx 的两部分（`app/src/main/java/com/k2fsa/sherpa/onnx/Tts.kt` 源码 + jni 库）
+同属 Apache-2.0，文件头保留了原版权声明。模型不进 git，由脚本下载——理由见脚本注释。
 
 GPL-2.0 合规措施：
 - `assets/3rdparty/proot/COPYING` 收录许可全文；
@@ -97,7 +103,7 @@ GPL-2.0 合规措施：
 |---|---|---|
 | MNN（阿里，静态库 ~6 MB） | 支持 taobao-mnn 模型目录格式；可走 OpenCL GPU | 北辰只支持 GGUF；多一个引擎 = 多一份内存占用与两套 prompt/KV 逻辑，收益不抵复杂度 |
 | LiteRT-LM（+22 MB） | 跑 `.litertlm` 专有格式 | 与 GGUF 能力重叠，纯增体积 |
-| sherpa-onnx（语音识别/TTS） | 本地语音对话 | 北辰没有本地语音需求（语音走系统 TTS/输入法） |
+| ~~sherpa-onnx（语音识别/TTS）~~ | 本地语音对话 | **2026-11-15 已改变**：系统 TTS 的音色由 ROM 决定（常见 8kHz 电话音），用户明确要「好听的声音」。只取 TTS 一半（不引识别），体积换音质，见 `docs/archive/reports/音色选择-实现报告-2026-11-15.md` |
 | Qualcomm QNN / GenieX（51 个 .so，~82 MB） | 骁龙 NPU 加速 | 需要按芯片离线转换模型，通用 GGUF 用不上；且要下载 82 MB 运行时 |
 | KleidiAI | ARM 官方 matmul 内核 | **值得跟进**：需要配套较新的 ggml，见「已知缺口」 |
 

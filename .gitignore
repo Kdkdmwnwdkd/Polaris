@@ -44,3 +44,9 @@ __pycache__/
 # CI 从 Actions Secrets 解出，本地放仓库外，口令写 local.properties（同样被忽略）。
 *.jks
 *.keystore
+# 本地 TTS 运行时与模型：可复现的第三方产物，用脚本取，不进 git
+# （72MB 模型 + 10MB .so；进 git 会让每次 clone 都拖一份二进制）
+# 取法：python3 scripts/qa/fetch-tts-assets.py
+app/src/main/jniLibs/*/libsherpa-onnx-jni.so
+app/src/main/assets/tts/
+.cache/tts/

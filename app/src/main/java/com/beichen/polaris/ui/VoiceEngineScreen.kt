@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -53,7 +54,7 @@ import com.beichen.polaris.core.voice.EngineSelector
  * 这一点必须写在页面上，否则用户改完引擎发现聊天页没变，会以为设置没生效。
  */
 @Composable
-fun VoiceEngineScreen() {
+fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
     val context = LocalContext.current
     var engines by remember { mutableStateOf<List<EngineCapability>?>(null) }
     var probing by remember { mutableStateOf(true) }
@@ -84,6 +85,17 @@ fun VoiceEngineScreen() {
             title = "语音识别",
             subtitle = "选一个引擎给桌宠用；聊天页走系统识别页，由系统决定",
         )
+
+        if (onOpenStyle != null) {
+            AkGroup(title = "相关", description = "识别是「听谁的」，音色是「说成谁的声」") {
+                AkListItem(
+                    icon = Icons.Outlined.VolumeUp,
+                    title = "去选音色",
+                    description = "桌宠与朗读用哪个声音；可逐条试听",
+                    onClick = onOpenStyle,
+                )
+            }
+        }
 
         AkGroup(
             title = "引擎",

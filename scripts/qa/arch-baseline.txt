@@ -180,7 +180,14 @@ lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1532
 # 增量 = 一条路由 + 两个一次性导航参数 + 一次 LaunchedEffect + 一个 when 分支。
 # 已压到最小：导航目标必须落在持有 route 状态的本文件里；
 # 抽成外部单例只能省 3 行，却会让「谁在改路由」变得不可追踪。
-lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1548
+#
+# 2026-11-15 再上调（AppScaffold +4，1548 → 1552）：音色子页。
+# 「听谁的」（识别）与「说成谁的声」（TTS）在系统设置里挤在同一个入口，
+# 在代码里却是两条互不影响的链。合成失败时用户要能自己去换声音，
+# 所以入口必须与识别页平级，而不是塞进识别页里当一行说明。
+# 增量 = 1 条路由枚举 + 2 行注释说明它与上一项的区别 + 1 行 when 分支 + 1 行 import。
+# 已压到最小：注释那两行是为了防止下一个人把两件事合回一处（真机上它们确实长得很像）。
+lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1552
 
 # 2026-11-13 上调（ChatScreen +5）：工具返回的图片改成采样解码。
 # decodeDataUrl / DataImage 原来直接 decodeByteArray 全尺寸解码，一张 4000×3000
