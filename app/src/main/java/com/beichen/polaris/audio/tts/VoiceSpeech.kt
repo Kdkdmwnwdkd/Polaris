@@ -42,6 +42,7 @@ class VoiceSpeech(private val context: Context) {
     private val tag = "Voice"
     private val appContext = context.applicationContext
     private val local = LocalVoiceEngine(appContext)
+    private val edge = EdgeTts(appContext)
     private val clone = ZipVoiceEngine(appContext)
     private val player = PcmPlayer(appContext)
 
@@ -162,6 +163,23 @@ class VoiceSpeech(private val context: Context) {
                 noteDemotion(demoted, candidate.profile)
                 Prepared(candidate.profile, clip)
             }
+            VoiceKind.ONLINE -> {
+                // 在线这一档是唯一「看运气」的：协议是网页端私有的，微软改一次就全 403。
+                // 所以失败必须原样说清楚（403/超时/0 字节），再交给回落链退到本地。
+                val clip = withTimeoutOrNull(EDGE_TIMEOUT_MS) {
+                    runCatching { edge.synthesize(candidate.profile, text, rate) }
+                        .onFailure {
+                            AgentLogger.w(tag, "在线合成失败：${it.message}")
+                        }
+                        .getOrNull()
+                } ?: run {
+                    AgentLogger.w(tag, "在线合成超时（${EDGE_TIMEOUT_MS}ms），本次退到本地音色")
+                    null
+                }
+                if (clip == null) return null
+                noteDemotion(demoted, candidate.profile)
+                Prepared(candidate.profile, clip)
+            }
             else -> null
         }
     }
@@ -237,6 +255,15 @@ class VoiceSpeech(private val context: Context) {
          * 30 秒是「慢得离谱但仍然可能是真的在算」与「已经死了」的分界。
          */
         const val CLONE_TIMEOUT_MS = 30_000L
+
+        /**
+         * 在线合成的硬上限。
+         *
+         * 正常往返 1~3 秒；20 秒还没回音基本就是网络已经断了而 socket 没察觉。
+         * 超过就当作这条失败，落到本地音色——用户宁可听到稍微平一点的声音，
+         * 也不要对着空气等半分钟。
+         */
+        const val EDGE_TIMEOUT_MS = 20_000L
     }
 
     private fun skipText(skip: VoiceSkip): String = when (skip) {

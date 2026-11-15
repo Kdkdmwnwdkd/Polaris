@@ -73,7 +73,13 @@ object VoiceCatalog {
         tagline = "离线可用 · 首次使用需下载 72MB 模型",
     )
 
-    /** 在线神经音色（同一批 Azure/Edge 音色，接口不同、听感一致）。 */
+    /**
+     * 在线神经音色（同一批 Azure/Edge 音色，接口不同、听感一致）。
+     *
+     * 免 key 可用：客户端自己算 `Sec-MS-GEC` 令牌即可（见 app 层 `SecMsGec`）。
+     * 但这是网页端私有协议，可能某天整体 403，所以回落链里它前面没有、
+     * 后面必有本地音色——失败时用户听到的是「没那么好听」，不是「没声音」。
+     */
     val online: List<VoiceProfile> = listOf(
         VoiceProfile("edge-xiaoxiao", "晓晓", VoiceKind.ONLINE, "zh", "女声 · 温柔", "zh-CN-XiaoxiaoNeural"),
         VoiceProfile("edge-xiaoyi", "晓伊", VoiceKind.ONLINE, "zh", "女声 · 活泼", "zh-CN-XiaoyiNeural"),
@@ -89,9 +95,9 @@ object VoiceCatalog {
     /**
      * 出厂默认：本地 22kHz。
      *
-     * 不选在线，是因为在线这一档当前**没有免 key 的合法接法**（见 `docs/ops` 2026-11-15 结论）：
-     * 默认指向一个需要用户填 key 的东西，等于第一次说话就是「请先配置」。
-     * 本地模型随包装在 assets 里，装完即用、断网也能用——它才是「开箱有声」的那一条。
+     * 不选在线，是因为它要联网：默认值必须是「装完立刻有声」，而不是「先确认网络」。
+     * 本地模型随包装在 assets 里，断网也能用——它才是「开箱有声」的那一条。
+     * 想要更好听的用户，去音色页把在线那一档点开即可，一个来回就能切换。
      */
     const val DEFAULT_ID = "local-matcha-22k"
 

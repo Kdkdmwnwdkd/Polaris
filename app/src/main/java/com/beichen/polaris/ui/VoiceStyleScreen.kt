@@ -44,14 +44,14 @@ import kotlinx.coroutines.launch
  * 音色是**听**出来的，不是看名字看出来的。「晓晓 · 温柔」对一个没听过的人来说
  * 等于没写。试听按钮是这一页存在的理由，不是附赠功能。
  *
- * ## 为什么在线那一组是灰的
+ * ## 在线那一组为什么现在能点了
  *
- * 2026-11-15 的结论：能免费白嫖的那批神经音色走的是微软网页版朗读接口，
- * 该接口已经上了防滥用校验，非官方客户端会被 403。要么用户自备服务端 key，
- * 要么就不该承诺「点开就能听」。
+ * 之前这 6 个只列出来、点不动：能免费用的那批神经音色走微软 Edge 朗读通道，
+ * 非官方客户端一律 403（缺 `Sec-MS-GEC` 令牌）。
  *
- * 所以这里把 6 个音色**列出来但标明未启用**——藏起来会让用户以为「说好的 6 个音色没了」；
- * 假装能用则会变成「点了没声音」，那更糟。等接上带 key 的官方接口，这一组直接点亮。
+ * 现在令牌在本地算（[com.beichen.polaris.audio.tts.SecMsGec]，与上游逐字节对拍），
+ * 所以不填任何 key 也能出声。代价是这条路是网页端私有协议，微软改一次就会 403——
+ * 因此它永远排在回落链前面而不是唯一一环：失败自动退到本地，用户不会没声音。
  *
  * ## 为什么「我的声音」排在最前
  *
@@ -176,22 +176,20 @@ fun VoiceStyleScreen(onOpenClone: (() -> Unit)? = null) {
 
         AkGroup(
             title = "在线神经音色",
-            description = "这批音色需要服务端 key，当前未启用；本地那一档不受影响",
+            description = "最像真人那一档，需要联网；断网会自动换成本地音色，不会没声音",
         ) {
             VoiceCatalog.online.forEach { profile ->
                 VoiceRow(
                     profile = profile,
                     selected = selected.id == profile.id,
-                    auditioning = false,
-                    enabled = false,
+                    auditioning = auditioning == profile.id,
+                    enabled = true,
                     onClick = {
-                        Toast.makeText(
-                            context,
-                            "在线音色还没接上服务端 key，暂时发不出声；本地 22kHz 现在就能用",
-                            Toast.LENGTH_LONG,
-                        ).show()
+                        VoiceStyleStore.select(context, profile.id)
+                        selected = profile
+                        audition(profile)
                     },
-                    onAudition = null,
+                    onAudition = { audition(profile) },
                 )
             }
         }

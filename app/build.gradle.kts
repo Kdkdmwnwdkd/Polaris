@@ -335,4 +335,9 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     // W-24：离线 OCR（中文 + 英文混排，模型打进 APK，不依赖 Google Play 服务/GMS）
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+
+    // 纯计算类（如微软朗读接口的令牌算法）用单元测试钉住已知输入输出。
+    // 这些算法错了只会表现为「在线音色 403」，在真机上根本看不出错在哪，
+    // 所以必须在离线就能对拍。
+    testImplementation("junit:junit:4.13.2")
 }
