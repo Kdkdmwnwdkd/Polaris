@@ -102,6 +102,9 @@ class LocalVoiceEngine(private val context: Context) {
     }
 
     private fun build(): OfflineTts {
+        // 必须先接管 stderr，再建引擎：sherpa 的 C++ 只在 stderr 里说真话，
+        // 而 Android 上 fd 2 默认什么都不通向，那几行原本是直接消失的。
+        NativeStderr.install()
         val dir = modelDir()
         checkFiles(dir)
         val ruleFsts = listOf("date.fst", "number.fst")
@@ -124,6 +127,8 @@ class LocalVoiceEngine(private val context: Context) {
         )
         var last: Exception? = null
         for ((index, a) in attempts.withIndex()) {
+            // 每组单独清一次：失败时取到的原话必须属于这一组，不能混进上一组的输出。
+            NativeStderr.clear()
             try {
                 val tts = OfflineTts(config = configOf(dir, a.dataDir, a.ruleFsts))
                 AgentLogger.i(tag, "本地 TTS 引擎就绪（${a.label}）")
@@ -132,11 +137,14 @@ class LocalVoiceEngine(private val context: Context) {
                 }
                 return tts
             } catch (e: Exception) {
+                // 原生层只回一句「配置无效」，不说字段名。它真正的理由留在 stderr，
+                // 这里必须原样带出来，否则又是「改一版猜一轮」。
                 AgentLogger.w(tag, "本地 TTS 配置被拒（${a.label}）：${e.javaClass.simpleName} ${e.message}")
+                AgentLogger.w(tag, "  └ 原生层原话：${NativeStderr.tail().ifBlank { "（未捕获到）" }}")
                 last = e
             }
         }
-        throw last ?: IllegalStateException("本地 TTS 四组配置均被原生层拒绝")
+        throw IllegalStateException(NativeStderr.withNative(last))
     }
 
     private class Attempt(val label: String, val dataDir: String, val ruleFsts: String)

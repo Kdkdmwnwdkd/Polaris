@@ -132,6 +132,7 @@ class ZipVoiceEngine(private val context: Context) {
     }
 
     private fun build(): OfflineTts {
+        NativeStderr.install()
         val dir = destDir()
         // 同 LocalVoiceEngine：原生层的报错不带缺了哪个文件，自己先查。
         val missing = REQUIRED_FILES.filter { rel ->
@@ -160,7 +161,13 @@ class ZipVoiceEngine(private val context: Context) {
             silenceScale = 0.2f,
         )
         AgentLogger.i(tag, "克隆引擎初始化：$dir")
-        return OfflineTts(config = config)
+        NativeStderr.clear()
+        return try {
+            OfflineTts(config = config)
+        } catch (e: Exception) {
+            AgentLogger.w(tag, "  └ 原生层原话：${NativeStderr.tail().ifBlank { "（未捕获到）" }}")
+            throw IllegalStateException(NativeStderr.withNative(e))
+        }
     }
 
     private fun destDir(): File = TtsAssetInstaller.destDir(context, DIR_NAME)
