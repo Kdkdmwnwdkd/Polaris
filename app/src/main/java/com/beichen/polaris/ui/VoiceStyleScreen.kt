@@ -176,7 +176,7 @@ fun VoiceStyleScreen(onOpenClone: (() -> Unit)? = null) {
 
         AkGroup(
             title = "在线神经音色",
-            description = "最像真人那一档，需要联网；断网会自动换成本地音色，不会没声音",
+            description = "最像真人那一档，需要联网；接口失效或断网会自动换成本地音色——最坏是没那么好听，不会没声音",
         ) {
             VoiceCatalog.online.forEach { profile ->
                 VoiceRow(

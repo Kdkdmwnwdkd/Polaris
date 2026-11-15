@@ -2,8 +2,8 @@ package com.beichen.polaris.audio.tts
 
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.llm.LlmHttp
 import com.beichen.polaris.core.voice.VoiceProfile
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -43,12 +43,9 @@ class EdgeTts(private val context: Context) {
 
     private val tag = "Voice"
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        .readTimeout(READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        // WebSocket 靠 ping 保活；服务端在长句上会静默十几秒。
-        .pingInterval(20, TimeUnit.SECONDS)
-        .build()
+    // 复用全仓唯一的 OkHttp 配置（R-13）：这里**不许**自己 new Builder。
+    // 长连接的读超时语义与普通请求不同，所以用的是 ws 预设（读 60s + 20s ping 保活）。
+    private val client = LlmHttp.ws
 
     /**
      * 合成一段话。
@@ -184,10 +181,9 @@ class EdgeTts(private val context: Context) {
 
     private companion object {
         const val OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3"
-        const val CONNECT_TIMEOUT_MS = 10_000L
-        const val READ_TIMEOUT_MS = 30_000L
-
-        /** 一句话的正常往返是 1~3 秒；给到 20 秒是留给弱网，再久就当它挂了。 */
+        /** 一句话的正常往返是 1~3 秒；给到 20 秒是留给弱网，再久就当它挂了。
+         *  注意它必须小于 [LlmHttp.ws] 的读超时（60s），否则先被读超时打断，
+         *  报出来的会是「连接超时」而不是「这句太长/网络太慢」。 */
         const val TOTAL_TIMEOUT_MS = 20_000L
 
         const val USER_AGENT =

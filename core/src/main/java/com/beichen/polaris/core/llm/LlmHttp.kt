@@ -59,6 +59,20 @@ object LlmHttp {
     val download: OkHttpClient by lazy { build(connect = 30, read = 120, write = 60, call = 0) }
 
     /**
+     * 长连接通道：`WebSocket`（在线语音合成走这条）。
+     *
+     * 为什么单独一档而不是复用 [short]：WebSocket 一旦建立，`readTimeout` 就不再是
+     * 「请求多久没响应」，而变成「两帧之间允许多久没消息」。在线 TTS 的长句、长停顿
+     * 都可能超过 30 秒的读超时，用 [short] 会在句子中间被自己掐断——听到的是「说到一半没了」。
+     *
+     * 所以这里把读超时放到 60 秒，并用 `pingInterval` 主动保活（服务端看到 pong 就不会断）。
+     * 真正的上限由调用方的协程超时兜底（`VoiceSpeech` 里是 20 秒硬上限）。
+     */
+    val ws: OkHttpClient by lazy {
+        build(connect = 10, read = 60, write = 30, call = 0, ping = 20)
+    }
+
+    /**
      * 兼容旧调用点，语义等同 [llm]。
      *
      * 保留它而不是直接改名，是因为 LLM 三处客户端（`LLMClient` / `ClaudeClient` / `GeminiClient`）
@@ -66,12 +80,20 @@ object LlmHttp {
      */
     val shared: OkHttpClient get() = llm
 
-    private fun build(connect: Long, read: Long, write: Long, call: Long): OkHttpClient =
+    private fun build(
+        connect: Long,
+        read: Long,
+        write: Long,
+        call: Long,
+        ping: Long = 0,
+    ): OkHttpClient =
         OkHttpClient.Builder()
             .connectTimeout(connect, TimeUnit.SECONDS)
             .readTimeout(read, TimeUnit.SECONDS)
             .writeTimeout(write, TimeUnit.SECONDS)
             .callTimeout(call, TimeUnit.SECONDS)
+            // 0 = 不发 ping（普通请求不需要保活帧）。
+            .pingInterval(ping, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
 }

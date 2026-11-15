@@ -33,11 +33,39 @@ fi
 export QA_GRADLE_CACHE
 KC_HOME=${KOTLINC_HOME:-/tmp/kotlinc}
 
+# qa_kotlin_version：缓存里 kotlin-compiler-embeddable 的版本号（取不到输出空串）。
+#
+# 为什么需要它：缓存里常常同时躺着多个 Kotlin 版本（本机实测 1.9.23 / 1.9.25 / 2.2.21），
+# 而 `qa_find_jar` 取的是**最新**那个。于是 stdlib 拿到 2.2.21、编译器还是 1.9.25，
+# 编译器读不懂 2.x 的 metadata，报的是 `unresolved reference: listOf`——
+# 看着像源码写错了，实际是 classpath 里混进了另一代的标准库。
+# 2026-11-15 就是这条让 741 的 B 段整段没跑成。
+qa_kotlin_version() {
+    local jar
+    jar=$(find "$QA_GRADLE_CACHE/org.jetbrains.kotlin/kotlin-compiler-embeddable" \
+        -type f -name 'kotlin-compiler-embeddable-*.jar' 2>/dev/null \
+        | grep -v -- '-sources' | sort -V | tail -1)
+    [ -n "$jar" ] || return 0
+    printf '%s' "$jar" | sed -E 's#.*/kotlin-compiler-embeddable/([^/]+)/.*#\1#'
+}
+
 # qa_find_jar <组织路径目录> <构件通配>
 # 输出：首个匹配的 jar 绝对路径；找不到输出空串（调用方可用 [ -n ] 判断）
 qa_find_jar() {
-    local dir="$1" pattern="$2"
+    local dir="$1" pattern="$2" ver hit
     [ -d "$dir" ] || return 0
+    # Kotlin 自家人（stdlib / reflect / script-runtime）必须与编译器同版本，
+    # 否则 metadata 代差会伪装成语法错误。见 qa_kotlin_version 的说明。
+    case "$dir" in
+        */kotlin-stdlib|*/kotlin-stdlib/*|*/kotlin-reflect|*/kotlin-script-runtime)
+            ver=$(qa_kotlin_version)
+            if [ -n "$ver" ] && [ -d "$dir/$ver" ]; then
+                hit=$(find "$dir/$ver" -type f -name "$pattern" 2>/dev/null \
+                    | grep -v -- '-sources' | sort -V | tail -1)
+                if [ -n "$hit" ]; then printf '%s\n' "$hit"; return 0; fi
+            fi
+            ;;
+    esac
     # W-46：按**版本序**取最新（sort -V），不能用字典序 head -1。
     # 缓存里同时存在 1.5.0 与 1.8.1 时，字典序会把 1.5.0 排在前面，harness 于是用旧
     # coroutines 编译/运行——`CoroutineDispatcher.limitedParallelism` 在 1.6 才引入，

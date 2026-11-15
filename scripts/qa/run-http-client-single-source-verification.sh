@@ -74,6 +74,15 @@ else
   bad "B3 download 取值被改动（原 30/120）"
 fi
 
+# 长连接是第四档，语义与前三档都不同：WebSocket 建立后 readTimeout 变成
+# 「两帧之间允许多久没消息」，短档的 30s 会在长句中间把自己掐断。
+# 它必须带 ping 保活，否则服务端静默十几秒就断，表现是「说到一半没了」。
+if grep -qE 'val ws: OkHttpClient by lazy \{' "$HUB" && grep -qE 'ping = 20' "$HUB"; then
+  good "B4 ws = 10/60 + 20s ping（长连接保活）"
+else
+  bad "B4 ws 预设缺失或丢了 ping 保活 —— 长句会说到一半断掉"
+fi
+
 echo ""
 echo "[C] 兼容别名"
 

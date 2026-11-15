@@ -25,6 +25,7 @@ SCREEN=app/src/main/java/com/beichen/polaris/ui/VoiceStyleScreen.kt
 CLONE_SCREEN=app/src/main/java/com/beichen/polaris/ui/VoiceCloneScreen.kt
 CLONE_STORE=app/src/main/java/com/beichen/polaris/audio/tts/CloneVoiceStore.kt
 ZIP_ENGINE=app/src/main/java/com/beichen/polaris/audio/tts/ZipVoiceEngine.kt
+EDGE_TTS=app/src/main/java/com/beichen/polaris/audio/tts/EdgeTts.kt
 
 p=0; f=0
 pass() { echo "  PASS  $*"; p=$((p + 1)); }
@@ -65,18 +66,43 @@ else
   fail "A5 回落原因没有落到界面 —— 用户只会觉得「设置没生效」"
 fi
 
-# 车不能开到「用逆向接口白嫖在线音色」上：那是会被 403 挡掉、且失败方式与断网无法区分的路。
-if ! grep -rqiE "speech\.platform\.bing\.com|Sec-MS-GEC|edge-tts" app/src core/src 2>/dev/null; then
-  pass "A6 代码里没有逆向的在线合成接口"
+# 在线这一档走的是微软 Edge 朗读的网页端通道（`Sec-MS-GEC` 令牌在本地算）。
+#
+# 这条断言原来写的是「代码里根本不许出现它」——2026-11-15 之前，那是对的：
+# 那时没接、也不打算接。现在它接了，但**接法本身仍然是有风险的**，所以断言要换，
+# 不能删：逆向通道放开之后，真正要防的变成下面三件事，三件都会让人「点了没声音」——
+#   1. 扩散：这段协议散到两处以上，改接口时改漏一处，表现只是某个音色不出声；
+#   2. 上移：core（回落链所在层）开始联网，「断网退回本地」这条链就不再是纯本地的；
+#   3. 裸奔：自己 new 一个 OkHttpClient，超时/保活又变成没人说得清的值。
+# 判据只看「真正会发出请求的东西」：接口 host 字面量、以及令牌算法的实现文件。
+# 不扫注释和测试——它们提到这件事是为了解释风险，删掉注释只会让下一个人再踩一次。
+URL_HITS=$(grep -rlE "speech\.platform\.bing\.com" app/src/main core/src --include=*.kt 2>/dev/null | sort)
+URL_IN_CORE=$(printf '%s\n' "$URL_HITS" | grep '^core/' || true)
+TOKEN_IMPL=$(grep -rlE "fun token\(unixSeconds|TRUSTED_CLIENT_TOKEN =" app/src/main --include=*.kt 2>/dev/null | grep -v '/test/' | sort)
+
+if [ -z "$URL_IN_CORE" ] && [ "$URL_HITS" = "app/src/main/java/com/beichen/polaris/audio/tts/EdgeTts.kt" ] \
+   && [ "$TOKEN_IMPL" = "app/src/main/java/com/beichen/polaris/audio/tts/SecMsGec.kt" ]; then
+  pass "A6 在线接口只在 EdgeTts.kt、令牌只在 SecMsGec.kt、core（回落链层）零联网"
 else
-  fail "A6 出现了逆向在线接口 —— 它会在某天全量 403，且与断网无法区分"
+  fail "A6 在线接口/令牌的实现位置不对（core 必须为空、各只许一处）：
+URL: $URL_HITS
+TOKEN: $TOKEN_IMPL"
 fi
 
-# 在线音色当前未接入：界面必须明说，不能点一下什么都不发生。
-if grep -qF "需 key" "$SCREEN" && grep -qF "暂未启用" "$SCREEN" || grep -qF "还没接上服务端 key" "$SCREEN"; then
-  pass "A7 在线音色在界面上标明未启用"
+# 它必须复用全仓唯一的 OkHttp 配置，自己 new 一个就等于超时值又没人管了。
+if grep -qF "LlmHttp.ws" "$EDGE_TTS" && ! grep -qF "OkHttpClient.Builder()" "$EDGE_TTS"; then
+  pass "A6b EdgeTts 复用 LlmHttp.ws（不新建客户端）"
 else
-  fail "A7 在线音色没有状态说明 —— 用户会以为功能坏了"
+  fail "A6b EdgeTts 自建了 OkHttpClient —— 超时与保活又变成私有的"
+fi
+
+# 在线能点之后，界面必须同时说清两件事：要联网、失败会自动换本地。
+# 少任何一句，用户点下去没声音时都会判定「功能坏了」而不是「这条路今天不通」。
+if grep -qF "在线神经音色" "$SCREEN" && grep -qF "enabled = true" "$SCREEN" \
+   && grep -qF "需要联网" "$SCREEN" && grep -qF "自动换成本地音色" "$SCREEN"; then
+  pass "A7 在线音色可点，且界面写明「要联网 / 失败自动换本地」"
+else
+  fail "A7 在线音色状态说明不全 —— 用户会以为功能坏了"
 fi
 
 if grep -qF "matcha" "$LOCAL_ENGINE" && grep -qF "MODE_STATIC" app/src/main/java/com/beichen/polaris/audio/tts/PcmPlayer.kt; then
