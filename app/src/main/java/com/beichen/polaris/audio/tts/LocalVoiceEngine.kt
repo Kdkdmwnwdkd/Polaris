@@ -46,6 +46,10 @@ class LocalVoiceEngine(private val context: Context) {
     @Volatile
     private var tts: OfflineTts? = null
 
+    /** 本进程内是否已确认模型落盘。展开是幂等的，但没必要每次合成都遍历一遍目录。 */
+    @Volatile
+    private var expanded = false
+
     /**
      * 模型是否可用：已展开 **或** 包里带着（首次点击时才展开）。
      *
@@ -69,10 +73,12 @@ class LocalVoiceEngine(private val context: Context) {
      */
     suspend fun synthesize(text: String, speed: Float): AudioClip = withContext(Dispatchers.IO) {
         mutex.withLock {
-            if (!isReady()) {
-                // 首次使用：从 assets 展开。放在锁里做，避免两句话同时展开同一批文件。
-                extractAssets()
-            }
+            // 无条件保证落盘。**不能写成 `if (!isReady())`**：isReady 现在把「包里有」
+            // 也算就位（为了不自锁），那条件在首次安装时恒为 false —— 判定说就绪、
+            // 展开永不发生、磁盘上始终是空的，原生层 2ms 后回一句
+            // `Invalid OfflineTtsConfig`，而日志里连一行「模型展开」都不会有。
+            // 736 就是这么挂的。放在锁里做，避免两句话同时展开同一批文件。
+            ensureExpanded()
             val engine = tts ?: build().also { tts = it }
             val started = System.currentTimeMillis()
             val audio = engine.generate(text, sid = SPEAKER_ID, speed = speed.coerceIn(0.5f, 2.0f))
@@ -97,6 +103,17 @@ class LocalVoiceEngine(private val context: Context) {
 
     private fun build(): OfflineTts {
         val dir = modelDir()
+        // 原生层失败时只回一句 `Invalid OfflineTtsConfig`，不说缺哪个文件；
+        // 而它失败得快（2ms），看不出是「没落盘」还是「配置不认」。先自己查一遍，
+        // 把「哪几个文件不在」直接写进异常——下次再出问题，日志本身就是答案。
+        val required = listOf(ACOUSTIC_MODEL, VOCODER, "lexicon.txt", "tokens.txt", "dict")
+        val missing = required.filter { rel ->
+            val f = File(dir, rel)
+            if (rel == "dict") !f.isDirectory || f.list()?.isNotEmpty() != true else f.length() <= 0
+        }
+        if (missing.isNotEmpty()) {
+            throw IllegalStateException("模型文件缺失：$missing（目录 ${dir.absolutePath}）")
+        }
         val ruleFsts = listOf("date.fst", "number.fst")
             .map { File(dir, it) }
             .filter { it.length() > 0 }
@@ -126,13 +143,20 @@ class LocalVoiceEngine(private val context: Context) {
     }
 
     /**
-     * 首次使用时把 assets 里的模型展开到 filesDir。
+     * 保证 `filesDir/tts/matcha` 里文件齐。
      *
-     * 展开细节（逐文件比长度、能续传）在 [TtsAssetInstaller]：克隆音色那边要展开另一套
-     * 模型，逻辑一模一样。两份各写一遍，迟早有一边忘了比长度。
+     * 与 [isReady] 分得很清：[isReady] 回答「这个音色能不能用」（包里有就算能用，
+     * 否则回落链会把它跳过）；这里回答「磁盘上现在有没有」（没有就去拷）。
+     * 把两件事合成一件，就是 736 的自锁。
+     *
+     * 幂等：逐文件比长度，齐了就 0 拷贝，只花目录遍历的时间。
      */
-    private fun extractAssets() {
-        TtsAssetInstaller.expand(context, ASSET_ROOT, modelDir())
+    private fun ensureExpanded() {
+        if (expanded) return
+        val dir = modelDir()
+        val copied = TtsAssetInstaller.expand(context, ASSET_ROOT, dir)
+        AgentLogger.i(tag, "本地模型就位：${dir.absolutePath}（本次补拷 $copied 个文件）")
+        expanded = true
     }
 
     private fun modelDir(): File = TtsAssetInstaller.destDir(context, "matcha")

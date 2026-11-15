@@ -115,6 +115,27 @@ else
   fail "A12 录音前没有停播报 —— 参考音频会混进上一句 TTS"
 fi
 
+# 展开必须无条件执行。
+#
+# 这个环已经踩了两次：isReady() 为了不自锁，把「包里带着」也算就位；而展开曾经写在
+# `if (!isReady())` 底下。于是首次安装时条件恒为 false —— 判定说就绪、展开永不发生、
+# filesDir 永远是空的，原生层 2ms 后只回一句 `Invalid OfflineTtsConfig`，
+# 日志里连一行「模型展开」都不会有。用户听到的是一声不吭，看不出任何线索。
+if ! grep -qE '^[^/*]*if \(!isReady\(\)\)' "$LOCAL_ENGINE" "$ZIP_ENGINE" 2>/dev/null \
+  && grep -q 'ensureExpanded()' "$LOCAL_ENGINE" && grep -q 'ensureExpanded()' "$ZIP_ENGINE"; then
+  pass "A13 模型展开无条件执行（不再被 isReady 挡住）"
+else
+  fail "A13 展开仍挂在 if (!isReady()) 下 —— 首次安装必然静音"
+fi
+
+# 原生层失败只有一句 `failed to create native OfflineTts`，不说缺哪个文件。
+# 自己先查一遍，把「哪几个不在」写进异常：下次再出问题，日志本身就是答案。
+if grep -q '模型文件缺失' "$LOCAL_ENGINE" && grep -q '克隆模型文件缺失' "$ZIP_ENGINE"; then
+  pass "A14 引擎初始化前自检文件，缺失时点名"
+else
+  fail "A14 缺前置自检 —— 故障又只剩一句 failed to create native OfflineTts"
+fi
+
 echo ""
 echo "[B] 行为：真编真跑目录与回落链"
 
