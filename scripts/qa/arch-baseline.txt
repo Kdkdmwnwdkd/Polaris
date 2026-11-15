@@ -187,14 +187,7 @@ lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1532
 # 所以入口必须与识别页平级，而不是塞进识别页里当一行说明。
 # 增量 = 1 条路由枚举 + 2 行注释说明它与上一项的区别 + 1 行 when 分支 + 1 行 import。
 # 已压到最小：注释那两行是为了防止下一个人把两件事合回一处（真机上它们确实长得很像）。
-#
-# 2026-11-15 三度上调（AppScaffold +7，1552 → 1559）：克隆音色子页。
-# 与上次同源的理由——「听谁的」「说成谁的声」是两条链，而克隆是第三条：
-# 它不是「选一个音色」，是「录一段再生成一个」。塞进音色页会把「选」和「录」
-# 混成同一屏，用户分不清「选中」和「录完自动选中」。
-# 增量 = 1 条路由枚举 + 1 行枚举注释 + 3 行 when 分支（含 onOpenClone 拆行）+ 2 行 import。
-# 已压到最小：3 行 when 是三条独立路由，不能合并；注释那行防的是「克隆塞回音色页」。
-lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1559
+lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1552
 
 # 2026-11-13 上调（ChatScreen +5）：工具返回的图片改成采样解码。
 # decodeDataUrl / DataImage 原来直接 decodeByteArray 全尺寸解码，一张 4000×3000

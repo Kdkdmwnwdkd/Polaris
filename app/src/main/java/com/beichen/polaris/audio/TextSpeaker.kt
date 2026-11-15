@@ -359,21 +359,6 @@ class TextSpeaker(context: Context) {
     val lastDemotion: String? get() = voice.lastDemotion()
 
     /**
-     * 录音器：录参考音频用。
-     *
-     * 挂在 `TextSpeaker` 上而不是让界面自带一个：**开麦之前必须先把自己正在说的话停掉**，
-     * 否则录进去的是上一句机器音。那个「停」只有这里知道该怎么做（它持有播报态与租约）。
-     * 界面各拿一个 AudioRecord，就会出现「页面停了、桌宠还在说」这种漏网。
-     */
-    fun recorder(): com.beichen.polaris.audio.tts.VoiceRecorder = voice.recorder()
-
-    /** 录音前先静音：停播报、断掉正在进行的录音（重复进入页面时）。 */
-    fun stopForRecording() = voice.stopForRecording()
-
-    /** 克隆模型是否就位（ZipVoice）。界面据此决定「录一句」入口是否可用。 */
-    fun cloneModelReady(): Boolean = voice.cloneModelReady()
-
-    /**
      * 立即停止播报。
      *
      * 与 `QUEUE_FLUSH` 的区别见类注释。停止后 [speaking] 立刻为 false，
