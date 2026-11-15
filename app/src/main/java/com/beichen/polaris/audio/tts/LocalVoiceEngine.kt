@@ -117,40 +117,16 @@ class LocalVoiceEngine(private val context: Context) {
     }
 
     /**
-     * 把 assets/tts/matcha 整个目录展开到 filesDir/tts/matcha。
+     * 首次使用时把 assets 里的模型展开到 filesDir。
      *
-     * 逐文件比对长度：拷到一半被杀（用户切走、系统清后台）时，下次进来能补齐，
-     * 不会因为「目录存在」就判定完成，然后拿一个截断的 onnx 去初始化原生层——
-     * 那种失败在日志里只会写一句 `Failed to load model`，根因完全看不出来。
+     * 展开细节（逐文件比长度、能续传）在 [TtsAssetInstaller]：克隆音色那边要展开另一套
+     * 模型，逻辑一模一样。两份各写一遍，迟早有一边忘了比长度。
      */
     private fun extractAssets() {
-        val dir = modelDir()
-        if (!dir.exists() && !dir.mkdirs()) {
-            throw IllegalStateException("无法创建模型目录 ${dir.absolutePath}")
-        }
-        val assets = context.assets
-        val queue = ArrayDeque(listOf(ASSET_ROOT))
-        var copied = 0
-        while (queue.isNotEmpty()) {
-            val path = queue.removeFirst()
-            val children = assets.list(path).orEmpty()
-            if (children.isEmpty()) {
-                val target = File(dir, path.removePrefix("$ASSET_ROOT/"))
-                val expected = runCatching { assets.openFd(path).use { it.length } }.getOrDefault(-1L)
-                if (target.length() > 0 && (expected <= 0 || target.length() == expected)) continue
-                target.parentFile?.mkdirs()
-                assets.open(path).use { input ->
-                    target.outputStream().use { output -> input.copyTo(output) }
-                }
-                copied++
-            } else {
-                children.forEach { queue.add("$path/$it") }
-            }
-        }
-        AgentLogger.i(tag, "本地模型展开完成：$copied 个文件 → ${dir.absolutePath}")
+        TtsAssetInstaller.expand(context, ASSET_ROOT, modelDir())
     }
 
-    private fun modelDir(): File = File(context.filesDir, "tts/matcha")
+    private fun modelDir(): File = TtsAssetInstaller.destDir(context, "matcha")
 
     private fun toPcm16(samples: FloatArray): ShortArray {
         val out = ShortArray(samples.size)

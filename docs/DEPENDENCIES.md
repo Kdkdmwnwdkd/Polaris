@@ -83,12 +83,24 @@
 | `assets/bin/arm64-v8a/libtalloc.so.2` | 33 KB | Termux 官方预编译（proot 依赖） | LGPL-3.0 |
 | `assets/bin/arm64-v8a/libandroid-shmem.so` | 14 KB | Termux 官方预编译（Android 无 SysV shm 的垫片） | BSD-2-Clause |
 | `jniLibs/arm64-v8a/libproot.so` | 301 KB | 同上 proot，改名为 `.so` 以便落到 `nativeLibraryDir`（可 `execve`） | GPL-2.0 |
-| `jniLibs/arm64-v8a/libsherpa-onnx-jni.so` | ~4.7 MB | sherpa-onnx v1.12.4 官方 android 包（`scripts/qa/fetch-tts-assets.py` 取并瘦身） | Apache-2.0 |
-| `jniLibs/x86_64/libsherpa-onnx-jni.so` | ~5.1 MB | 同上（只为模拟器） | Apache-2.0 |
-| `assets/tts/matcha/*` | 72 MB | `matcha-icefall-zh-baker` + `vocos-22khz-univ.onnx`（k2-fsa 发布） | Apache-2.0（icefall 模型）；vocos 声码器 MIT |
+| `jniLibs/arm64-v8a/libsherpa-onnx-jni.so` | ~5 MB | sherpa-onnx v1.13.8 官方 android 包（`scripts/qa/fetch-tts-assets.py` 取并瘦身） | Apache-2.0 |
+| `jniLibs/x86_64/libsherpa-onnx-jni.so` | ~5 MB | 同上（只为模拟器） | Apache-2.0 |
+| `jniLibs/{arm64-v8a,x86_64}/libonnxruntime.so` 等 | ~20 MB | 同上（jni 库的运行时依赖，缺一个就 dlopen 失败） | MIT（onnxruntime） |
+| `assets/tts/matcha/*` | 125 MB | `matcha-icefall-zh-baker` + `vocos-22khz-univ.onnx`（k2-fsa 发布） | Apache-2.0（icefall 模型）；vocos 声码器 MIT |
+| `assets/tts/zipvoice/*` | 155 MB | `sherpa-onnx-zipvoice-distill-int8-zh-en-emilia` + `vocos_24khz.onnx`（k2-fsa 发布） | Apache-2.0（ZipVoice 模型与代码）；vocos 声码器 MIT |
+
+**为什么 v1.12.4 → v1.13.8**：`OfflineTtsZipVoiceModelConfig`、
+`GenerationConfig.referenceAudio` 都是 v1.13.x 才进 Kotlin API 的。
+Kotlin data class 是 JNI 反序列化契约，原生 `.so` 必须同版本；
+跨版本混用的报错只有一句 `Invalid OfflineTtsConfig`，看不出缺的是哪个字段。
+
+**为什么两套模型都留着**：matcha 出一个固定女声（开箱即用、快），
+ZipVoice 必须带用户的参考音频才能出声（克隆、慢）。前者不能替代后者，
+后者也不能替代前者——没有参考音频时它根本不出声。
 
 sherpa-onnx 的两部分（`app/src/main/java/com/k2fsa/sherpa/onnx/Tts.kt` 源码 + jni 库）
-同属 Apache-2.0，文件头保留了原版权声明。模型不进 git，由脚本下载——理由见脚本注释。
+同属 Apache-2.0，文件头保留了原版权声明（含版本号与「整份照搬」的理由）。
+模型与运行时都不进 git，由 `scripts/qa/fetch-tts-assets.py` 按版本号取——理由见脚本注释。
 
 GPL-2.0 合规措施：
 - `assets/3rdparty/proot/COPYING` 收录许可全文；
@@ -103,7 +115,7 @@ GPL-2.0 合规措施：
 |---|---|---|
 | MNN（阿里，静态库 ~6 MB） | 支持 taobao-mnn 模型目录格式；可走 OpenCL GPU | 北辰只支持 GGUF；多一个引擎 = 多一份内存占用与两套 prompt/KV 逻辑，收益不抵复杂度 |
 | LiteRT-LM（+22 MB） | 跑 `.litertlm` 专有格式 | 与 GGUF 能力重叠，纯增体积 |
-| ~~sherpa-onnx（语音识别/TTS）~~ | 本地语音对话 | **2026-11-15 已改变**：系统 TTS 的音色由 ROM 决定（常见 8kHz 电话音），用户明确要「好听的声音」。只取 TTS 一半（不引识别），体积换音质，见 `docs/archive/reports/音色选择-实现报告-2026-11-15.md` |
+| sherpa-onnx（TTS + 零样本克隆） | 本地语音对话与声音克隆 | **2026-11-15 已接入**：系统 TTS 的音色由 ROM 决定（常见 8kHz 电话音），用户明确要「好听的声音」并能导入自己的声音。只取 TTS 一半（不引识别），体积换音质。见 `docs/archive/reports/音色选择-实现报告-2026-11-15.md` 与 `声音克隆-实现报告-2026-11-15.md` |
 | Qualcomm QNN / GenieX（51 个 .so，~82 MB） | 骁龙 NPU 加速 | 需要按芯片离线转换模型，通用 GGUF 用不上；且要下载 82 MB 运行时 |
 | KleidiAI | ARM 官方 matmul 内核 | **值得跟进**：需要配套较新的 ggml，见「已知缺口」 |
 

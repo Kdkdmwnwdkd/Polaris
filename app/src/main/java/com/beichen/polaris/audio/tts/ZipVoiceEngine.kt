@@ -47,15 +47,8 @@ class ZipVoiceEngine(private val context: Context) {
     @Volatile
     private var tts: OfflineTts? = null
 
-    /**
-     * 模型是否可用：已展开 **或** 包里带着（首次点击时才展开）。
-     *
-     * 与 [LocalVoiceEngine.isReady] 同一个理由：展开在 synthesize 里，synthesize 要先被
-     * 回落链选中，而链头就是用它筛的。只看 filesDir 会自锁成「永远未就绪」。
-     */
-    fun isReady(): Boolean =
-        TtsAssetInstaller.allPresent(destDir(), REQUIRED_FILES) ||
-            TtsAssetInstaller.availableInAssets(context, ASSET_ROOT, REQUIRED_FILES)
+    /** 模型是否就位（关键文件都在）。不含「参考音频」——那是每条音色各自的属性。 */
+    fun isReady(): Boolean = TtsAssetInstaller.allPresent(destDir(), REQUIRED_FILES)
 
     /**
      * 用 [reference] 的音色念 [text]。

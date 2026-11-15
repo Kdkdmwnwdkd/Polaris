@@ -66,28 +66,4 @@ object TtsAssetInstaller {
     /** 关键文件是否都在。`files` 里可以含子目录名（如 `espeak-ng-data`）。 */
     fun allPresent(dest: File, files: List<String>): Boolean =
         files.all { File(dest, it).let { f -> if (f.isDirectory) f.list()?.isNotEmpty() == true else f.length() > 0 } }
-
-    /**
-     * 包里是否带着这套模型（**还没展开也算**）。
-     *
-     * 为什么必须有这个判断：展开动作写在 `synthesize()` 里，而 `synthesize()` 只有先被
-     * 音色回落链选中才会跑；回落链用 `isReady()` 筛，`isReady()` 只看 filesDir。
-     * 首次安装时 filesDir 是空的 → LOCAL 被判 `MODEL_MISSING` 跳过 → 永不展开
-     * → filesDir 永远是空的。**一个自锁的环**：模型在包里，用户却永远听不到。
-     *
-     * 735 装上去仍然报「本地模型未就绪」，就是这个环，不是模型没打进包。
-     */
-    fun availableInAssets(context: Context, assetRoot: String, files: List<String>): Boolean {
-        val assets = context.assets
-        return files.all { rel ->
-            val path = "$assetRoot/$rel"
-            // 目录：list() 返回子项；文件：list() 返回空数组，得再用 open() 探一次。
-            val children = runCatching { assets.list(path) }.getOrNull()
-            if (children != null && children.isNotEmpty()) {
-                true
-            } else {
-                runCatching { assets.open(path).use { true } }.getOrDefault(false)
-            }
-        }
-    }
 }
