@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""把本地 22kHz 合成引擎的两样东西准备好：
+"""把两套本地合成引擎需要的东西准备好：
 
-  1. `app/libs/sherpa-onnx.aar` —— 原生推理运行时（只留 arm64-v8a / x86_64，去掉 armeabi-v7a 与示例）
-  2. `app/src/main/assets/tts/matcha/` —— matcha-icefall-zh-baker 模型（约 72MB）
+  1. `app/src/main/jniLibs/{arm64-v8a,x86_64}/` —— 原生推理运行时（sherpa-onnx 官方 android 包）
+  2. `app/src/main/assets/tts/matcha/` —— matcha-icefall-zh-baker（内置音色，约 125MB 含声码器）
+  3. `app/src/main/assets/tts/zipvoice/` —— ZipVoice distill int8（零样本克隆，约 155MB 含声码器）
+
+后两套是**两个独立的模型**，不能互相替代：matcha 出一个固定的女声，ZipVoice 必须
+带着用户的参考音频才能出声。
 
 ## 为什么是脚本而不是把二进制提交进仓库
 
@@ -32,7 +36,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 CACHE = os.path.join(ROOT, ".cache", "tts")
 ASSET_DIR = os.path.join(ROOT, "app", "src", "main", "assets", "tts", "matcha")
 
-SHERPA_VERSION = "1.12.4"
+# 1.13.8 起 Kotlin API 才有 ZipVoice 与 GenerationConfig.referenceAudio。
+# 原生 .so 必须与 Kotlin 源码同版本：跨版本混用会在 build() 时报
+# 「Invalid OfflineTtsConfig」，而看不出少的是哪个字段。
+SHERPA_VERSION = "1.13.8"
 ANDROID_TAR = f"https://github.com/k2-fsa/sherpa-onnx/releases/download/v{SHERPA_VERSION}/sherpa-onnx-v{SHERPA_VERSION}-android.tar.bz2"
 MODEL_TAR = "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/738441325"
 # 声码器不在模型包里：matcha 只给声学模型，波形要 vocos 从梅尔谱还原。
@@ -41,6 +48,14 @@ VOCODER_URL = "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/2
 VOCODER_NAME = "vocos-22khz-univ.onnx"
 VOCODER_SIZE = 53_884_024
 MODEL_NAME = "matcha-icefall-zh-baker"
+
+# 克隆模型的声道与声码器：ZipVoice 原生 24kHz，声码器必须配套，
+# 换成 22kHz 那个（matcha 用的）会在初始化时报 vocoder 输出维度不符。
+ZIPVOICE_TAR = "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/327320447"
+ZIPVOICE_DIR = os.path.join(ROOT, "app", "src", "main", "assets", "tts", "zipvoice")
+ZIPVOICE_VOCODER_URL = "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/284752173"
+ZIPVOICE_VOCODER_NAME = "vocos_24khz.onnx"
+ZIPVOICE_VOCODER_SIZE = 54_157_409
 
 PARTS = 8
 ABIS = ("arm64-v8a", "x86_64")
@@ -135,6 +150,35 @@ def install_runtime(tarball):
     return True
 
 
+def extract_zipvoice(tarball):
+    """展开克隆模型到 assets/tts/zipvoice（含 espeak-ng-data 目录）。"""
+    marker = os.path.join(ZIPVOICE_DIR, "encoder.int8.onnx")
+    if os.path.exists(marker):
+        log("克隆模型已就位，跳过")
+        return True
+    os.makedirs(ZIPVOICE_DIR, exist_ok=True)
+    with tarfile.open(tarball, "r:bz2") as tar:
+        members = [m for m in tar.getmembers() if m.isfile()]
+        tops = {m.name.split("/")[0] for m in members if "/" in m.name}
+        prefix = next(iter(tops)) if len(tops) == 1 else None
+        for m in members:
+            rel = m.name[len(prefix) + 1:] if prefix and m.name.startswith(prefix + "/") else m.name
+            if not rel or rel.startswith("."):
+                continue
+            # 参考样本不进包：test_wavs 是别人（雷军）的声音，随包分发不合适，
+            # 而且用户自己会录。
+            if rel.startswith("test_wavs/"):
+                continue
+            target = os.path.join(ZIPVOICE_DIR, rel)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with tar.extractfile(m) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+    files = sum(len(f) for _, _, f in os.walk(ZIPVOICE_DIR))
+    size = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(ZIPVOICE_DIR) for f in fs)
+    log(f"克隆模型展开：{files} 个文件 / {size // 1048576}MB → {ZIPVOICE_DIR}")
+    return True
+
+
 def extract_model(tarball):
     if os.path.exists(os.path.join(ASSET_DIR, "model-steps-3.onnx")):
         log("模型已就位，跳过")
@@ -168,7 +212,7 @@ def main():
     android_tar = os.path.join(CACHE, "sherpa-android.tar.bz2")
     model_tar = os.path.join(CACHE, "matcha.tar.bz2")
 
-    if not fetch(ANDROID_TAR, android_tar, 33_929_483):
+    if not fetch(ANDROID_TAR, android_tar, 46_093_321):
         log("Android 包下载失败")
         return 1
     if not fetch(MODEL_TAR, model_tar, 75_455_267, token):
@@ -180,11 +224,25 @@ def main():
         log("声码器下载失败")
         return 1
 
+    zip_tar = os.path.join(CACHE, "zipvoice.tar.bz2")
+    if not fetch(ZIPVOICE_TAR, zip_tar, 109_162_785, token):
+        log("克隆模型下载失败")
+        return 1
+    zip_vocoder = os.path.join(CACHE, ZIPVOICE_VOCODER_NAME)
+    if not fetch(ZIPVOICE_VOCODER_URL, zip_vocoder, ZIPVOICE_VOCODER_SIZE, token):
+        log("克隆声码器下载失败")
+        return 1
+
     ok = install_runtime(android_tar)
     extract_model(model_tar)
     target = os.path.join(ASSET_DIR, VOCODER_NAME)
     shutil.copyfile(vocoder, target)
     log(f"声码器就位：{target}（{os.path.getsize(target) // 1048576}MB）")
+
+    extract_zipvoice(zip_tar)
+    zip_target = os.path.join(ZIPVOICE_DIR, ZIPVOICE_VOCODER_NAME)
+    shutil.copyfile(zip_vocoder, zip_target)
+    log(f"克隆声码器就位：{zip_target}（{os.path.getsize(zip_target) // 1048576}MB）")
     log("完成。" if ok else "运行时未装上，见上。")
     return 0 if ok else 2
 

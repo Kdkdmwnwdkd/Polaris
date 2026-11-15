@@ -269,6 +269,17 @@ android {
         }
     }
 
+    // 本地 TTS 模型（onnx / fst）不压缩。
+    //
+    // 两个理由：一是 `AssetManager.openFd()` 对**压缩过的**资源会直接抛异常，
+    // 而 `TtsAssetInstaller` 靠它拿「这个文件本该多大」来做续传校验——压缩后
+    // 这条校验整条失效，拷到一半被杀就会留下一个看起来正常的截断模型。
+    // 二是 onnx 里是已压缩过的权重，deflate 再压收益不到 5%，却让每次构建都要
+    // 把 290MB 重新过一遍 aapt2。
+    androidResources {
+        noCompress += listOf("onnx", "fst")
+    }
+
     // 本地 llama.cpp 推理：只出 arm64-v8a（市面手机全覆盖，先做扎实再扩 x86_64 模拟器）
     if (!skipNative || termuxX86) {
         externalNativeBuild {

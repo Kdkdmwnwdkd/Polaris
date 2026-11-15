@@ -1,6 +1,7 @@
 package com.beichen.polaris.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -8,7 +9,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.VolumeUp
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -17,7 +21,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import com.beichen.polaris.audio.AudioGraph
+import com.beichen.polaris.audio.tts.CloneVoice
+import com.beichen.polaris.audio.tts.CloneVoiceStore
 import com.beichen.polaris.audio.tts.VoiceStyleStore
 import com.beichen.polaris.core.voice.VoiceCatalog
 import com.beichen.polaris.core.voice.VoiceKind
@@ -45,27 +52,40 @@ import kotlinx.coroutines.launch
  *
  * 所以这里把 6 个音色**列出来但标明未启用**——藏起来会让用户以为「说好的 6 个音色没了」；
  * 假装能用则会变成「点了没声音」，那更糟。等接上带 key 的官方接口，这一组直接点亮。
+ *
+ * ## 为什么「我的声音」排在最前
+ *
+ * 用户来这里十次有九次是想换成自己的声音。把它放在「本地/在线/系统」之间，
+ * 等于让最重要的一条排在第三条之后。
  */
 @Composable
-fun VoiceStyleScreen() {
+fun VoiceStyleScreen(onOpenClone: (() -> Unit)? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val speaker = remember { AudioGraph.speaker(context) }
+
+    // 克隆音色是用户数据，不在 VoiceCatalog 里，所以「当前选中」必须从存储解析。
     // 直接读存储而不是 new 一个 VoiceSpeech：那里会起播放线程、持有本地引擎，
     // 为了显示一行「已选中」付这个代价不值。
-    var selected by remember {
-        mutableStateOf(
-            VoiceCatalog.byId(VoiceStyleStore.selectedId(context))
-                ?: VoiceCatalog.require(VoiceCatalog.DEFAULT_ID)
-        )
+    fun resolveSelected(): VoiceProfile {
+        val id = VoiceStyleStore.selectedId(context)
+        CloneVoiceStore.read(context, id)?.let { return it.profile }
+        return VoiceCatalog.byId(id) ?: VoiceCatalog.require(VoiceCatalog.DEFAULT_ID)
     }
+
+    var selected by remember { mutableStateOf(resolveSelected()) }
+    var clones by remember { mutableStateOf(CloneVoiceStore.list(context)) }
     var auditioning by remember { mutableStateOf<String?>(null) }
 
     fun audition(profile: VoiceProfile) {
         if (auditioning != null) return
         auditioning = profile.id
         scope.launch {
-            val text = "你好，我是${profile.safeLabel}。今天想聊点什么？"
+            val text = if (profile.kind == VoiceKind.CLONE) {
+                "你好，这是你的声音。以后就由它来说话。"
+            } else {
+                "你好，我是${profile.safeLabel}。今天想聊点什么？"
+            }
             val r = speaker.audition(profile, text)
             auditioning = null
             if (r.isFailure) {
@@ -91,6 +111,50 @@ fun VoiceStyleScreen() {
             title = "音色",
             subtitle = "桌宠与朗读用它出声；不影响语音识别",
         )
+
+        AkGroup(
+            title = "我的声音",
+            description = if (clones.isEmpty()) {
+                "录一句 10 秒的话，就能用自己的声音说话。全程离线，不上传"
+            } else {
+                "你录的声音。合成比内置音色慢，因为它每次都要重新读一遍你的参考音频"
+            },
+            // 内容始终是 AkListItem（缩进由容器下发），所以 paddedContent 保持 false。
+            // 传成「是否为空」会让有克隆和无克隆时这一组的左边界差一格。
+            paddedContent = false,
+        ) {
+            clones.forEach { voice ->
+                CloneRow(
+                    voice = voice,
+                    selected = selected.id == voice.id,
+                    auditioning = auditioning == voice.id,
+                    onSelect = {
+                        VoiceStyleStore.select(context, voice.id)
+                        selected = voice.profile
+                        audition(voice.profile)
+                    },
+                    onAudition = { audition(voice.profile) },
+                    onDelete = {
+                        CloneVoiceStore.delete(context, voice.id)
+                        clones = CloneVoiceStore.list(context)
+                        // 删掉的正是当前选中的：退回内置音色，并**写回存储**。
+                        // 只改界面状态的话，下次启动仍会读到那个已经不存在的 id。
+                        if (selected.id == voice.id) {
+                            VoiceStyleStore.select(context, VoiceCatalog.DEFAULT_ID)
+                            selected = VoiceCatalog.require(VoiceCatalog.DEFAULT_ID)
+                        }
+                        Toast.makeText(context, "已删除这条声音", Toast.LENGTH_SHORT).show()
+                    },
+                )
+            }
+            AkListItem(
+                icon = Icons.Outlined.Mic,
+                title = if (clones.isEmpty()) "录一句，克隆我的声音" else "再录一条",
+                description = "读完一句固定的话就自动保存；建议在安静的地方录",
+                onClick = onOpenClone,
+                enabled = onOpenClone != null,
+            )
+        }
 
         AkGroup(
             title = "本地",
@@ -155,7 +219,7 @@ fun VoiceStyleScreen() {
                 AkListItem(
                     icon = null,
                     title = note,
-                    description = "发生一次就够了；如果每次都这样，多半是模型没展开成功",
+                    description = "发生一次就够了；如果每次都是，多半是模型没展开成功或参考录音丢了",
                     onClick = null,
                 )
             }
@@ -179,6 +243,41 @@ fun VoiceStyleScreen() {
 }
 
 @Composable
+private fun CloneRow(
+    voice: CloneVoice,
+    selected: Boolean,
+    auditioning: Boolean,
+    onSelect: () -> Unit,
+    onAudition: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    AkListItem(
+        icon = Icons.Outlined.Mic,
+        title = voice.label + if (auditioning) " · 正在试听…" else "",
+        description = "你的声音 · 离线克隆" + if (selected) " · 已选中" else "",
+        selected = selected,
+        onClick = onSelect,
+        trailing = {
+            Text(
+                text = "删除",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier
+                    .clickable { onDelete() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        },
+    )
+    AkListItem(
+        icon = Icons.Outlined.VolumeUp,
+        title = "试听「${voice.label}」",
+        description = if (auditioning) "正在合成…（克隆比内置音色慢，等 2–5 秒）" else "用一句固定的话念给你听",
+        selected = false,
+        onClick = onAudition,
+    )
+}
+
+@Composable
 private fun VoiceRow(
     profile: VoiceProfile,
     selected: Boolean,
@@ -192,6 +291,7 @@ private fun VoiceRow(
         VoiceKind.LOCAL -> "离线"
         VoiceKind.ONLINE -> "需 key"
         VoiceKind.SYSTEM -> "系统"
+        VoiceKind.CLONE -> "克隆"
     }
     AkListItem(
         icon = null,
