@@ -76,7 +76,7 @@ POOL_GROUPS = {
         ("指定引擎创建", "createSpeechRecognizer"),
         ("引擎名字生成", "Lcom/beichen/polaris/core/voice/EngineLabel;"),
         ("引擎选择持久化", "Lcom/beichen/polaris/audio/VoiceEngineStore;"),
-        ("语音引擎选择页", "Lcom/beichen/polaris/ui/VoiceEngineScreen;"),
+        ("语音引擎选择页", "Lcom/beichen/polaris/ui/VoiceEngineScreenKt;"),
     ],
     "音色与回落（pool 池条目精确匹配）": [
         ("音色目录", "Lcom/beichen/polaris/core/voice/VoiceCatalog;"),
@@ -88,7 +88,7 @@ POOL_GROUPS = {
         ("本地合成引擎", "Lcom/beichen/polaris/audio/tts/LocalVoiceEngine;"),
         ("PCM 播放器", "Lcom/beichen/polaris/audio/tts/PcmPlayer;"),
         ("音色持久化", "Lcom/beichen/polaris/audio/tts/VoiceStyleStore;"),
-        ("音色选择页", "Lcom/beichen/polaris/ui/VoiceStyleScreen;"),
+        ("音色选择页", "Lcom/beichen/polaris/ui/VoiceStyleScreenKt;"),
         ("sherpa-onnx TTS 桥", "Lcom/k2fsa/sherpa/onnx/OfflineTts;"),
         ("试听入口", "audition"),
         ("回落原因读取", "lastDemotion"),
