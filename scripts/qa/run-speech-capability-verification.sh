@@ -341,8 +341,11 @@ fi
 # 在这台机器上都是死路——用户照着走只会在 TTS 页面里打转。
 # 系统改不了，但 createSpeechRecognizer(ctx, component) 能指定引擎，所以选择必须做进 App。
 VOICE_SCREEN=$(find app/src/main -name "VoiceEngineScreen.kt" 2>/dev/null | head -1)
+# 只匹配到构造调用为止，不要求括号里为空：这一页后来多了一个「去选音色」的
+# 跳转参数，断言按整串 `VoiceEngineScreen()` 匹配就会在「加了个参数」时误报红——
+# 那不是功能坏了，是断言把「怎么调用」当成了「有没有」。
 if [ -n "$VOICE_SCREEN" ] && grep -qF 'VOICE("voice"' app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt &&
-   grep -qF "VoiceEngineScreen()" app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt; then
+   grep -qE "VoiceEngineScreen\(" app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt; then
   pass "A26 应用内有语音引擎选择页（不依赖 ROM 是否把语音识别做成设置项）"
 else
   fail "A26 没有引擎选择页 —— 提示只能指路系统设置，而那台机器上没有那一项"
