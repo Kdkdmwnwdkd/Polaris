@@ -1,8 +1,10 @@
 package com.beichen.polaris.qa
 
+import com.beichen.polaris.core.voice.VoiceAvailability
 import com.beichen.polaris.core.voice.VoiceCatalog
 import com.beichen.polaris.core.voice.VoiceKind
 import com.beichen.polaris.core.voice.VoicePlan
+import com.beichen.polaris.core.voice.VoiceProfile
 import com.beichen.polaris.core.voice.VoiceSkip
 
 /**
@@ -36,6 +38,7 @@ object VoiceStyleVerification {
     fun main(args: Array<String>) {
         catalog()
         plan()
+        clone()
         println("=== 合计: ${pass + fail} 条，通过 $pass / 失败 $fail ===")
         if (fail > 0) System.exit(1)
     }
@@ -68,6 +71,71 @@ object VoiceStyleVerification {
             all.all { VoiceCatalog.requiresNetwork(it) == (it.kind == VoiceKind.ONLINE) })
         ok("C17 requiresModel 只对本地为真",
             all.all { VoiceCatalog.requiresModel(it) == (it.kind == VoiceKind.LOCAL) })
+    }
+
+    /**
+     * 克隆音色：用户自己录的那一条。
+     *
+     * 这一组和前两组的关键差别是 [VoiceAvailability] —— 克隆要「模型在」+「参考音频在」
+     * 两个条件同时成立。少任何一个都发不出声，但用户该做的事完全不同：
+     * 前者是重装/查存储，后者是「重新录一句」。把两者混成一个「不可用」，
+     * 界面就只能说一句「用不了」，用户会反复点。
+     */
+    private fun clone() {
+        val mine = VoiceProfile(
+            id = "clone-test",
+            label = "我的声音",
+            kind = VoiceKind.CLONE,
+            locale = "zh",
+            tagline = "测试用",
+        )
+        val all = VoiceAvailability.ALL_READY
+        val chain = VoicePlan.chain(mine, all)
+
+        ok("K1 克隆是独立类别（不混进 LOCAL）",
+            mine.kind == VoiceKind.CLONE && VoiceKind.values().count { it == VoiceKind.CLONE } == 1)
+        ok("K2 克隆链：克隆 → 本地 → 系统",
+            chain.map { it.profile.kind } == listOf(VoiceKind.CLONE, VoiceKind.LOCAL, VoiceKind.SYSTEM))
+        ok("K3 克隆链永不包含在线（选克隆就是要离线）",
+            chain.none { it.profile.kind == VoiceKind.ONLINE })
+        ok("K4 克隆链尾是系统引擎", chain.last().profile.kind == VoiceKind.SYSTEM)
+        ok("K5 克隆链不重复", chain.map { it.profile.id }.toSet().size == chain.size)
+        ok("K6 全就绪时首选就是克隆本身",
+            VoicePlan.firstPlanned(chain)?.profile?.id == mine.id)
+
+        val noModel = VoicePlan.chain(mine, all.copy(cloneModel = false))
+        ok("K7 克隆模型缺失 → 标 MODEL_MISSING",
+            noModel.first().skip == VoiceSkip.MODEL_MISSING)
+        ok("K8 克隆模型缺失时退到本地（不是直接掉系统）",
+            VoicePlan.firstPlanned(noModel)?.profile?.kind == VoiceKind.LOCAL)
+
+        val noRef = VoicePlan.chain(mine, all.copy(reference = false))
+        ok("K9 参考音频缺失 → 标 REFERENCE_MISSING（与模型缺失区分开）",
+            noRef.first().skip == VoiceSkip.REFERENCE_MISSING)
+        ok("K10 两种缺失是两个不同的值", VoiceSkip.REFERENCE_MISSING != VoiceSkip.MODEL_MISSING)
+        ok("K11 参考音频缺失时退到本地",
+            VoicePlan.firstPlanned(noRef)?.profile?.kind == VoiceKind.LOCAL)
+
+        val both = VoicePlan.chain(mine, all.copy(cloneModel = false, reference = false))
+        ok("K12 两个都缺时仍能退到系统（链不会空）",
+            both.isNotEmpty() && both.last().profile.kind == VoiceKind.SYSTEM)
+
+        val nothing = VoicePlan.chain(mine, all.copy(localModel = false, cloneModel = false, reference = false))
+        ok("K13 全都缺时唯一能试的是系统",
+            VoicePlan.firstPlanned(nothing)?.profile?.kind == VoiceKind.SYSTEM)
+
+        // 回归：新增类别不能改变旧调用（只传 id 的那条）的结果。
+        ok("K14 旧签名仍按「在线→本地→系统」给链",
+            VoicePlan.chain(VoiceCatalog.online.first().id, online = true, localInstalled = true)
+                .map { it.profile.kind } == listOf(VoiceKind.ONLINE, VoiceKind.LOCAL, VoiceKind.SYSTEM))
+
+        // 「选了本地就绝不偷偷联网」这条对克隆同样成立：两个都是本地的，
+        // 回落时联网既是意图违背，也是没网时多等一个超时。
+        val localChain = VoicePlan.chain(VoiceCatalog.local, all.copy(online = false))
+        ok("K15 本地链在断网时不含在线", localChain.none { it.profile.kind == VoiceKind.ONLINE })
+
+        ok("K16 ALL_READY 确实全部为真",
+            all.online && all.localModel && all.cloneModel && all.reference)
     }
 
     private fun plan() {

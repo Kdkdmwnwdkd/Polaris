@@ -93,6 +93,18 @@ POOL_GROUPS = {
         ("试听入口", "audition"),
         ("回落原因读取", "lastDemotion"),
     ],
+    "声音克隆（pool 池条目精确匹配）": [
+        ("克隆音色存储", "Lcom/beichen/polaris/audio/tts/CloneVoiceStore;"),
+        ("克隆音色条目", "Lcom/beichen/polaris/audio/tts/CloneVoice;"),
+        ("克隆引擎", "Lcom/beichen/polaris/audio/tts/ZipVoiceEngine;"),
+        ("录音器", "Lcom/beichen/polaris/audio/tts/VoiceRecorder;"),
+        ("参考音频 IO", "Lcom/beichen/polaris/audio/tts/VoiceSampleIo;"),
+        ("模型安装器", "Lcom/beichen/polaris/audio/tts/TtsAssetInstaller;"),
+        ("可用性事实", "Lcom/beichen/polaris/core/voice/VoiceAvailability;"),
+        ("录音页", "Lcom/beichen/polaris/ui/VoiceCloneScreenKt;"),
+        ("ZipVoice 配置", "Lcom/k2fsa/sherpa/onnx/OfflineTtsZipVoiceModelConfig;"),
+        ("生成配置", "Lcom/k2fsa/sherpa/onnx/GenerationConfig;"),
+    ],
     "W9-A 截图双通道（pool 池条目精确匹配）": [
         ("无障碍截屏服务方法名", "takeScreenshotViaA11y"),
         ("路由纯函数名", "canUseA11yScreenshot"),
