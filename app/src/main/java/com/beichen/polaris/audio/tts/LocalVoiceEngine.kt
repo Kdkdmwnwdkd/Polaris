@@ -46,10 +46,19 @@ class LocalVoiceEngine(private val context: Context) {
     @Volatile
     private var tts: OfflineTts? = null
 
-    /** 模型是否已经就位（拷完且关键文件在）。 */
+    /**
+     * 模型是否可用：已展开 **或** 包里带着（首次点击时才展开）。
+     *
+     * 后半个条件不是放宽，是修死锁：展开只发生在 [synthesize] 里，而 synthesize 要
+     * 先被回落链选中；链头筛选用这个函数。只看 filesDir 的话，首次安装永远是「未就绪」，
+     * 于是永远走不到展开那一步——包里有 72MB 模型，用户听到的是静音。
+     */
     fun isReady(): Boolean {
         val dir = modelDir()
-        return File(dir, ACOUSTIC_MODEL).length() > 0 && File(dir, VOCODER).length() > 0
+        if (File(dir, ACOUSTIC_MODEL).length() > 0 && File(dir, VOCODER).length() > 0) return true
+        return TtsAssetInstaller.availableInAssets(
+            context, ASSET_ROOT, listOf(ACOUSTIC_MODEL, VOCODER, "lexicon.txt"),
+        )
     }
 
     /**
