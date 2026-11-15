@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.net.GitHubMirror
 import com.beichen.polaris.core.llm.runCancellable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -73,16 +74,11 @@ object ApkDownloader {
     private val client get() = LlmHttp.download
 
     /**
-     * 加速前缀，按顺序尝试；末尾空串 = 直连。
+     * 加速候选表在 [GitHubMirror] 里，与模型下载共用一份。
      *
      * 为什么放在下载层而不是 `UpdateChecker`：换源是「怎么拿到字节」的问题，
-     * 检查更新只需要知道官方地址。海外网络下直连往往比多一跳更快，所以直连必须保留。
+     * 检查更新只需要知道官方地址。
      */
-    private val MIRROR_PREFIXES = listOf(
-        "https://ghfast.top/",
-        "https://gh-proxy.com/",
-        ""
-    )
 
     fun cacheDir(context: Context): File = File(context.cacheDir, DIR).apply { mkdirs() }
 
@@ -124,10 +120,14 @@ object ApkDownloader {
 
         // 没有 digest 时只信直连：镜像返回的字节无从认证，宁可慢一点，也不装来源不明的包。
         // 这不是「保守」——加速前缀是第三方运营的，能在链路上替换内容。
-        val sources = if (expectedSha256.isNotBlank()) MIRROR_PREFIXES else listOf("")
+        val sources = if (expectedSha256.isNotBlank()) {
+            GitHubMirror.sources(officialUrl)
+        } else {
+            listOf(GitHubMirror.Source("直连", officialUrl))
+        }
         var lastError: Throwable? = null
-        for (prefix in sources) {
-            val url = prefix + officialUrl
+        for (src in sources) {
+            val url = src.url
             val part = File(dir, "${target.name}.part")
             try {
                 part.delete()
@@ -150,7 +150,7 @@ object ApkDownloader {
             } catch (t: Throwable) {
                 part.delete()
                 lastError = t
-                AgentLogger.w(TAG, "下载源失败（${prefix.ifEmpty { "直连" }}）：${t.message}")
+                AgentLogger.w(TAG, "下载源失败（${src.label}）：${t.message}")
             }
         }
         throw ApkDownloadException(

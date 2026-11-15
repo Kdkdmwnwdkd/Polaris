@@ -247,11 +247,11 @@ class PetVoiceInput(
         when (val cap = probe.check(VoicePath.SelfRecorded)) {
             is SpeechCapability.Available -> Unit
             is SpeechCapability.Unavailable -> {
-                report(cap.message, cap.remedy)
+                reportSelfRecordedUnusable(cap.message, cap.remedy)
                 return false
             }
             is SpeechCapability.LanguageUnsupported -> {
-                report(cap.message, cap.remedy)
+                reportSelfRecordedUnusable(cap.message, cap.remedy)
                 return false
             }
         }
@@ -286,6 +286,25 @@ class PetVoiceInput(
         }
         handler.postDelayed(hardTimeout, HARD_TIMEOUT_MS)
         return true
+    }
+
+    /**
+     * 系统识别用不了时的说法。
+     *
+     * 系统给的出路是「去系统设置换一个识别服务」——在真机上这条建议是死路：
+     * 两个引擎一个国内不可达、一个没中文包，换过去还是没字。所以只要自带模型还没装，
+     * 就把出路改成「在应用内下载模型」，并说清为什么（用户不该被反复指去系统设置里打转）。
+     */
+    private fun reportSelfRecordedUnusable(message: String, remedy: SpeechRemedy) {
+        if (localAsr.isInstalled()) {
+            report(message, remedy)
+            return
+        }
+        report(
+            "这台机器上的系统识别服务都用不了（Google 的国内不可达，高通的没有中文包）。" +
+                "去「设置 → 语音识别」下载离线识别模型（约 24MB），之后不再依赖系统引擎。",
+            SpeechRemedy.DownloadOfflineModel,
+        )
     }
 
     /**

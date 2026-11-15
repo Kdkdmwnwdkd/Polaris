@@ -72,13 +72,20 @@ grep -q 'MessageDigest.getInstance("SHA-256")' "$APK_DL" && good "下载时流�
   || bad "没有计算 SHA-256"
 grep -q 'equals(expectedSha256' "$APK_DL" && good "哈希不符则拒绝并换源" \
   || bad "缺少哈希比对（下载内容可被镜像替换）"
-grep -q 'else listOf("")' "$APK_DL" && good "无 digest 时只允许直连源（不走第三方镜像）" \
+# 没有 digest 就只剩「内容是自证的」，那时只能用直连——镜像返回的字节无从认证。
+grep -q 'listOf(GitHubMirror.Source("直连", officialUrl))' "$APK_DL" \
+  && good "无 digest 时只允许直连源（不走第三方镜像）" \
   || bad "无 digest 时仍会用镜像，供应链风险未关闭"
 
 echo "[4] 失败可恢复"
-grep -q 'MIRROR_PREFIXES' "$APK_DL" && grep -q '"https://ghfast.top/"' "$APK_DL" \
-  && good "多下载源，含加速通道" || bad "缺少多下载源回退"
-awk '/MIRROR_PREFIXES = listOf/,/^    \)/' "$APK_DL" | grep -qE '^\s*""' \
+# 候选表搬到 GitHubMirror 后，APK 与模型下载共用一份——断言跟着搬，
+# 否则它守的其实是「那一行代码还在原文件里」，而不是「下载仍然多源」。
+MIRROR=core/src/main/java/com/beichen/polaris/core/net/GitHubMirror.kt
+grep -q 'GitHubMirror.sources(officialUrl)' "$APK_DL" \
+  && good "多下载源，走统一候选表" || bad "缺少多下载源回退"
+grep -q 'https://ghfast.top/' "$MIRROR" \
+  && good "候选表含加速通道" || bad "候选表里没有加速通道"
+awk '/PREFIXES = listOf/,/^    \)/' "$MIRROR" | grep -qE '^\s*""' \
   && good "保留直连作为最后一跳" || bad "没有直连兜底"
 grep -q 'ensureActive()' "$APK_DL" && good "下载循环响应协程取消" \
   || bad "缺少取消检查（点取消后仍会写完整包）"

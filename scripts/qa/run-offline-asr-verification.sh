@@ -29,7 +29,7 @@ for f1 in "$ENGINE" "$INPUT" "$INSTALLER" "$SHEET"; do
   [ -f "$f1" ] || { fail "A0 缺文件 $f1"; }
 done
 
-# 52MB 的模型对「只想让桌宠说话」的人是白付的流量。它必须是按需下载。
+# 24MB 的模型对「只想让桌宠说话」的人是白付的流量。它必须是按需下载。
 if grep -qF 'File(File(context.filesDir, "asr"), "zh-streaming")' "$ENGINE"; then
   pass "A1 模型落在应用私有目录（filesDir/asr），不进 APK"
 else
@@ -49,6 +49,30 @@ if awk '/fun remove\(\)/,/^    }/' "$INSTALLER" | grep -q 'asr.release()'; then
   pass "A3 删除先释放识别器，再删目录"
 else
   fail "A3 删除没先 release —— 原生层仍持有已删文件"
+fi
+
+# 真机实测（2026-11-15）：`failed to connect to github.com…after 10000ms`。
+# 仓库是自己的没用——**域名**在手机网络上到不了。所以下载器必须有多源候选表。
+if grep -qF 'GitHubMirror.sources(' "$INSTALLER"; then
+  pass "A4 模型下载走多源候选（镜像 → 镜像 → 直连）"
+else
+  fail "A4 下载写死单源 —— 直连 github.com 在真机上超时，模型永远装不上"
+fi
+
+# 两处各写一张候选表，就会出现「APK 能下、模型下不了」这种各修一半的状态。
+APK_DL=core/src/main/java/com/beichen/polaris/core/update/ApkDownloader.kt
+if grep -qF 'GitHubMirror.sources(officialUrl)' "$APK_DL"; then
+  pass "A5 APK 与模型共用同一张候选表（一处改，两处生效）"
+else
+  fail "A5 APK 下载自己维护了一份源列表 —— 迟早与模型那份不一致"
+fi
+
+# 失败时必须说清「哪个源、为什么」：只报最后一句的话，用户分不清
+# 「模型没上传」和「网络到不了」。
+if grep -qF 'failures.joinToString' "$INSTALLER"; then
+  pass "A6 多源失败时汇总每个源的原因"
+else
+  fail "A6 失败只报一句话 —— 用户无从判断是网络还是服务端缺文件"
 fi
 
 echo ""

@@ -254,6 +254,8 @@ class PetOverlayHost(
                         SpeechRemedy.SwitchEngine -> ({ openVoiceEngineSettings() })
                         // 系统没选定默认引擎：那一项确实在系统设置里，跳系统页。
                         SpeechRemedy.SelectDefaultEngine -> ({ openVoiceInputSettings() })
+                        // 系统引擎换无可换：带到本应用的语音识别页，那里能下自带模型。
+                        SpeechRemedy.DownloadOfflineModel -> ({ openVoiceEngineSettings() })
                         else -> null
                     },
                 )

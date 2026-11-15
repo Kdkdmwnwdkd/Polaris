@@ -338,8 +338,12 @@ fun ChatScreen(
             speechProbe.check(VoicePath.SystemPage)
         )) {
             is VoiceInputLogic.Action.Start -> launchVoiceRecognizer()
-            is VoiceInputLogic.Action.Notify ->
-                Toast.makeText(ctx, action.message, Toast.LENGTH_LONG).show()
+            // 系统识别给不了字时，别把用户指去系统设置里打转——出路是装自带模型。
+            is VoiceInputLogic.Action.Notify -> Toast.makeText(
+                ctx,
+                action.message + "（也可在 设置 → 语音识别 下载离线识别模型）",
+                Toast.LENGTH_LONG,
+            ).show()
         }
     }
 

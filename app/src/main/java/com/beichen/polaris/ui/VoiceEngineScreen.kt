@@ -125,7 +125,7 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
                 title = when {
                     asrBusy -> "正在下载中文识别模型… ${(asrProgress * 100).toInt()}%"
                     asrReady -> "已下载 · ${max(1L, asrBytes / 1048576)}MB"
-                    else -> "下载中文识别模型（约 52MB）"
+                    else -> "下载中文识别模型（约 24MB）"
                 },
                 description = asrError ?: when {
                     asrReady -> "点一下可以删掉，随时能重下；删了会退回系统引擎"
