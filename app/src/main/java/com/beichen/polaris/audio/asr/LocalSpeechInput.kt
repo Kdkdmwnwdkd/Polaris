@@ -34,7 +34,7 @@ import kotlin.math.max
  */
 class LocalSpeechInput(
     private val context: Context,
-    private val asr: StreamingAsr,
+    private val asr: AsrRouter,
     private val arbiter: VoiceArbiter,
 ) {
 
@@ -109,11 +109,11 @@ class LocalSpeechInput(
 
     // —— 内部 ——
 
-    private fun loop(session: StreamingAsr.Session, onEvent: (Event) -> Unit) {
+    private fun loop(session: AsrSession, onEvent: (Event) -> Unit) {
         var recorder: AudioRecord? = null
         try {
             val minBuf = AudioRecord.getMinBufferSize(
-                StreamingAsr.SAMPLE_RATE,
+                SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
             )
@@ -121,7 +121,7 @@ class LocalSpeechInput(
             // 且部分 ROM 上会走低延迟通路。识别场景下它比 MIC 明显准。
             recorder = AudioRecord(
                 MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                StreamingAsr.SAMPLE_RATE,
+                SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
                 max(minBuf, CHUNK_SAMPLES * 2 * 4),
@@ -173,6 +173,9 @@ class LocalSpeechInput(
     private companion object {
         /** 100ms 一块。太小会被调度抖动绊住，太大实时文本会一顿一顿。 */
         const val CHUNK_SAMPLES = 1_600
+
+        /** 两套模型都是 16kHz 训练的；喂别的采样率进去得到的是一串音近词。 */
+        const val SAMPLE_RATE = 16_000
 
         /** 一口气说 30 秒已经远超「随口问一句」，到这里强制收尾。 */
         const val MAX_MS = 30_000L

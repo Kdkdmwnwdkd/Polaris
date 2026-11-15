@@ -6,6 +6,7 @@ import com.beichen.polaris.automation.adb.AdbCredentials
 import com.beichen.polaris.automation.adb.AdbSession
 import com.beichen.polaris.automation.shizuku.ShizukuShell
 import com.beichen.polaris.audio.AudioGraph
+import com.beichen.polaris.audio.asr.AsrDirectory
 import com.beichen.polaris.audio.tts.NativeStderr
 import com.beichen.polaris.browser.BrowserHost
 import com.beichen.polaris.pet.PetState
@@ -33,7 +34,7 @@ import com.beichen.polaris.ui.container.ContainerInstallController
  *
  * ## 为什么存在
  *
- * 这个应用里有 27 个带可变状态的 `object`：它们是跨层通信的真实通道
+ * 这个应用里有 28 个带可变状态的 `object`：它们是跨层通信的真实通道
  * （ViewModel ↔ 无障碍服务 ↔ 前台服务 ↔ 推理引擎），但依赖关系不写在任何构造参数里。
  * 后果是三条：
  *
@@ -320,6 +321,15 @@ object AppGraph {
                 link = "TTS 引擎与麦克风仲裁器 ↔ 对话页 / 后台回合 / 桌宠。悬浮窗活在 Service 里、" +
                     "没有 Activity，若各自 new 一份就会同时出声、互相看不见对方占着麦克风",
                 reset = { AudioGraph.reset() }
+            )
+        )
+        add(
+            Global(
+                name = "AsrDirectory",
+                packageName = "com.beichen.polaris.audio.asr",
+                link = "离线识别引擎 ↔ 桌宠长按 / 聊天页麦克风。识别器加载一次要 600–900ms，" +
+                    "两条入口各 new 一份就会各加载一套、各占一份内存",
+                reset = { AsrDirectory.reset() }
             )
         )
         add(

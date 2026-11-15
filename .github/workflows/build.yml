@@ -505,6 +505,11 @@ jobs:
       #
       # 幂等：模型是这个项目的固定资产，不会每次构建都变，所以先看清单在不在，
       # 在就跳过（否则每轮白传 55MB，还会把 release 的更新时间刷成构建时间）。
+      # 两套识别模型都上传到 latest Release（与 APK 同源，App 只认这一个地址）：
+      #   asr-*  流式 zipformer（24MB，边说边出字）
+      #   asr2-* 整段 paraformer（74MB，说完再认，错字少）
+      # 上游把它们放在 k2-fsa/sherpa-onnx 的 asr-models 大 release 里，按 asset id 取最稳
+      # （文件名带训练信息，换版本就变，用 URL 拼名字迟早 404）。
       - name: Publish ASR model assets (latest)
         if: github.ref == 'refs/heads/main'
         env:
@@ -513,14 +518,34 @@ jobs:
           set -uo pipefail
           TAG=latest
           REPO="${{ github.repository }}"
-          if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' 2>/dev/null \
-               | grep -qx 'asr-manifest.txt'; then
-            echo "ASR 模型资产已存在，跳过上传"
+          HAVE=$(gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' 2>/dev/null || true)
+
+          # 两套分别判：只下过流式模型的人不该被「已存在」的清单挡住更准那套。
+          if grep -qx 'asr-manifest.txt' <<<"$HAVE" && grep -qx 'asr-accurate-manifest.txt' <<<"$HAVE"; then
+            echo "两套识别模型资产都已存在，跳过上传"
             exit 0
           fi
 
-          # 上游把中文流式模型放在 asr-models 这个大 release 里，按 asset id 取最稳
-          # （文件名带训练信息，换版本就变，用 URL 拼名字迟早 404）。
+          OUT=/tmp/asr-out && rm -rf "$OUT" && mkdir -p "$OUT"
+
+          # 文件名不写死：挑 int8（体积约三分之一，手机 CPU 上快一倍），没有就挑任意一个。
+          pick() {
+            local dir="$1" pre="$2" hit=""
+            hit=$(ls "$dir"/${pre}*.onnx 2>/dev/null | grep -E '\.int8\.onnx$' | head -1 || true)
+            [ -n "$hit" ] || hit=$(ls "$dir"/${pre}*.onnx 2>/dev/null | head -1 || true)
+            printf '%s' "$hit"
+          }
+          write_manifest() {
+            local out="$1"; shift
+            : > "$out"
+            for f in "$@"; do
+              printf '%s %s %s\n' "$f" "$(stat -c%s "/tmp/asr-out/$f")" \
+                "$(sha256sum "/tmp/asr-out/$f" | cut -d' ' -f1)" >> "$out"
+            done
+            cat "$out"
+          }
+
+          if ! grep -qx 'asr-manifest.txt' <<<"$HAVE"; then
           curl -fL --retry 3 --retry-delay 5 \
             -H "Accept: application/octet-stream" \
             -o /tmp/asr.tar.bz2 \
@@ -528,30 +553,39 @@ jobs:
           mkdir -p /tmp/asr-src && tar -xjf /tmp/asr.tar.bz2 -C /tmp/asr-src --strip-components=1
           ls -la /tmp/asr-src | head -20
 
-          # 文件名不写死：挑 int8（体积约三分之一，手机 CPU 上快一倍），没有就挑任意一个。
-          pick() {
-            local pre="$1" hit=""
-            hit=$(ls /tmp/asr-src/${pre}*.onnx 2>/dev/null | grep -E '\.int8\.onnx$' | head -1)
-            [ -n "$hit" ] || hit=$(ls /tmp/asr-src/${pre}*.onnx 2>/dev/null | head -1)
-            printf '%s' "$hit"
-          }
-          ENC=$(pick encoder); DEC=$(pick decoder); JOI=$(pick joiner)
-          [ -n "$ENC" ] && [ -n "$DEC" ] && [ -n "$JOI" ] || { echo "模型包结构与预期不符"; exit 1; }
+          ENC=$(pick /tmp/asr-src encoder); DEC=$(pick /tmp/asr-src decoder); JOI=$(pick /tmp/asr-src joiner)
+          [ -n "$ENC" ] && [ -n "$DEC" ] && [ -n "$JOI" ] || { echo "流式模型包结构与预期不符"; exit 1; }
           [ -f /tmp/asr-src/tokens.txt ] || { echo "缺 tokens.txt"; exit 1; }
 
-          OUT=/tmp/asr-out && mkdir -p "$OUT"
           cp "$ENC" "$OUT/asr-encoder.int8.onnx"
           cp "$DEC" "$OUT/asr-decoder.onnx"
           cp "$JOI" "$OUT/asr-joiner.int8.onnx"
           cp /tmp/asr-src/tokens.txt "$OUT/asr-tokens.txt"
-
           # 清单：名字 字节 sha256。App 下完逐个核对——截断的 onnx 只会让原生层
           # 报一句 failed to create native OnlineRecognizer，对用户毫无意义。
-          : > "$OUT/asr-manifest.txt"
-          for f in asr-encoder.int8.onnx asr-decoder.onnx asr-joiner.int8.onnx asr-tokens.txt; do
-            printf '%s %s %s\n' "$f" "$(stat -c%s "$OUT/$f")" "$(sha256sum "$OUT/$f" | cut -d' ' -f1)" \
-              >> "$OUT/asr-manifest.txt"
-          done
-          cat "$OUT/asr-manifest.txt"
+          write_manifest "$OUT/asr-manifest.txt" \
+            asr-encoder.int8.onnx asr-decoder.onnx asr-joiner.int8.onnx asr-tokens.txt
+          fi
 
-          gh release upload "$TAG" "$OUT"/asr-* --repo "$REPO" --clobber
+          if ! grep -qx 'asr-accurate-manifest.txt' <<<"$HAVE"; then
+          curl -fL --retry 3 --retry-delay 5 \
+            -H "Accept: application/octet-stream" \
+            -o /tmp/asr2.tar.bz2 \
+            "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/155854908"
+          rm -rf /tmp/asr2-src && mkdir -p /tmp/asr2-src
+          tar -xjf /tmp/asr2.tar.bz2 -C /tmp/asr2-src --strip-components=1
+          ls -la /tmp/asr2-src | head -20
+
+          # paraformer 只有单个 model.onnx（外加 tokens.txt），目录里没有 encoder/decoder 之分。
+          # 用 find 而不是假设固定层级：这个包的顶层目录名带日期，换版本就变；
+          # 而 strip 掉一层的前提一旦不成立，cp 会拿到空串、构建直接红。
+          MDL=$(find /tmp/asr2-src -name 'model*.onnx' | grep -E '\.int8\.onnx$' | head -1 || true)
+          [ -n "$MDL" ] || MDL=$(find /tmp/asr2-src -name 'model*.onnx' | head -1 || true)
+          TOK=$(find /tmp/asr2-src -name 'tokens.txt' | head -1 || true)
+          [ -n "$MDL" ] && [ -n "$TOK" ] || { echo "整段模型包结构与预期不符"; exit 1; }
+          cp "$MDL" "$OUT/asr2-model.onnx"
+          cp "$TOK" "$OUT/asr2-tokens.txt"
+          write_manifest "$OUT/asr-accurate-manifest.txt" asr2-model.onnx asr2-tokens.txt
+          fi
+
+          gh release upload "$TAG" "$OUT"/asr* --repo "$REPO" --clobber

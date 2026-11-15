@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.beichen.polaris.audio.SpeechProbe
 import com.beichen.polaris.audio.VoiceDiagnostics
 import com.beichen.polaris.audio.VoiceEngineStore
+import com.beichen.polaris.audio.asr.AsrModel
 import com.beichen.polaris.audio.asr.AsrModelInstaller
 import com.beichen.polaris.core.voice.EngineCapability
 import com.beichen.polaris.core.voice.EngineLabel
@@ -64,16 +65,6 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
     var probing by remember { mutableStateOf(true) }
     var pinned by remember { mutableStateOf(VoiceEngineStore.pinned(context)) }
 
-    // 自带离线识别：装了它，下面那一组引擎就不再是唯一出路。
-    val asrInstaller = remember { AsrModelInstaller(context) }
-    val main = remember { Handler(Looper.getMainLooper()) }
-    val scope = rememberCoroutineScope()
-    var asrReady by remember { mutableStateOf(asrInstaller.isInstalled()) }
-    var asrBytes by remember { mutableStateOf(asrInstaller.bytesOnDisk()) }
-    var asrBusy by remember { mutableStateOf(false) }
-    var asrProgress by remember { mutableStateOf(0.0f) }
-    var asrError by remember { mutableStateOf<String?>(null) }
-
     // 进页面就重探一次：用户来这里往往刚装/卸过语言包，读缓存会给他看旧结论。
     LaunchedEffect(Unit) {
         probing = true
@@ -113,52 +104,17 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
 
         AkGroup(
             title = "离线识别（自带）",
-            description = if (asrReady) {
-                "已就位：桌宠长按说话、聊天页麦克风都优先用它——不联网、只认中文"
-            } else {
-                "这台机器上系统那两个识别引擎都用不了（Google 的国内不可达，高通的没有中文包）。" +
-                    "装这个才能真正识别出字"
-            },
+            description = "装了就不用系统引擎。两套都装时用「更准」那个——慢一点，但不用改字",
         ) {
-            AkListItem(
-                icon = Icons.Outlined.Mic,
-                title = when {
-                    asrBusy -> "正在下载中文识别模型… ${(asrProgress * 100).toInt()}%"
-                    asrReady -> "已下载 · ${max(1L, asrBytes / 1048576)}MB"
-                    else -> "下载中文识别模型（约 24MB）"
-                },
-                description = asrError ?: when {
-                    asrReady -> "点一下可以删掉，随时能重下；删了会退回系统引擎"
-                    asrBusy -> "下载中请保持前台；装好后自动生效"
-                    else -> "装到应用私有目录，只下一次；不想要了随时删"
-                },
-                onClick = when {
-                    asrBusy -> null
-                    asrReady -> ({
-                        asrInstaller.remove()
-                        asrReady = false
-                        asrBytes = 0
-                        asrError = null
-                    })
-                    else -> ({
-                        asrBusy = true
-                        asrError = null
-                        asrProgress = 0.0f
-                        scope.launch {
-                            runCatching {
-                                asrInstaller.download { done, total, _ ->
-                                    val ratio = done.toFloat() / max(1L, total)
-                                    main.post { asrProgress = ratio }
-                                }
-                            }.onFailure { e -> main.post { asrError = e.message ?: "下载失败" } }
-                            main.post {
-                                asrBusy = false
-                                asrReady = asrInstaller.isInstalled()
-                                asrBytes = asrInstaller.bytesOnDisk()
-                            }
-                        }
-                    })
-                },
+            AsrModelRow(
+                model = AsrModel.Fast,
+                title = "快速识别",
+                hint = "边说边出字，随口问一句最顺手；错字相对多",
+            )
+            AsrModelRow(
+                model = AsrModel.Accurate,
+                title = "更准识别",
+                hint = "松手后约一秒出字，中文短句基本不用改；占地方多一点",
             )
         }
 
@@ -240,4 +196,65 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
             )
         }
     }
+}
+
+/**
+ * 一套识别模型的下载 / 删除行。
+ *
+ * 抽成独立 composable 而不是在页面里写两遍：两套模型的下载状态（进度、错误、体积）
+ * 必须各管各的——共用一份状态时，下第二套会显示第一套的进度，看起来像「卡住了」。
+ */
+@Composable
+private fun AsrModelRow(model: AsrModel, title: String, hint: String) {
+    val context = LocalContext.current
+    val installer = remember(model) { AsrModelInstaller(context, model) }
+    val main = remember { Handler(Looper.getMainLooper()) }
+    val scope = rememberCoroutineScope()
+
+    var ready by remember { mutableStateOf(installer.isInstalled()) }
+    var bytes by remember { mutableStateOf(installer.bytesOnDisk()) }
+    var busy by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0.0f) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    AkListItem(
+        icon = Icons.Outlined.Mic,
+        title = when {
+            busy -> "$title · 下载中 ${(progress * 100).toInt()}%"
+            ready -> "$title · 已下载 ${max(1L, bytes / 1048576)}MB"
+            else -> "$title（约 ${model.approxMb}MB）"
+        },
+        description = error ?: when {
+            ready -> "点一下可以删掉，随时能重下"
+            busy -> hint
+            else -> hint
+        },
+        onClick = when {
+            busy -> null
+            ready -> ({
+                installer.remove()
+                ready = false
+                bytes = 0
+                error = null
+            })
+            else -> ({
+                busy = true
+                error = null
+                progress = 0.0f
+                scope.launch {
+                    runCatching {
+                        installer.download { done, total, _ ->
+                            val ratio = done.toFloat() / max(1L, total)
+                            main.post { progress = ratio }
+                        }
+                    }.onFailure { e -> main.post { error = e.message ?: "下载失败" } }
+                    main.post {
+                        busy = false
+                        ready = installer.isInstalled()
+                        bytes = installer.bytesOnDisk()
+                    }
+                }
+            })
+        },
+    )
 }

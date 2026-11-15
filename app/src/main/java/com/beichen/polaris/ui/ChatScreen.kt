@@ -97,7 +97,7 @@ import com.beichen.polaris.core.text.ChatTime
 import com.beichen.polaris.core.text.SpeechLogic
 import com.beichen.polaris.core.voice.VoicePath
 import com.beichen.polaris.audio.SpeechProbe
-import com.beichen.polaris.audio.asr.StreamingAsr
+import com.beichen.polaris.audio.asr.AsrDirectory
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
@@ -332,7 +332,7 @@ fun ChatScreen(
         // 在国内不可达，厂商引擎又不认中文），模型装了就用自己这条，不弹系统页。
         // 没装模型时才回到系统识别页——那套判定与桌宠共用 SpeechProbe，
         // 但走不同路径（录音在系统进程里，我们的麦克风权限不参与判定）。
-        if (StreamingAsr(ctx).isInstalled()) {
+        if (AsrDirectory.of(ctx).isInstalled()) {
             localVoice = true
         } else when (val action = VoiceInputLogic.actionFor(
             speechProbe.check(VoicePath.SystemPage)

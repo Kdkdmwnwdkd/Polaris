@@ -13,6 +13,8 @@ ASR_DIR=app/src/main/java/com/beichen/polaris/audio/asr
 ENGINE=$ASR_DIR/StreamingAsr.kt
 INPUT=$ASR_DIR/LocalSpeechInput.kt
 INSTALLER=$ASR_DIR/AsrModelInstaller.kt
+ACCURATE=$ASR_DIR/OfflineAsrEngine.kt
+ROUTER=$ASR_DIR/AsrRouter.kt
 PET=app/src/main/java/com/beichen/polaris/pet/PetVoice.kt
 CHAT=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
 SHEET=app/src/main/java/com/beichen/polaris/ui/LocalVoiceSheet.kt
@@ -45,8 +47,8 @@ else
 fi
 
 # 删目录前必须释放原生句柄，否则那份模型在内存里继续占着，用户会以为「删了没效果」。
-if awk '/fun remove\(\)/,/^    }/' "$INSTALLER" | grep -q 'asr.release()'; then
-  pass "A3 删除先释放识别器，再删目录"
+if awk '/fun remove\(\)/,/^    }/' "$INSTALLER" | grep -q 'releaseAll()'; then
+  pass "A3 删除先释放两套识别器，再删目录"
 else
   fail "A3 删除没先 release —— 原生层仍持有已删文件"
 fi
@@ -75,6 +77,14 @@ else
   fail "A6 失败只报一句话 —— 用户无从判断是网络还是服务端缺文件"
 fi
 
+# 两套模型是互补的，但优先级只能是「准的那个先」：真机上流式模型把
+# 「你在这吗」认成「你在这好」，那种错字用户没法用，快 0.8 秒毫无意义。
+if awk '/fun active\(\)/,/^    }/' "$ROUTER" | grep -q 'accurate.isInstalled()'; then
+  pass "A7 路由优先「更准」那套（装了就压过流式）"
+else
+  fail "A7 路由顺序变了 —— 更准的模型装了却不用"
+fi
+
 echo ""
 echo "[B] 接入：两条入口都优先用自带识别"
 
@@ -84,7 +94,7 @@ else
   fail "B1 桌宠没有分派到自带识别 —— 装了模型也用不上"
 fi
 
-if grep -qF 'if (StreamingAsr(ctx).isInstalled())' "$CHAT"; then
+if grep -qF 'if (AsrDirectory.of(ctx).isInstalled())' "$CHAT"; then
   pass "B2 聊天页先看自带模型，没装才弹系统识别页"
 else
   fail "B2 聊天页仍只会弹系统识别页 —— 国行机上照样没字"
@@ -101,8 +111,11 @@ echo ""
 echo "[C] 参数：错一个就是满屏乱码"
 
 # 模型是 16kHz 训练的，喂 44.1kHz 进去得到的是一串音近词（看着像「识别不准」）。
-if grep -qF 'const val SAMPLE_RATE = 16_000' "$ENGINE" \
-   && grep -qF 'StreamingAsr.SAMPLE_RATE' "$INPUT"; then
+# 录音端（LocalSpeechInput）与两套模型都必须钉在 16kHz。录音端现在用自己的常量，
+# 不再引用 StreamingAsr.SAMPLE_RATE——两条引擎共用同一个采样率，引用谁都不合适。
+if grep -qF 'const val SAMPLE_RATE = 16_000' "$INPUT" \
+   && grep -qF 'const val SAMPLE_RATE = 16_000' "$ENGINE" \
+   && grep -qF 'const val SAMPLE_RATE = 16_000' "$ACCURATE"; then
   pass "C1 录音与模型同为 16kHz"
 else
   fail "C1 采样率没跟模型对齐 —— 会识别成音近词"
@@ -130,7 +143,7 @@ fi
 echo ""
 echo "[D] 发布：模型从同一个 Release 出"
 
-if grep -qF 'asr-manifest.txt' "$WORKFLOW" && grep -qF 'gh release upload "$TAG" "$OUT"/asr-*' "$WORKFLOW"; then
+if grep -qF 'asr-manifest.txt' "$WORKFLOW" && grep -qF 'gh release upload "$TAG" "$OUT"/asr*' "$WORKFLOW"; then
   pass "D1 CI 把模型与清单传到 latest Release（与 APK 同源）"
 else
   fail "D1 CI 没上传模型 —— App 里点下载会 404"
@@ -141,6 +154,13 @@ if grep -qF "grep -qx 'asr-manifest.txt'" "$WORKFLOW"; then
   pass "D2 上传是幂等的（已存在就跳过）"
 else
   fail "D2 每轮构建都会重传模型"
+fi
+
+# 只上传流式那套的话，用户在「更准识别」上点下载会 404。
+if grep -qF 'asr-accurate-manifest.txt' "$WORKFLOW" && grep -qF "assets/155854908" "$WORKFLOW"; then
+  pass "D3 整段识别模型也传了（asr2-*）"
+else
+  fail "D3 CI 没上传整段模型 —— 「更准识别」点了会 404"
 fi
 
 echo ""

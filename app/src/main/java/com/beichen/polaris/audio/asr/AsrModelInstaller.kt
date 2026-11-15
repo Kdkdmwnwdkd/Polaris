@@ -30,12 +30,14 @@ import java.security.MessageDigest
  * manifest 格式刻意用纯文本（每行 `名字 大小 sha256`），不用 JSON：
  * 少一个解析器、少一类「字段名拼错」的故障，而且 CI 里用 shell 就能生成。
  */
-class AsrModelInstaller(context: Context) {
+class AsrModelInstaller(context: Context, private val model: AsrModel) {
 
     private val tag = "AsrDownload"
 
-    private val asr = StreamingAsr(context)
-    private val dir: File get() = asr.modelDir
+    private val router = AsrDirectory.of(context)
+
+    /** 落盘目录由 [AsrModel] 决定，与引擎读的必须是同一个。 */
+    private val dir: File = File(File(context.filesDir, "asr"), model.dirName)
 
     /**
      * 模型放在我们自己的 latest Release 里，与 APK 同源。
@@ -47,9 +49,14 @@ class AsrModelInstaller(context: Context) {
     private val baseUrl: String =
         "https://github.com/Kdkdmwnwdkd/Polaris/releases/download/latest"
 
-    fun isInstalled(): Boolean = asr.isInstalled()
+    fun isInstalled(): Boolean = engine().isInstalled()
 
-    fun bytesOnDisk(): Long = asr.sizeBytes()
+    fun bytesOnDisk(): Long = engine().sizeBytes()
+
+    private fun engine(): AsrEngine = when (model) {
+        AsrModel.Fast -> router.streaming
+        AsrModel.Accurate -> router.accurate
+    }
 
     /**
      * 下载并校验。
@@ -78,12 +85,13 @@ class AsrModelInstaller(context: Context) {
                 done += entry.size
                 onProgress(done, total, entry.name)
             }
-            AgentLogger.i(tag, "离线识别模型就绪：${bytesOnDisk() / 1048576}MB → ${dir.absolutePath}")
+            AgentLogger.i(tag, "${model.label}模型就绪：${bytesOnDisk() / 1048576}MB → ${dir.absolutePath}")
         }
 
     /** 删掉模型目录。先释放识别器，否则原生层还拿着文件句柄（Android/Linux 允许删，但内存里那份不会消失）。 */
     fun remove() {
-        asr.release()
+        // 两套都释放：原生层可能持有任一套的文件句柄，只放一套会让「删了但还占着」。
+        router.releaseAll()
         dir.deleteRecursively()
         AgentLogger.i(tag, "离线识别模型已删除（${dir.absolutePath}）")
     }
@@ -115,7 +123,7 @@ class AsrModelInstaller(context: Context) {
      */
     private fun fetchManifest(): List<Entry> {
         val failures = ArrayList<String>()
-        for (src in GitHubMirror.sources("$baseUrl/$MANIFEST")) {
+        for (src in GitHubMirror.sources("$baseUrl/${model.manifest}")) {
             val body = try {
                 fetchText(src.url)
             } catch (t: Throwable) {
@@ -124,7 +132,7 @@ class AsrModelInstaller(context: Context) {
                 continue
             }
             val entries = parseManifest(body)
-            if (entries.size >= MIN_ENTRIES) {
+            if (entries.size >= model.minEntries) {
                 AgentLogger.i(tag, "模型清单来自 ${src.label}（${entries.size} 项）")
                 return entries
             }
@@ -157,7 +165,7 @@ class AsrModelInstaller(context: Context) {
                 // 清单里写的是服务器上的资产名，本地落盘名是它的后缀部分：
                 // `asr-encoder.int8.onnx` → `encoder.int8.onnx`，这样识别器按前缀就能找到。
                 Entry(
-                    name = parts[0].removePrefix("asr-"),
+                    name = parts[0].removePrefix(model.assetPrefix),
                     asset = parts[0],
                     size = parts[1].toLongOrNull() ?: return@mapNotNull null,
                     sha256 = parts[2],
@@ -233,12 +241,6 @@ class AsrModelInstaller(context: Context) {
     }
 
     private companion object {
-        /** 清单文件名，CI 与这里必须一致。 */
-        const val MANIFEST = "asr-manifest.txt"
-
-        /** 4 个文件（encoder/decoder/joiner/tokens）；少于这个数说明返回的不是清单。 */
-        const val MIN_ENTRIES = 4
-
         /**
          * 部分镜像对不带 UA 的请求直接回 403，与「文件不存在」的 404 混在一起分不清。
          */

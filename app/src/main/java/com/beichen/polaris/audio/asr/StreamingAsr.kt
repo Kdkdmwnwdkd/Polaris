@@ -44,12 +44,14 @@ import java.io.File
  * 所以这里只缓存 recognizer（模型加载 200–500ms，每次录音都重载太浪费），
  * 而 [Session] 每次新建——两次录音不会重叠，因为上层 [LocalSpeechInput] 是单例且串行。
  */
-class StreamingAsr(context: Context) {
+class StreamingAsr(context: Context) : AsrEngine {
 
     private val tag = "Asr"
 
     /** 模型所在目录。下载器往这里写，删模型就是删这个目录。 */
     val modelDir: File = File(File(context.filesDir, "asr"), "zh-streaming")
+
+    override val dir: File get() = modelDir
 
     @Volatile
     private var recognizer: OnlineRecognizer? = null
@@ -71,10 +73,10 @@ class StreamingAsr(context: Context) {
      * 只看文件在不在、非空——**不建识别器**。建一次要几百毫秒，界面每帧问一次会卡。
      * 真正能不能跑由 [ensureSession] 的结果说了算（它失败会把原因写进日志）。
      */
-    fun isInstalled(): Boolean = files() != null
+    override fun isInstalled(): Boolean = files() != null
 
     /** 给界面看的模型体积（字节）。没装返回 0。 */
-    fun sizeBytes(): Long = if (isInstalled()) {
+    override fun sizeBytes(): Long = if (isInstalled()) {
         modelDir.listFiles()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
     } else 0L
 
@@ -84,7 +86,7 @@ class StreamingAsr(context: Context) {
      * 失败返回 null 并记日志——调用方据此回落到系统识别，而不是让用户对着麦克风干等。
      */
     @Synchronized
-    fun ensureSession(): Session? {
+    override fun ensureSession(): Session? {
         val f = files()
         if (f == null) {
             AgentLogger.w(tag, "离线识别模型不完整：${modelDir.absolutePath}（${describeDir()}）")
@@ -118,30 +120,30 @@ class StreamingAsr(context: Context) {
     class Session internal constructor(
         private val recognizer: OnlineRecognizer,
         private val stream: OnlineStream,
-    ) {
+    ) : AsrSession {
 
         /**
          * 喂一段 16kHz 单声道 PCM，返回**目前为止**的整句文本。
          *
          * 流式模型的返回值是「整句累计」，不是增量——直接拿去显示即可，不需要自己拼接。
          */
-        fun accept(samples: FloatArray, sampleRate: Int = SAMPLE_RATE): String {
+        override fun accept(samples: FloatArray, sampleRate: Int): String {
             stream.acceptWaveform(samples, sampleRate)
             drain()
             return recognizer.getResult(stream).text
         }
 
         /** 松手：补最后一帧并给出最终文本。 */
-        fun finish(): String {
+        override fun finish(): String {
             stream.inputFinished()
             drain()
             return recognizer.getResult(stream).text
         }
 
         /** 引擎判断这句已经说完了（尾部静音够长），可以替用户收尾。 */
-        fun isEndpoint(): Boolean = runCatching { recognizer.isEndpoint(stream) }.getOrDefault(false)
+        override fun isEndpoint(): Boolean = runCatching { recognizer.isEndpoint(stream) }.getOrDefault(false)
 
-        fun close() {
+        override fun close() {
             runCatching { stream.release() }
         }
 
@@ -153,7 +155,7 @@ class StreamingAsr(context: Context) {
         }
     }
 
-    fun release() {
+    override fun release() {
         runCatching { recognizer?.release() }
         recognizer = null
         loaded = null

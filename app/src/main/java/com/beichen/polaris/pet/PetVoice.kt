@@ -12,7 +12,7 @@ import android.speech.SpeechRecognizer
 import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.audio.SpeechProbe
 import com.beichen.polaris.audio.asr.LocalSpeechInput
-import com.beichen.polaris.audio.asr.StreamingAsr
+import com.beichen.polaris.audio.asr.AsrDirectory
 import com.beichen.polaris.audio.VoiceEngineStore
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.text.SpeechLogic
@@ -125,7 +125,7 @@ class PetVoiceInput(
      * （Google 不可达、高通引擎不认中文）。自己的模型只要装了，就一定认中文、一定不联网。
      * 模型没装时仍然走系统那条，两条腿都不耽误。
      */
-    private val localAsr = StreamingAsr(app)
+    private val localAsr = AsrDirectory.of(app)
     private var localInput: LocalSpeechInput? = null
     private var usingLocal = false
 

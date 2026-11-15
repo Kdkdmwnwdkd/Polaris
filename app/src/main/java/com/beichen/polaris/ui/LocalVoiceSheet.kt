@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.audio.asr.LocalSpeechInput
-import com.beichen.polaris.audio.asr.StreamingAsr
+import com.beichen.polaris.audio.asr.AsrDirectory
 
 /**
  * 聊天页的「自带离线识别」录音层。
@@ -56,7 +56,7 @@ fun LocalVoiceSheet(
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var listening by remember { mutableStateOf(true) }
-    val input = remember { LocalSpeechInput(ctx, StreamingAsr(ctx), AudioGraph.arbiter(ctx)) }
+    val input = remember { LocalSpeechInput(ctx, AsrDirectory.of(ctx), AudioGraph.arbiter(ctx)) }
 
     DisposableEffect(Unit) {
         val started = input.start { event ->
