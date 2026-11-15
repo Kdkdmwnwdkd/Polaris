@@ -11,6 +11,8 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.audio.SpeechProbe
+import com.beichen.polaris.audio.asr.LocalSpeechInput
+import com.beichen.polaris.audio.asr.StreamingAsr
 import com.beichen.polaris.audio.VoiceEngineStore
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.text.SpeechLogic
@@ -116,6 +118,17 @@ class PetVoiceInput(
     private var lease: AudioLease? = null
     private var recognizer: SpeechRecognizer? = null
 
+    /**
+     * 自带的离线识别。模型装了就优先用它。
+     *
+     * 为什么优先级在系统识别之前：系统识别是「厂商给什么用什么」，国行机上经常整条死掉
+     * （Google 不可达、高通引擎不认中文）。自己的模型只要装了，就一定认中文、一定不联网。
+     * 模型没装时仍然走系统那条，两条腿都不耽误。
+     */
+    private val localAsr = StreamingAsr(app)
+    private var localInput: LocalSpeechInput? = null
+    private var usingLocal = false
+
     /** 本次会话是否还活着。所有异步回调先查它，避免迟到的回调改动新会话的状态。 */
     private var active = false
 
@@ -208,6 +221,11 @@ class PetVoiceInput(
     fun start(): Boolean {
         if (active) return false
 
+        // 先看自己的腿。模型没装才回头找系统——顺序不能反：
+        // 反了的话，系统识别「能启动但识别不出一个字」（国行机常见）会把用户卡在那儿，
+        // 而明明装了离线模型却不被使用。
+        if (localAsr.isInstalled()) return startLocal()
+
         // 「能不能识别」要查三件事，缺一件都会静默失败：
         //   ① 有没有识别服务；
         //   ② 系统**选了**哪个引擎（Android 14 的 SpeechRecognizer 绑定时读
@@ -264,6 +282,55 @@ class PetVoiceInput(
             AgentLogger.w(TAG, "startListening 抛异常：${started.exceptionOrNull()?.message}")
             teardown("启动失败")
             onProblem("语音识别启动失败，请稍后再试")
+            return false
+        }
+        handler.postDelayed(hardTimeout, HARD_TIMEOUT_MS)
+        return true
+    }
+
+    /**
+     * 走自带离线识别。
+     *
+     * 与系统那条的差别：麦克风租约由 [LocalSpeechInput] 自己申请与释放（它在录音线程的
+     * finally 里释放，比这里更靠得住），所以这里**不**再 beginCapture——
+     * 申请两次会被自己判成 busy。
+     */
+    private fun startLocal(): Boolean {
+        active = true
+        finishing = false
+        usingLocal = true
+        onState(PetVoiceState.Arming)
+
+        val input = LocalSpeechInput(app, localAsr, arbiter)
+        localInput = input
+        val started = input.start { event ->
+            // 回调来自录音线程，UI 状态与 onText 都必须在主线程。
+            handler.post {
+                when (event) {
+                    is LocalSpeechInput.Event.Partial -> {
+                        if (!active || finishing) return@post
+                        onState(PetVoiceState.Listening(event.text))
+                    }
+                    is LocalSpeechInput.Event.Final -> {
+                        if (!active) return@post
+                        val text = SpeechLogic.cleanResult(event.text)
+                        teardown("本地识别完成")
+                        if (text != null) onText(text) else onProblem("没听清，再说一次试试")
+                    }
+                    is LocalSpeechInput.Event.Failed -> {
+                        if (!active) return@post
+                        AgentLogger.w(TAG, "离线识别失败：${event.message}")
+                        teardown("离线识别失败")
+                        onProblem(event.message)
+                    }
+                }
+            }
+        }
+        if (!started) {
+            active = false
+            usingLocal = false
+            localInput = null
+            onState(PetVoiceState.Idle)
             return false
         }
         handler.postDelayed(hardTimeout, HARD_TIMEOUT_MS)
@@ -362,6 +429,11 @@ class PetVoiceInput(
         finishing = true
         handler.removeCallbacks(hardTimeout)
         onState(PetVoiceState.Transcribing)
+        if (usingLocal) {
+            // 本地识别不需要等「引擎出结果」的宽限：收尾就是几毫秒的 decode。
+            localInput?.stop()
+            return
+        }
         runCatching { recognizer?.stopListening() }
         handler.postDelayed(resultTimeout, RESULT_TIMEOUT_MS)
     }
@@ -434,6 +506,12 @@ class PetVoiceInput(
         handler.removeCallbacks(resultTimeout)
         active = false
         finishing = false
+        if (usingLocal) {
+            // 已经走完的会话再 cancel 是幂等的（录音线程 running 已为 false）。
+            localInput?.cancel()
+            localInput = null
+            usingLocal = false
+        }
         val rec = recognizer
         recognizer = null
         if (rec != null) {

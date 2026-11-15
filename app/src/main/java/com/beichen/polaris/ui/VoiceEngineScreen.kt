@@ -1,5 +1,7 @@
 package com.beichen.polaris.ui
 
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,18 +17,22 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.beichen.polaris.audio.SpeechProbe
 import com.beichen.polaris.audio.VoiceDiagnostics
 import com.beichen.polaris.audio.VoiceEngineStore
+import com.beichen.polaris.audio.asr.AsrModelInstaller
 import com.beichen.polaris.core.voice.EngineCapability
 import com.beichen.polaris.core.voice.EngineLabel
 import com.beichen.polaris.core.voice.EngineSelector
+import kotlinx.coroutines.launch
+import kotlin.math.max
 
 /**
- * 语音识别引擎选择页。
+ * 语音识别页。
  *
  * ## 为什么需要这一页
  *
@@ -42,16 +48,14 @@ import com.beichen.polaris.core.voice.EngineSelector
  * 既然能指定，就不该要求用户去一个可能不存在的系统页面里翻——
  * 把选择搬到我们自己的页面上，这是唯一不依赖 ROM 的做法。
  *
- * ## 为什么只有「自动」和具体引擎两档
+ * ## 2026-11-15：多了一条更硬的路
  *
- * 不给「离线/在线」之类的开关：那不是用户该做的决定，是引擎自己的事。
- * 这里只回答一个问题——**用哪个引擎**。
+ * 真机日志证明这台机器上**两个系统引擎都用不了**：Google 的查询语言支持直接超时
+ * （国内不可达），Qualcomm 的明确「不支持当前语言」且没有中文离线包。
+ * 在这种机器上，无论把引擎换成谁都不会有字。
  *
- * ## 只影响桌宠
- *
- * 聊天页走系统识别页（`ACTION_RECOGNIZE_SPEECH` 的 Activity 版），
- * 那个页面由系统拉起，用哪个引擎、认哪个语言都由它自己决定，我们指定不了。
- * 这一点必须写在页面上，否则用户改完引擎发现聊天页没变，会以为设置没生效。
+ * 所以页面最上面加了一组「离线识别（自带）」：模型装在应用私有目录里，
+ * 录、算、出字全在我们进程内，不认任何系统服务。装了它，下面那组引擎就退居备用。
  */
 @Composable
 fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
@@ -59,6 +63,16 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
     var engines by remember { mutableStateOf<List<EngineCapability>?>(null) }
     var probing by remember { mutableStateOf(true) }
     var pinned by remember { mutableStateOf(VoiceEngineStore.pinned(context)) }
+
+    // 自带离线识别：装了它，下面那一组引擎就不再是唯一出路。
+    val asrInstaller = remember { AsrModelInstaller(context) }
+    val main = remember { Handler(Looper.getMainLooper()) }
+    val scope = rememberCoroutineScope()
+    var asrReady by remember { mutableStateOf(asrInstaller.isInstalled()) }
+    var asrBytes by remember { mutableStateOf(asrInstaller.bytesOnDisk()) }
+    var asrBusy by remember { mutableStateOf(false) }
+    var asrProgress by remember { mutableStateOf(0.0f) }
+    var asrError by remember { mutableStateOf<String?>(null) }
 
     // 进页面就重探一次：用户来这里往往刚装/卸过语言包，读缓存会给他看旧结论。
     LaunchedEffect(Unit) {
@@ -83,7 +97,7 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
     ) {
         AkDisplayTitle(
             title = "语音识别",
-            subtitle = "选一个引擎给桌宠用；聊天页走系统识别页，由系统决定",
+            subtitle = "先看「离线识别」那一组：装了它就不依赖系统引擎；没装才用下面的",
         )
 
         if (onOpenStyle != null) {
@@ -95,6 +109,57 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
                     onClick = onOpenStyle,
                 )
             }
+        }
+
+        AkGroup(
+            title = "离线识别（自带）",
+            description = if (asrReady) {
+                "已就位：桌宠长按说话、聊天页麦克风都优先用它——不联网、只认中文"
+            } else {
+                "这台机器上系统那两个识别引擎都用不了（Google 的国内不可达，高通的没有中文包）。" +
+                    "装这个才能真正识别出字"
+            },
+        ) {
+            AkListItem(
+                icon = Icons.Outlined.Mic,
+                title = when {
+                    asrBusy -> "正在下载中文识别模型… ${(asrProgress * 100).toInt()}%"
+                    asrReady -> "已下载 · ${max(1L, asrBytes / 1048576)}MB"
+                    else -> "下载中文识别模型（约 52MB）"
+                },
+                description = asrError ?: when {
+                    asrReady -> "点一下可以删掉，随时能重下；删了会退回系统引擎"
+                    asrBusy -> "下载中请保持前台；装好后自动生效"
+                    else -> "装到应用私有目录，只下一次；不想要了随时删"
+                },
+                onClick = when {
+                    asrBusy -> null
+                    asrReady -> ({
+                        asrInstaller.remove()
+                        asrReady = false
+                        asrBytes = 0
+                        asrError = null
+                    })
+                    else -> ({
+                        asrBusy = true
+                        asrError = null
+                        asrProgress = 0.0f
+                        scope.launch {
+                            runCatching {
+                                asrInstaller.download { done, total, _ ->
+                                    val ratio = done.toFloat() / max(1L, total)
+                                    main.post { asrProgress = ratio }
+                                }
+                            }.onFailure { e -> main.post { asrError = e.message ?: "下载失败" } }
+                            main.post {
+                                asrBusy = false
+                                asrReady = asrInstaller.isInstalled()
+                                asrBytes = asrInstaller.bytesOnDisk()
+                            }
+                        }
+                    })
+                },
+            )
         }
 
         AkGroup(
@@ -152,8 +217,8 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
             )
             AkListItem(
                 icon = null,
-                title = "聊天页为什么不受这里影响",
-                description = "聊天页弹的是系统识别页，用哪个引擎由系统决定，我们指定不了",
+                title = "聊天页现在也会用离线识别",
+                description = "装了上面的模型，聊天页就不再弹系统识别页，直接在我们自己的界面里录",
                 onClick = null,
             )
             AkListItem(

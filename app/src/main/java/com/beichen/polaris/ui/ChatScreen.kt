@@ -97,6 +97,7 @@ import com.beichen.polaris.core.text.ChatTime
 import com.beichen.polaris.core.text.SpeechLogic
 import com.beichen.polaris.core.voice.VoicePath
 import com.beichen.polaris.audio.SpeechProbe
+import com.beichen.polaris.audio.asr.StreamingAsr
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
@@ -268,6 +269,7 @@ fun ChatScreen(
     val pendingFiles by vm.pendingFiles.collectAsStateWithLifecycle()
     // 附件类型选择菜单（「＋」不再直通相册——用户要的是「发东西」，不只是照片）
     var showAttachMenu by remember { mutableStateOf(false) }
+    var localVoice by remember { mutableStateOf(false) }
     val inputScope = rememberCoroutineScope()
     /**
      * W-30：语音输入。
@@ -322,34 +324,17 @@ fun ChatScreen(
         }
     }
 
-    // 麦克风权限（**已撤**）——用行注释而不是 KDoc：KDoc 会挂到下一个声明上，
-    // 变成 startVoiceInput 的文档，而它说的其实是另一件事。
-    //
-    // 2026-11-14 撤掉的原因：这里原先加了一个「缺权限就当场申请」的入口，
-    // 前提是「聊天页要自己录音」——**那个前提是错的**。
-    //
-    // 聊天页走的是系统识别页（RecognizerIntent），录音发生在**系统进程**里，
-    // 我们的 RECORD_AUDIO 跟它无关。依据见
-    // com.beichen.polaris.core.voice.VoicePath 的注释（AOSP attribution 链 +
-    // 框架 SearchView 的旁证）。
-    //
-    // 留着这个拦截的代价是：只用聊天页语音、没在设置里开过桌宠的用户，
-    // 点麦克风会被「请授予麦克风权限」拦下——**而那条路本来是通的**。
-    // 拦住一条本来能用的路，比不拦更糟。
-    //
-    // 需要麦克风权限的是**桌宠**（自己录音那条路），它那边有独立的提示与跳转。
+    // 麦克风权限不在这里拦：本地识别那条路在真正开麦时才检查，没授权会当场说明
+    // 怎么开（拦在按钮上只会让「本来能用的路」变成「点了没反应」）。
 
     val startVoiceInput: () -> Unit = {
-        // 先问「这台机器能不能识别」，再决定要不要弹系统识别页。
-        //
-        // 顺序的理由：系统识别页一旦弹出，用户就进入了一个走不出来的流程
-        // （有的 ROM 上那个页面上没有「取消」）。先自己判定，缺什么就地提示，
-        // 比弹出去再让用户自己发现不对要好。
-        //
-        // 判定与桌宠共用 [SpeechProbe]——但**走不同的路径**：
-        // 聊天页走系统识别页（[com.beichen.polaris.core.voice.VoicePath.SystemPage]），
-        // 录音在系统进程里，我们的麦克风权限与它无关，所以这一维不参与判定。
-        when (val action = VoiceInputLogic.actionFor(
+        // 自带离线识别优先：系统识别页在国行机上经常整条不通（Google 的识别服务
+        // 在国内不可达，厂商引擎又不认中文），模型装了就用自己这条，不弹系统页。
+        // 没装模型时才回到系统识别页——那套判定与桌宠共用 SpeechProbe，
+        // 但走不同路径（录音在系统进程里，我们的麦克风权限不参与判定）。
+        if (StreamingAsr(ctx).isInstalled()) {
+            localVoice = true
+        } else when (val action = VoiceInputLogic.actionFor(
             speechProbe.check(VoicePath.SystemPage)
         )) {
             is VoiceInputLogic.Action.Start -> launchVoiceRecognizer()
@@ -732,6 +717,16 @@ fun ChatScreen(
 
     // 功能五（P1-7）：快捷指令选择器（点选填入输入框；「管理」进提示词库全功能页）
     // W-RT4：带 {{变量}} 的提示词先弹填槽，填好再进输入框；无变量的保持原来直插路径。
+    if (localVoice) {
+        LocalVoiceSheet(
+            onClose = { localVoice = false },
+            onSubmit = { said ->
+                vm.input.value = SpeechLogic.appendTo(vm.input.value, said)
+                localVoice = false
+            },
+        )
+    }
+
     if (showPromptPicker) {
         PromptPickerDialog(
             prompts = prompts,

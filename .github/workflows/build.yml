@@ -498,3 +498,60 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "$TITLE" \
             --notes "$NOTES"
+
+      # 离线识别模型（约 52MB）**不进 APK**：只有第一次点语音的人需要它。
+      # 放在同一个 latest Release 里，App 从那里下——国内用户已经在用这条路下 361MB 的包，
+      # 不必再引一个新的下载源。
+      #
+      # 幂等：模型是这个项目的固定资产，不会每次构建都变，所以先看清单在不在，
+      # 在就跳过（否则每轮白传 55MB，还会把 release 的更新时间刷成构建时间）。
+      - name: Publish ASR model assets (latest)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          TAG=latest
+          REPO="${{ github.repository }}"
+          if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' 2>/dev/null \
+               | grep -qx 'asr-manifest.txt'; then
+            echo "ASR 模型资产已存在，跳过上传"
+            exit 0
+          fi
+
+          # 上游把中文流式模型放在 asr-models 这个大 release 里，按 asset id 取最稳
+          # （文件名带训练信息，换版本就变，用 URL 拼名字迟早 404）。
+          curl -fL --retry 3 --retry-delay 5 \
+            -H "Accept: application/octet-stream" \
+            -o /tmp/asr.tar.bz2 \
+            "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/191971859"
+          mkdir -p /tmp/asr-src && tar -xjf /tmp/asr.tar.bz2 -C /tmp/asr-src --strip-components=1
+          ls -la /tmp/asr-src | head -20
+
+          # 文件名不写死：挑 int8（体积约三分之一，手机 CPU 上快一倍），没有就挑任意一个。
+          pick() {
+            local pre="$1" hit=""
+            hit=$(ls /tmp/asr-src/${pre}*.onnx 2>/dev/null | grep -E '\.int8\.onnx$' | head -1)
+            [ -n "$hit" ] || hit=$(ls /tmp/asr-src/${pre}*.onnx 2>/dev/null | head -1)
+            printf '%s' "$hit"
+          }
+          ENC=$(pick encoder); DEC=$(pick decoder); JOI=$(pick joiner)
+          [ -n "$ENC" ] && [ -n "$DEC" ] && [ -n "$JOI" ] || { echo "模型包结构与预期不符"; exit 1; }
+          [ -f /tmp/asr-src/tokens.txt ] || { echo "缺 tokens.txt"; exit 1; }
+
+          OUT=/tmp/asr-out && mkdir -p "$OUT"
+          cp "$ENC" "$OUT/asr-encoder.int8.onnx"
+          cp "$DEC" "$OUT/asr-decoder.onnx"
+          cp "$JOI" "$OUT/asr-joiner.int8.onnx"
+          cp /tmp/asr-src/tokens.txt "$OUT/asr-tokens.txt"
+
+          # 清单：名字 字节 sha256。App 下完逐个核对——截断的 onnx 只会让原生层
+          # 报一句 failed to create native OnlineRecognizer，对用户毫无意义。
+          : > "$OUT/asr-manifest.txt"
+          for f in asr-encoder.int8.onnx asr-decoder.onnx asr-joiner.int8.onnx asr-tokens.txt; do
+            printf '%s %s %s\n' "$f" "$(stat -c%s "$OUT/$f")" "$(sha256sum "$OUT/$f" | cut -d' ' -f1)" \
+              >> "$OUT/asr-manifest.txt"
+          done
+          cat "$OUT/asr-manifest.txt"
+
+          gh release upload "$TAG" "$OUT"/asr-* --repo "$REPO" --clobber
