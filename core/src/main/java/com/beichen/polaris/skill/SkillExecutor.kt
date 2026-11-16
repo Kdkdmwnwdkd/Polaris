@@ -319,7 +319,15 @@ class SkillRuntimeBridge(
      * 否则恢复器按 (step, callId) 配对时会对不上。
      */
     private val dispatchedStep: java.util.concurrent.atomic.AtomicInteger =
-        java.util.concurrent.atomic.AtomicInteger(0)
+        java.util.concurrent.atomic.AtomicInteger(0),
+    /**
+     * 接缝③（D-3）：与主对话共用同一条守卫链。
+     *
+     * 放在桥上而不是只在 [SkillExecutor] 上，是因为脚本内每一次工具调用都经由
+     * [executeWithJournal]——那里才是「脚本驱动工具」的唯一收口。桥拿不到守卫，
+     * 守卫链就只管得到模型直接发起的调用，脚本可以绕过它。
+     */
+    private val seams: AgentSeams = AgentSeams.NONE
 ) {
     private val logs = StringBuilder()
 
@@ -644,7 +652,7 @@ class SkillExecutor(
             )
             return runCatching {
                 val bridge = SkillRuntimeBridge(
-                    registry, skill, workspace, toolExecutor, scope, dispatchedStep
+                    registry, skill, workspace, toolExecutor, scope, dispatchedStep, seams
                 )
                 val engine = jsEngine!!
                 val out = engine.eval(entry, mapOf("input" to inputJson, "agent" to bridge))
