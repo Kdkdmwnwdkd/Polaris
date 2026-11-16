@@ -433,16 +433,43 @@ for cand in app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debu
     [ -f "$cand" ] && APK="$cand" && break
 done
 
+# 本次构建有没有真的开 Vulkan。判据取 CMake 自己落的缓存（**事实**），
+# 而不是仓库里写的 `set(GGML_VULKAN ON)`（**意图**）——两者在本机会分叉：
+# 缺 glslc 时 CFG 阶段就把 ON 改回 OFF 了。
+VK_CACHE="$(find app/.cxx -name CMakeCache.txt -path '*arm64-v8a*' 2>/dev/null | head -1)"
+[ -n "$VK_CACHE" ] || VK_CACHE="$(find app/.cxx -name CMakeCache.txt 2>/dev/null | head -1)"
+VK_ON=1
+if [ -n "$VK_CACHE" ] && ! grep -qE '^GGML_VULKAN:BOOL=ON' "$VK_CACHE"; then
+    VK_ON=0
+fi
+
 if [ -z "$APK" ]; then
     echo "  SKIP  本机没有构建产物（CI 构建阶段之后会跑这一项）"
 elif ! command -v readelf >/dev/null 2>&1; then
     echo "  SKIP  没有 readelf（binutils 未安装）"
+elif [ "${VK_ON:-1}" = 0 ]; then
+    # 「本次构建没开 Vulkan」与「开了却被链接器丢掉」是两件事，后者才是真问题。
+    # 本机缺 glslc / SPIRV-Headers 时 CMakeLists 会**刻意**静默降级成 CPU-only
+    # （见那里的注释：Android Studio 里就该能编过），此时 .so 不链 libvulkan 是必然的。
+    # 不区分的话 FAIL 文案（「GGML_VULKAN 开了但后端被链接器丢掉」）会把排查引向链接器，
+    # 而这台机器压根没有链接器可怪。2026-11-16 在云端 arm64 构建机上实测踩到：
+    # 145 条全绿，唯一红是这里。
+    # CI 不受影响：那边装了 glslc，Cache 是 ON 就照跑断言；若漏装，
+    # AK_REQUIRE_VULKAN 会让 CMake 当场 FATAL，根本走不到这一步。
+    echo "  SKIP  本次构建未开 Vulkan（CMakeCache GGML_VULKAN=OFF，多半缺 glslc）——产物断言不适用"
 else
     TMP="$(mktemp -d)"
     # -PnoNative=true 的构建（无 NDK 的机器上跑 QA）整个 APK 里就没有 lib/ 目录。
     # 这不是「产物不对」，是本次压根没编 native——跳过而不是判红，否则每次都得手工分辨。
     # 有 native 产物时下面的检查一条不少，掩盖不了真问题。
-    if ! unzip -l "$APK" 2>/dev/null | grep -q "lib/arm64-v8a/"; then
+    #
+    # 清单先落盘再 grep，不能写 `unzip -l "$APK" | grep -q`：脚本开着 pipefail，
+    # grep -q 一命中就退出，unzip 吃 SIGPIPE，整条管道判非零 → 一个**含** arm64 的包
+    # 被判定成「不含」，于是整段静默 SKIP、SUMMARY 变成 FAIL=0、run-all 判 PASS。
+    # 这不是理论风险：2026-11-16 同一个包、同一台机器，上一轮判 PASS（假 SKIP），
+    # 下一轮判 FAIL（真跑到了），差异只取决于 grep 是否抢在 unzip 写完之前退出。
+    unzip -l "$APK" > "$TMP/zip.txt" 2>/dev/null || true
+    if ! grep -q "lib/arm64-v8a/" "$TMP/zip.txt"; then
         echo "  SKIP  APK 不含 arm64-v8a 原生库（本次构建 -PnoNative=true）"
     elif unzip -o -q "$APK" "lib/arm64-v8a/*" -d "$TMP" 2>/dev/null; then
         SO="$TMP/lib/arm64-v8a/libagentkit-llama.so"

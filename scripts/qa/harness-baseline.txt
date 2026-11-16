@@ -420,7 +420,13 @@
 #   端到端：模拟「续跑→被杀→再续跑」两轮后第三轮必须停手）。
 #   被测的 AutoResumePolicy 与 AgentRunStateStore 均为纯 Kotlin，
 #   手列 3 个源文件编译，不依赖 AGP 产物。
-142
+# 2026-11-16：142 → 146。
+#   从 143 段起注释一直在写、这一行的数字却没同步（卡了三天），于是门禁 5 长期
+#   提示「PASS 高于基线」——提示多了就等于没提示。本轮在云端机器 SKIP=0 实测
+#   PASS=146、runner 总数 146，一并补齐。
+#   判据不变，且可以随时自检：
+#     [ `ls scripts/qa/run-*.sh | grep -v run-all.sh | wc -l` -eq 这一行的数字 ]
+146
 # 143（2026-11-14 语音识别能力判定）：+ run-speech-capability-verification.sh
 #   [A] 29 条结构断言（判定表在 core 且零 Android 依赖、两条语音入口都调它、
 #   共用同一个探测实现、清单声明了识别服务可见性、两边都用 BCP-47 语言标签、

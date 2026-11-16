@@ -161,6 +161,15 @@ qa_classes_stale() {
         [ -d "$d" ] || continue
         newest=$(find "$d" -name '*.class' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
         [ -n "$newest" ] && [ -e "$newest" ] || continue
-        find "$src" -name '*.kt' -newer "$newest" -print -quit 2>/dev/null
+        # 排除 src/cpp：那是 llama.cpp v0.7.0 的整棵第三方源码树（fetch-llama.sh 拉取，
+        # 不进 git），里面有 examples/llama.android 的示例 .kt。它们**从不参与本模块编译**，
+        # 但 fetch 会把它们的 mtime 刷成最新。
+        #
+        # 不排除的后果不是「偶尔烦一下」，而是**这条自检失去意义**：任何按 CI 顺序
+        # （先 fetch-llama 再构建）操作、且 Kotlin 侧走增量编译的机器，都会判 ENV STALE，
+        # 而 gate 给出的修法（./gradlew compileDebugKotlin）根本修不掉它——下次 fetch
+        # 又把它刷成最新。2026-11-16 在云端机器上实测踩到：146 条 PASS 全绿，
+        # 唯一挡住门禁的是 llama.cpp 里一个示例测试文件的时间戳。
+        find "$src" -path "$src/cpp" -prune -o -name '*.kt' -newer "$newest" -print -quit 2>/dev/null
     done
 }
