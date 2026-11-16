@@ -72,6 +72,13 @@ object ApprovalScope {
     /** MCP 工具命名前缀，见 [com.beichen.polaris.core.mcp.mcpWireName]。 */
     private const val MCP_PREFIX = "mcp_"
 
+    /** 技能包安装通道（D-1）：装上就不再逐次确认，所以入口必须过一次人。 */
+    private const val LOAD_SKILL_TOOL = "load_skill"
+
+    private const val ACTION_INSTALL_URL = "install_url"
+    private const val ACTION_INSTALL_BASE64 = "install_base64"
+    private const val ACTION_UNINSTALL = "uninstall"
+
     /** `identity` 参数的默认值：应用自身 uid。其余取值都算提权。 */
     private const val IDENTITY_USER = "user"
 
@@ -81,13 +88,14 @@ object ApprovalScope {
      * 分档顺序即风险顺序，先命中的先返回：
      *  1. 网络外发 → 按**域名**记忆（同域只问一次，换域重问）；
      *  2. MCP 工具 → 外部服务器提供，**永不记忆**（目录注释写的就是「每次调用都需确认」）；
-     *  3. 提权 shell（`identity=shizuku`）→ **永不记忆**：命令没变、权限变了；
-     *  4. 不可逆命令 → 永不记忆；
-     *  5. 首词安全但整体不可记忆（包装器 / 命令替换 / 重定向 / 解释器 / `cp`）→ 永不记忆；
-     *  6. 读工作区外的受保护目录（`cat /sdcard/DCIM/…`）→ 按**目录**记忆，换目录重问；
-     *  7. 读用户私有数据（剪贴板 / 通知）→ 剪贴板按**工具**记忆；
+     *  3. 技能包安装 → 按**来源域名**记忆；内联 base64 与卸载**永不记忆**（D-1）；
+     *  4. 提权 shell（`identity=shizuku`）→ **永不记忆**：命令没变、权限变了；
+     *  5. 不可逆命令 → 永不记忆；
+     *  6. 首词安全但整体不可记忆（包装器 / 命令替换 / 重定向 / 解释器 / `cp`）→ 永不记忆；
+     *  7. 读工作区外的受保护目录（`cat /sdcard/DCIM/…`）→ 按**目录**记忆，换目录重问；
+     *  8. 读用户私有数据（剪贴板 / 通知）→ 剪贴板按**工具**记忆；
      *     通知按**应用集合**记忆（审计 F15：不点名应用的全量读取永不可记忆）；
-     *  8. 其余 → 可记忆（`npm install`、`gradle build`、`ls`…）。
+     *  9. 其余 → 可记忆（`npm install`、`gradle build`、`ls`…）。
      */
     fun of(toolName: String, args: JsonObject): ApprovalGrant {
         val group = ApprovalGrouping.groupOf(toolName)
@@ -108,6 +116,13 @@ object ApprovalScope {
 
         if (toolName.startsWith(MCP_PREFIX)) {
             return ApprovalGrant("mcp:$toolName", label, memorizable = false)
+        }
+
+        // D-1：技能包安装是**持久化落地**的一类动作——模型可以自己把一段指令正文装进
+        // 系统提示，之后每一轮都在，不需要重新注入。修前这条通道零弹窗（目录标 SAFE、
+        // 工具类没声明 needsApproval），是提示注入唯一能长住的地方。
+        if (toolName == LOAD_SKILL_TOOL) {
+            return skillInstallGrant(args, label)
         }
 
         // 审计 F9：剪贴板与通知没有「路径」可判——内容本来就在内存里，PathGuard 一类
@@ -191,6 +206,46 @@ object ApprovalScope {
     /** `action` 参数（小写）；缺省按工具自身语义处理。 */
     private fun actionOf(args: JsonObject): String? =
         args["action"]?.primOrNull()?.contentOrNull?.trim()?.lowercase()
+
+    /**
+     * 技能包安装的授权语义（D-1）。四档，全部按 [ApprovalGrouping.GROUP_SKILL_INSTALL] 编号。
+     *
+     *  - `install_url` → 按**来源域名**记忆。用户同意的是「信任这个发布者」，不是
+     *    「信任装包这件事」——同一个站点换版本不该再问，换一个源必须重问。
+     *  - `install_base64` → **永不记忆**。没有来源可归因，内容每次都可能是另一份；
+     *    记住等于「以后任意内联包都放行」，与 `shell_unmemorizable` 同一个道理。
+     *  - `uninstall` → **永不记忆**。它删的是用户自己装的技能与它的授权记录，
+     *    模型一句「清理一下」就能把技能库清空；一次确认的成本远低于重装一遍。
+     *  - 其余（未知 action、缺 action）→ **永不记忆**的兜底档。工具侧本来就会拒，
+     *    这里不假设工具侧一定拦住——审批是独立的一层。
+     */
+    private fun skillInstallGrant(args: JsonObject, label: String): ApprovalGrant =
+        when (actionOf(args)) {
+            ACTION_INSTALL_URL -> {
+                val host = hostOf(args)
+                if (host == null) {
+                    // URL 解析不出主机名：工具侧会以 bad_url 拒掉，这里按不可记忆兜底。
+                    ApprovalGrant(ApprovalGrouping.GROUP_SKILL_INSTALL, "安装技能包", memorizable = false)
+                } else {
+                    ApprovalGrant(
+                        key = "${ApprovalGrouping.GROUP_SKILL_INSTALL}:$host",
+                        label = "安装技能包（$host）",
+                        memorizable = true
+                    )
+                }
+            }
+            ACTION_INSTALL_BASE64 -> ApprovalGrant(
+                key = "${ApprovalGrouping.GROUP_SKILL_INSTALL}:inline",
+                label = "安装技能包（内联内容）",
+                memorizable = false
+            )
+            ACTION_UNINSTALL -> ApprovalGrant(
+                key = "${ApprovalGrouping.GROUP_SKILL_INSTALL}:uninstall",
+                label = "卸载技能包",
+                memorizable = false
+            )
+            else -> ApprovalGrant(ApprovalGrouping.GROUP_SKILL_INSTALL, label, memorizable = false)
+        }
 
     /** 弹窗里的类别名。写具体是哪个工具——用户要知道自己放行的是剪贴板还是通知。 */
     private fun privateReadLabel(toolName: String): String = when (toolName) {

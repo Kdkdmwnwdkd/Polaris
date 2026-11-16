@@ -3,13 +3,21 @@
 > 目的：把「这个 App 到底依赖了什么、谁提供的、什么许可、出问题怎么兜底」写清楚。
 > 每次增删依赖都要改这份文件，并在 PR/提交信息里点名。
 >
-> 最后核对：1.441（2026-10-28）。
+> 最后核对：2026-11-16（D-9：语音栈补全 + 权重分发方式变更 + espeak-ng 的 GPL 义务）。
 
 ## 一句话结论
 
-北辰的本地推理**只有一条技术栈**：GGUF 模型 + llama.cpp（CPU 后端）+ 自写 JNI 桥。
-没有 MNN、没有 LiteRT、没有 ONNX Runtime、没有 Qualcomm QNN。APK 里的 `.so` 只有
-`libagentkit-llama.so`、`libagentkit-termux.so`、`libproot.so` 三个。
+北辰的本地推理有**两条**技术栈，各自独立、互不调用：
+
+| 栈 | 用途 | 运行时 |
+|---|---|---|
+| GGUF + llama.cpp（CPU 后端）+ 自写 JNI 桥 | 文字生成（本地大模型） | `libagentkit-llama.so` |
+| sherpa-onnx v1.13.8 + onnxruntime | 语音识别与合成（本地） | `libsherpa-onnx-jni.so` + `libonnxruntime.so` |
+
+没有 MNN、没有 LiteRT、没有 Qualcomm QNN。APK 里的 `.so` 是
+`libagentkit-llama.so`、`libagentkit-termux.so`、`libproot.so`，
+加上语音栈的两个（按 ABI 各一份）。**四套语音权重不进 APK**，由 `ModelSpec`
+在应用内按需下载（§4.4）。
 
 ## 1. 运行时依赖（Maven，随 APK 分发）
 
@@ -83,11 +91,88 @@
 | `assets/bin/arm64-v8a/libtalloc.so.2` | 33 KB | Termux 官方预编译（proot 依赖） | LGPL-3.0 |
 | `assets/bin/arm64-v8a/libandroid-shmem.so` | 14 KB | Termux 官方预编译（Android 无 SysV shm 的垫片） | BSD-2-Clause |
 | `jniLibs/arm64-v8a/libproot.so` | 301 KB | 同上 proot，改名为 `.so` 以便落到 `nativeLibraryDir`（可 `execve`） | GPL-2.0 |
-| `jniLibs/arm64-v8a/libsherpa-onnx-jni.so` | ~5 MB | sherpa-onnx v1.13.8 官方 android 包（`scripts/qa/fetch-tts-assets.py` 取并瘦身） | Apache-2.0 |
-| `jniLibs/x86_64/libsherpa-onnx-jni.so` | ~5 MB | 同上（只为模拟器） | Apache-2.0 |
-| `jniLibs/{arm64-v8a,x86_64}/libonnxruntime.so` 等 | ~20 MB | 同上（jni 库的运行时依赖，缺一个就 dlopen 失败） | MIT（onnxruntime） |
-| `assets/tts/matcha/*` | 125 MB | `matcha-icefall-zh-baker` + `vocos-22khz-univ.onnx`（k2-fsa 发布） | Apache-2.0（icefall 模型）；vocos 声码器 MIT |
-| `assets/tts/zipvoice/*` | 155 MB | `sherpa-onnx-zipvoice-distill-int8-zh-en-emilia` + `vocos_24khz.onnx`（k2-fsa 发布） | Apache-2.0（ZipVoice 模型与代码）；vocos 声码器 MIT |
+| `jniLibs/{arm64-v8a,x86_64}/libsherpa-onnx-jni.so` | ~5 MB / ABI | sherpa-onnx **v1.13.8** 官方 android 包（`scripts/qa/fetch-tts-assets.py` 解包后直挂 jniLibs） | Apache-2.0 |
+| `jniLibs/{arm64-v8a,x86_64}/libonnxruntime.so` | ~15 MB / ABI | 同上（jni 库的运行时依赖，缺它 dlopen 直接失败） | MIT（onnxruntime） |
+| `app/src/main/java/com/k2fsa/sherpa/onnx/Tts.kt` | ~1.2k 行 | 同上包内的 Kotlin API，整份照搬（改包名），文件头保留原版权 | Apache-2.0 |
+| `filesDir/tts/zipvoice/espeak-ng-data/` | ~12 MB | 随 ZipVoice 模型包分发（用户按需下载到设备，**不进 APK**） | **GPL-3.0**（见 §4.3） |
+
+### 4.1 `.so` 清单为什么写「按包内实际内容安装」而不是逐名列举
+
+`install_runtime()` 的做法是**把 android tar 包里所有 `.so` 都装上**（不限名字），
+只按 ABI 过滤。这样升级 sherpa 版本时不会出现「新版本多了一个依赖库、而脚本不认识
+这个名字」——那种失败的表现是 `UnsatisfiedLinkError`，而错误信息只说找不到某个符号，
+看不出缺的是哪个文件。
+
+代价是台账无法给出一个永远准确的名单。所以这里给的是**当前版本的事实**，
+并给出核对方式：
+
+```bash
+# 任何时刻以这条命令的输出为准
+ls app/src/main/jniLibs/arm64-v8a/ app/src/main/jniLibs/x86_64/
+```
+
+### 4.2 语音栈的版本必须三处一致
+
+| 三处 | 在哪 |
+|---|---|
+| Kotlin API | `app/src/main/java/com/k2fsa/sherpa/onnx/Tts.kt`（从同版本 android 包拷入） |
+| 原生 `.so` | `app/src/main/jniLibs/<abi>/`（同版本 android 包解出） |
+| 权重与模型目录结构 | 由 `ModelSpec` 的 `required` 列表约束（`filesDir/asr|tts/...`） |
+
+前两者由 `SHERPA_VERSION = "1.13.8"` 一处决定。跨版本混用的报错只有一句
+`Invalid OfflineTtsConfig`——Kotlin data class 是 JNI 反序列化契约，字段对不上不会
+说「少的是 referenceAudio」。所以**升级 sherpa 时三处一起改，别只换 `.so`**。
+
+`1.12.4 → 1.13.8` 的原因：`OfflineTtsZipVoiceModelConfig`、`GenerationConfig.referenceAudio`
+都是 v1.13.x 才进 Kotlin API 的。
+
+### 4.3 espeak-ng-data 是 GPL-3.0，且**随模型分发给最终用户**
+
+ZipVoice 包里的 `espeak-ng-data/`（词典与音素表）来自 espeak-ng，许可为 **GPL-3.0**，
+而不是模型本身的 Apache-2.0。它与 proot 的处境不同：
+
+- proot 是**独立可执行文件**，通过 `ProcessBuilder` 调用，不与北辰代码链接，GPL 的
+  传染边界清楚；
+- `espeak-ng-data` 是**数据文件**，被 sherpa 运行时读取。数据文件是否构成「链接」
+  在 GPL 的解释里有争议，稳妥的读法是：既然它随我们的发布物一起到用户手上，
+  就该按 GPL-3.0 的要求提供对应源码与许可全文。
+
+当前的处理与待补项：
+
+| 项 | 状态 |
+|---|---|
+| 许可全文随包 | **已补**（2026-11-16）：`assets/3rdparty/espeak-ng/COPYING`（GPL-3.0 全文，35 KB） |
+| 源码获取方式 | **已补**：`assets/3rdparty/espeak-ng/SOURCE_OFFER.txt`（指向上游仓库 + 三年书面索取承诺） |
+| 不修改 | 已满足：我们原样分发，未改数据文件 |
+| 只在用户主动下载克隆模型时出现 | 已满足：默认安装包不含该目录 |
+
+> 这一项曾经是**发布阻塞级**缺口：用户装的是发布物，发布物里带了 GPL 数据却没有
+> 许可全文，就是不合规。现在两条分发路径都覆盖了：
+>
+> | 路径 | 声明文件在哪 |
+> |---|---|
+> | 安装包（APK） | `assets/3rdparty/espeak-ng/{COPYING,SOURCE_OFFER.txt}` |
+> | 模型包（用户下载的 `tts-zipvoice.zip`） | CI 在打包前把同两份文件拷进 zip 根目录 |
+>
+> **重打包就会改哈希**：往 `tts-zipvoice.zip` 里加任何文件都会让它变一个全新的资产，
+> 所以 `ModelSpec.TtsZipVoice.sha256`（D-7 的内嵌值）必须在每次重新打包后同步更新，
+> 否则用户会看到「校验失败：发布清单里的哈希与内置值不一致」——那条文案本身没错，
+> 但会让人以为是攻击，其实是自己改了包没改常量。
+
+### 4.4 权重不进 APK（2026-11-16 变更，本节旧版写错了）
+
+旧版这张表列的是 `assets/tts/matcha/*`（125 MB）与 `assets/tts/zipvoice/*`（155 MB），
+那是 2026-11-15 的状态。11-16 起四套权重（两识别 / 两音色）改成**应用内按需下载**：
+
+- 安装包里一个字节都不带，APK 因此从 361 MB 降到 30 MB 上下；
+- 权重上传到 `latest` Release，由 `ModelSpec` 描述、`ModelDownloader` 拉取、
+  `ModelZip` 解压到 `filesDir/{asr,tts,rootfs,tools}/`；
+- 清单 `model-manifest.txt` 与 zip 同源，因此**校验必须靠内嵌哈希**（D-7，
+  见 `ModelSpec.sha256`）——只信清单等于「服务端说这是对的」。
+
+许可不因分发方式改变：模型仍是 Apache-2.0（icefall / ZipVoice）与 MIT（vocos），
+`espeak-ng-data` 仍是 GPL-3.0。
+
 
 **为什么 v1.12.4 → v1.13.8**：`OfflineTtsZipVoiceModelConfig`、
 `GenerationConfig.referenceAudio` 都是 v1.13.x 才进 Kotlin API 的。
@@ -119,10 +204,17 @@ GPL-2.0 合规措施：
 | Qualcomm QNN / GenieX（51 个 .so，~82 MB） | 骁龙 NPU 加速 | 需要按芯片离线转换模型，通用 GGUF 用不上；且要下载 82 MB 运行时 |
 | KleidiAI | ARM 官方 matmul 内核 | **值得跟进**：需要配套较新的 ggml，见「已知缺口」 |
 
-结论：北辰的本地推理栈比 IRIDIS 小一个数量级（约 3 MB native vs 100+ MB），代价是
-只支持 GGUF + 只跑 CPU。
+结论：文字生成这条栈仍然比 IRIDIS 小一个数量级（约 3 MB native vs 100+ MB），代价是
+只支持 GGUF + 只跑 CPU。语音这条栈不是：sherpa-onnx + onnxruntime 每个 ABI 约 20 MB，
+是**明确换来的**——用户要的不再是系统 TTS 那种 8kHz 电话音，而是能导入自己声音的合成。
+两条栈互不调用，任何一条出问题都不影响另一条。
 
 ## 6. 已知缺口与下一步
+
+0. **espeak-ng-data 的 GPL-3.0 义务未完成**（D-9 查出，优先级最高）。
+   `assets/3rdparty/espeak-ng/COPYING` 与 `SOURCE_OFFER.txt` 都不存在，
+   而 ZipVoice 模型包里带着它、会随用户下载到达设备。补法见 §4.3。
+   在补齐之前，ZipVoice 不应出现在对外发布矩阵里——这是**发布阻塞项**，不是技术债。
 
 1. ~~llama.cpp 版本偏旧（b4600，2025 年初）~~ → **已升级到 v0.7.0（2026-10-15）**。
    实测需要改的 API 只有三处（`llama_kv_cache_clear/seq_rm` → `llama_memory_*`、
@@ -152,4 +244,15 @@ grep -n "TAG=\|EXPECTED_COMMIT=" scripts/fetch-llama.sh
 
 # 随包二进制
 find app/src/main/assets/bin app/src/main/jniLibs -type f
+
+# 语音栈版本（三处必须一致，见 §4.2）
+grep -n "SHERPA_VERSION" scripts/qa/fetch-tts-assets.py
+grep -rn "sherpa-onnx" app/src/main/java/com/k2fsa/sherpa/onnx/Tts.kt | head -3
+ls app/src/main/jniLibs/arm64-v8a/
+
+# 权重是否真的不在 APK 里（应该有输出：四套都不在）
+grep -rn "assets/tts" app/src/main/assets 2>/dev/null || echo "OK：assets 下没有 tts 权重"
+
+# ModelSpec 里哪些模型的哈希还没固定（D-7）
+grep -n "sha256 = \"" core/src/main/java/com/beichen/polaris/model/ModelSpec.kt || echo "全部未固定"
 ```

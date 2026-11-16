@@ -152,11 +152,15 @@
              必须常驻前台，否则 App 退到后台几分钟就被回收、悬浮窗跟着消失。
              specialUse 是 Android 14 对「不属于其它任何已定义类型」的前台服务的分类；
              targetSdk=28 时系统不会强制校验类型，但声明了才能在未来升级 targetSdk 后继续用。
-             exported=false：只由本 App 内部启动（PetState.start / ensureRunning）。 -->
+
+             microphone 位是给「长按说话」用的：桌宠只走本地识别，但录音也是录音。
+             Android 14 起 type 与能力不匹配会抛 SecurityException —— 声明了 specialUse
+             却调 AudioRecord 同样崩。真正的开关在 PetOverlayService.startAsForeground()：
+             那里按「是否已授予 RECORD_AUDIO」现算 type，没权限时不带 microphone 位。 -->
         <service
             android:name=".pet.PetOverlayService"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse|microphone">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="用户主动开启的桌面常驻助手悬浮窗，可随时在设置或桌宠菜单里关闭" />

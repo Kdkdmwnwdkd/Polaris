@@ -1,5 +1,6 @@
 package com.beichen.polaris.pet
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,10 +8,12 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.beichen.polaris.core.AgentLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -140,11 +143,21 @@ class PetOverlayService : Service() {
         val notification = buildNotification()
         val ok = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
+                // Android 14 起，前台服务的 type 必须与实际能力匹配：
+                // 声明了 specialUse 却调用 AudioRecord，会被判 MissingForegroundServiceType
+                // 直接抛 SecurityException（现在 targetSdk=28 不校验，所以还活着）。
+                // 反过来也不行：没授予 RECORD_AUDIO 时带 microphone 位，同样抛。
+                // 所以 type 要**按权限现算**，不能写死——写死哪一种都有一种设备会崩。
+                val micGranted = ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.RECORD_AUDIO
+                ) == PackageManager.PERMISSION_GRANTED
+                val type = if (micGranted) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                } else {
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                )
+                }
+                startForeground(NOTIFICATION_ID, notification, type)
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }

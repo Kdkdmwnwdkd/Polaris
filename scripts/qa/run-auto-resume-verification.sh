@@ -82,10 +82,18 @@ else
   fail "A8 没有 await runStateReady —— 可能在字段初始化前执行"
 fi
 
-if grep -q 'runStateReady.complete(interrupted)' "$VM"; then
-  pass "A9 对账结论必定 complete（异常路径也算，否则 await 永久挂起）"
+# A9：不只看"有没有 complete"，还看**顺序**。
+# 续跑 await 到放行就立刻 send()，而"上次那条写可能已生效"的提示要到
+# recoverInterruptedJournal 里才算出来——反过来的话续跑读到的 note 恒为 null，
+# 模型会把已经落盘的写重做一遍。熔断只防反复被杀，不防同一副作用做两次。
+# 注意：两个行号要分别取。合并成一次 grep 再比 $1/$2 是不行的——grep 按文件顺序
+# 输出，原 bug 恰好会让 complete 排在前面，判据就会恒真（实测踩过）。
+jr=$(grep -n 'runCatching { recoverInterruptedJournal() }' "$VM" | head -1 | cut -d: -f1)
+cr=$(grep -n 'runStateReady.complete(interrupted)' "$VM" | head -1 | cut -d: -f1)
+if [ -n "$jr" ] && [ -n "$cr" ] && [ "$jr" -lt "$cr" ]; then
+  pass "A9 先修日志再放行 runStateReady（续跑能读到「写可能已生效」）"
 else
-  fail "A9 runStateReady 没有无条件 complete —— 异常时功能静默失效"
+  fail "A9 runStateReady 早于日志修复 —— 续跑会重放已落盘的副作用"
 fi
 
 # 代发的那句话必须在 isResumeIntent 白名单里，否则续跑上下文不拼进去，

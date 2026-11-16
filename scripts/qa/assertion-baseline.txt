@@ -12,7 +12,12 @@
 # 格式：`text <路径> <上限>`；`text __TOTAL__ <上限>` 是全局上限，
 # 防的是「把 625 条拆成两个文件」绕过单文件限制。
 
-text scripts/qa/Hotfix11Verification.kt 626
+# D-11（2026-11-16）：626 → 135。
+# 原写法是「一个 check 里 5 个关键字 = 5 行 assertContains」，断言数被关键字数撑大，
+# 一个功能区有几十条，反而看不出哪个区真的在退化。改成 assertAllIn 一次列一组
+# 关键字后降到 135。**这不等于守护变强**——它让「这个区还有没有人看着」可读，
+# 代价是失败时定位从「哪一行」降到「哪个 check」。上限跟着收紧，再加就红。
+text scripts/qa/Hotfix11Verification.kt 135
 text scripts/qa/run-local-inference-perf-verification.sh 90
 text scripts/qa/PromptProtocolVerification.kt 47
 text scripts/qa/AppControlVerification.kt 40
@@ -107,4 +112,4 @@ text scripts/qa/run-knowledge-base-verification.sh 10
 text scripts/qa/run-cost-drilldown-verification.sh 10
 text scripts/qa/run-qr-verification.sh 9
 text scripts/qa/run-local-param-input-verification.sh 9
-text __TOTAL__ 1729
+text __TOTAL__ 1238

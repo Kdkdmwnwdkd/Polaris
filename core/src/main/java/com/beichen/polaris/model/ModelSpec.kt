@@ -29,6 +29,27 @@ package com.beichen.polaris.model
  * - [dirName] 落盘子目录名；引擎读的就是这个路径，**不能随便改**
  * - [required] 解压后必须存在的相对路径（目录只判非空）。缺一个就判定失败，
  *   而不是等原生层报一句看不出原因的 `Invalid OfflineTtsConfig`
+ * - [sha256] 该 zip 的**固定哈希**（D-7）。见下方「信任根」说明
+ *
+ * ## 信任根（D-7）
+ *
+ * 修前的校验链是：`model-manifest.txt` 说 sha256 是 X → 下载器核对下载结果是不是 X。
+ * 这条链**自洽但不独立**：清单和 zip 放在同一个 Release 里，能换掉其中一个的人
+ * 也能换掉另一个。也就是说它只防传输损坏，不防"服务端说这是对的"。
+ *
+ * 威胁模型是真实的：仓库账号被盗、CI 产物被替换、镜像站缓存污染——三种都允许
+ * 攻击者同时改资产与清单，然后让用户把一份"校验通过"的权重装进设备。
+ *
+ * 所以这里加一个**内嵌的**哈希：与 manifest 交叉校验，两边不一致直接拒绝，
+ * 而且**不换源重试**（内容本身就是错的，换源只会换个方式失败）。
+ *
+ * 为什么不用签名：manifest 签名需要一把私钥与一个发布流程，密钥一旦要存在 CI 里，
+ * 它被同一次入侵拿走的概率与资产被换掉一样高。内嵌哈希的信任根在**已发布的 APK** 里
+ * ——攻击者要一起改，得先让用户装上一个新的 APK，而 APK 有签名校验。
+ *
+ * 当前为 `null` 表示「还没固定」：行为退回修前（只信 manifest），但下载器会打一条
+ * warn 日志，`ModelSpecVerification` 也会把未固定的条数列出来。填值是一次性运维动作：
+ * 模型上传后跑 `scripts/tools/model-hashes.sh` 生成。**不要为了让日志安静而随便填。**
  */
 enum class ModelSpec(
     val zipName: String,
@@ -38,6 +59,12 @@ enum class ModelSpec(
     val approxMb: Int,
     val kind: Kind,
     val required: List<String>,
+    /**
+     * 该 zip 的固定 sha256（小写十六进制）。null = 尚未固定，信任根仍在服务端。
+     *
+     * 见类注释「信任根」一节：填写它是**运维动作**，不是代码改动。
+     */
+    val sha256: String? = null,
 ) {
 
     /** 流式 zipformer 14M：边说边出字，24MB。 */

@@ -48,6 +48,9 @@ object ApprovalGrouping {
     /** 读用户私有数据（剪贴板 / 通知）：按工具记忆，换工具重问。 */
     const val GROUP_PRIVATE_READ = ToolCatalog.Approval.PRIVATE_READ
 
+    /** 安装技能包（D-1）：按来源域名记忆，换源重问。 */
+    const val GROUP_SKILL_INSTALL = ToolCatalog.Approval.SKILL_INSTALL
+
     /**
      * 工具名 → 归组键。
      *
@@ -76,6 +79,7 @@ object ApprovalGrouping {
         GROUP_NETWORK -> "网络请求"
         GROUP_SHELL_READ -> "工作区外文件读取"
         GROUP_PRIVATE_READ -> "本机隐私数据读取"
+        GROUP_SKILL_INSTALL -> "安装技能包"
         else -> group
     }
 }

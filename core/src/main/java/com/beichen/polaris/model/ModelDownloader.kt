@@ -68,6 +68,24 @@ class ModelDownloader(
     suspend fun download(onProgress: (done: Long, total: Long, label: String) -> Unit) =
         withContext(Dispatchers.IO) {
             val entry = fetchManifest()
+            // D-7：内嵌哈希 × 服务端清单，**交叉校验**。
+            //
+            // 清单与 zip 在同一个 Release 里，能换掉其中一个的人也能换掉另一个——
+            // 单看清单，这套校验只防传输损坏，不防「服务端说这是对的」。
+            // 内嵌值是编译进 APK 的，攻击者要一起改就得让用户装一个新 APK，
+            // 而 APK 有签名校验。
+            //
+            // 不一致**不换源重试**：内容本身就是错的，换源只会换一种方式失败，
+            // 还会把「有人换了资产」这件事伪装成网络抖动。
+            val pinned = spec.sha256
+            if (pinned == null) {
+                AgentLogger.w(tag, "${spec.label}的哈希尚未固定（D-7），本次只信服务端清单")
+            } else if (!pinned.equals(entry.sha256, ignoreCase = true)) {
+                throw IllegalStateException(
+                    "${spec.label}校验失败：发布清单里的哈希与内置值不一致。" +
+                        "这通常意味着发布资产被替换过——请勿重试，先告知开发者。"
+                )
+            }
             val zip = File(File(app.cacheDir, "models").apply { mkdirs() }, spec.zipName + ".part")
             zip.delete()
             try {
