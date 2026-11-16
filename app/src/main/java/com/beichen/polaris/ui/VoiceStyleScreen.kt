@@ -29,6 +29,8 @@ import com.beichen.polaris.audio.tts.VoiceStyleStore
 import com.beichen.polaris.core.voice.VoiceCatalog
 import com.beichen.polaris.core.voice.VoiceKind
 import com.beichen.polaris.core.voice.VoiceProfile
+import com.beichen.polaris.model.ModelDownloader
+import com.beichen.polaris.model.ModelSpec
 import kotlinx.coroutines.launch
 
 /**
@@ -76,6 +78,10 @@ fun VoiceStyleScreen(onOpenClone: (() -> Unit)? = null) {
     var selected by remember { mutableStateOf(resolveSelected()) }
     var clones by remember { mutableStateOf(CloneVoiceStore.list(context)) }
     var auditioning by remember { mutableStateOf<String?>(null) }
+    // 两套音色模型是否已下载。模型不在包里了（2026-11-16 起），界面必须先看它，
+    // 否则「点本地音色 → 没声音」看起来像坏了。
+    var matchaReady by remember { mutableStateOf(ModelDownloader(context, ModelSpec.TtsMatcha).isInstalled()) }
+    var zipReady by remember { mutableStateOf(ModelDownloader(context, ModelSpec.TtsZipVoice).isInstalled()) }
 
     fun audition(profile: VoiceProfile) {
         if (auditioning != null) return
@@ -149,16 +155,28 @@ fun VoiceStyleScreen(onOpenClone: (() -> Unit)? = null) {
             }
             AkListItem(
                 icon = Icons.Outlined.Mic,
-                title = if (clones.isEmpty()) "录一句，克隆我的声音" else "再录一条",
-                description = "读完一句固定的话就自动保存；建议在安静的地方录",
-                onClick = onOpenClone,
-                enabled = onOpenClone != null,
+                title = when {
+                    !zipReady -> "先下载「声音克隆」模型"
+                    clones.isEmpty() -> "录一句，克隆我的声音"
+                    else -> "再录一条"
+                },
+                description = when {
+                    !zipReady -> "克隆模型 196MB，在下面那一组里下；下完这里就能录"
+                    clones.isEmpty() -> "读完一句固定的话就自动保存；建议在安静的地方录"
+                    else -> "读完一句固定的话就自动保存；建议在安静的地方录"
+                },
+                onClick = when {
+                    !zipReady -> ({
+                        Toast.makeText(context, "先在下面下载「声音克隆」模型", Toast.LENGTH_SHORT).show()
+                    })
+                    else -> onOpenClone
+                },                enabled = if (zipReady) onOpenClone != null else true,
             )
         }
 
         AkGroup(
             title = "本地",
-            description = "装完即用，断网也能说话。模型 72MB 随包，不占流量",
+            description = "断网也能说话。模型不再随包，第一次用要先下 139MB",
         ) {
             VoiceRow(
                 profile = VoiceCatalog.local,
@@ -166,11 +184,40 @@ fun VoiceStyleScreen(onOpenClone: (() -> Unit)? = null) {
                 auditioning = auditioning == VoiceCatalog.local.id,
                 enabled = true,
                 onClick = {
-                    VoiceStyleStore.select(context, VoiceCatalog.local.id)
-                    selected = VoiceCatalog.local
-                    audition(VoiceCatalog.local)
+                    if (!matchaReady) {
+                        Toast.makeText(context, "先在下面下载「内置音色」模型", Toast.LENGTH_SHORT).show()
+                    } else {
+                        VoiceStyleStore.select(context, VoiceCatalog.local.id)
+                        selected = VoiceCatalog.local
+                        audition(VoiceCatalog.local)
+                    }
                 },
                 onAudition = { audition(VoiceCatalog.local) },
+            )
+        }
+
+        // 模型管理放在音色页，而不是藏进「设置 → 关于」：用户在这里试听失败时，
+        // 第一反应是「为什么没声音」，答案与修法都必须在同一屏。
+        AkGroup(
+            title = "音色模型（可下可删）",
+            description = "安装包不再带这两套权重；不想要的时候删掉，随时能重下",
+        ) {
+            ModelRow(
+                spec = ModelSpec.TtsMatcha,
+                title = "内置音色",
+                hint = "22kHz 女声：断网时也能出声，比系统语音包清楚",
+                onChanged = {
+                    matchaReady = ModelDownloader(context, ModelSpec.TtsMatcha).isInstalled()
+                },
+            )
+            ModelRow(
+                spec = ModelSpec.TtsZipVoice,
+                title = "声音克隆",
+                hint = "用自己的声音说话：录十秒参考音频即可，全程离线",
+                onChanged = {
+                    zipReady = ModelDownloader(context, ModelSpec.TtsZipVoice).isInstalled()
+                    clones = CloneVoiceStore.list(context)
+                },
             )
         }
 

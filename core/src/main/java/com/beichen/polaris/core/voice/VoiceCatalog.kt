@@ -40,7 +40,7 @@ data class VoiceProfile(
  *
  * 「有哪些音色、各自要不要联网」是纯粹的清单事实，与 Android 无关；
  * 而回落决策（[VoicePlan]）要用它，回落决策又必须能被 harness 独立编译——
- * 这条依赖链从 3.1 起就是这个项目的老账（见 `SpeechCapabilityPolicy` 的类注释）。
+ * 所以清单与决策都放在 core，harness 能脱离 Android 单独编译。
  *
  * ## 为什么 id 与音色名分开
  *

@@ -2,6 +2,8 @@ package com.beichen.polaris.audio.tts
 
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.model.ModelSpec
+import com.beichen.polaris.model.ModelZip
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsMatchaModelConfig
@@ -25,16 +27,16 @@ import java.io.File
  * 这一档选第二种：它是**离线**能拿到的最好音质。它存在的意义不是「比云端好听」，
  * 而是「断网时不必退回上个版本的声音」。
  *
- * ## 为什么模型放 assets 再拷到 filesDir
+ * ## 为什么模型不在 APK 里了
  *
- * sherpa-onnx 的 matcha 前端要读 `lexicon.txt`、`dict/`（jieba 词典）这类**目录**，
- * 而 AssetManager 不能列目录、也不能给原生层一个可 seek 的 fd 集合。
- * 直接 `newFromAsset` 只对单文件模型稳。所以首次使用时整目录拷到 filesDir，
- * 之后一律走文件路径。代价是 72MB 空间翻倍，换来的是「装完就能用、断网也能用」。
+ * 2026-11-16 起这套权重（139MB）改成按需下载：装包从 361MB 降到 30MB 上下。
+ * 代价是「第一次点本地音色要先下 139MB」，收益是「不用它的人一个字节都不付」。
+ * 下载与删除都在语音页里，删了随时能重下——与识别模型同一套机制
+ * （[com.beichen.polaris.model.ModelDownloader]）。
  *
  * ## 为什么用 Mutex 而不是每次 new 一个 OfflineTts
  *
- * 构造要加载 72MB 权重（真机实测 300–800ms，视存储速度）。每句重建等于每句都卡一下。
+ * 构造要加载 139MB 权重（真机实测 300–800ms，视存储速度）。每句重建等于每句都卡一下。
  * 但 `generate` 不是线程安全的，共享实例就必须串行——串行也正好符合「一次只说一句」。
  */
 class LocalVoiceEngine(private val context: Context) {
@@ -46,24 +48,14 @@ class LocalVoiceEngine(private val context: Context) {
     @Volatile
     private var tts: OfflineTts? = null
 
-    /** 本进程内是否已确认模型落盘。展开是幂等的，但没必要每次合成都遍历一遍目录。 */
-    @Volatile
-    private var expanded = false
-
     /**
-     * 模型是否可用：已展开 **或** 包里带着（首次点击时才展开）。
+     * 模型是否可用：磁盘上必需文件齐全。
      *
-     * 后半个条件不是放宽，是修死锁：展开只发生在 [synthesize] 里，而 synthesize 要
-     * 先被回落链选中；链头筛选用这个函数。只看 filesDir 的话，首次安装永远是「未就绪」，
-     * 于是永远走不到展开那一步——包里有 72MB 模型，用户听到的是静音。
+     * 以前这里还查「包里带着」，因为展开动作写在 synthesize 里，而 synthesize
+     * 要先被回落链选中——只看 filesDir 会自锁成「永远未就绪」。现在模型由下载器
+     * 直接落到最终目录，没有「展开」这一步，那段自锁的前提也就不存在了。
      */
-    fun isReady(): Boolean {
-        val dir = modelDir()
-        if (File(dir, ACOUSTIC_MODEL).length() > 0 && File(dir, VOCODER).length() > 0) return true
-        return TtsAssetInstaller.availableInAssets(
-            context, ASSET_ROOT, listOf(ACOUSTIC_MODEL, VOCODER, "lexicon.txt"),
-        )
-    }
+    fun isReady(): Boolean = ModelZip.missingIn(modelDir(), ModelSpec.TtsMatcha.required).isEmpty()
 
     /**
      * 合成一段，返回 16-bit 单声道 PCM。
@@ -73,12 +65,9 @@ class LocalVoiceEngine(private val context: Context) {
      */
     suspend fun synthesize(text: String, speed: Float): AudioClip = withContext(Dispatchers.IO) {
         mutex.withLock {
-            // 无条件保证落盘。**不能写成 `if (!isReady())`**：isReady 现在把「包里有」
-            // 也算就位（为了不自锁），那条件在首次安装时恒为 false —— 判定说就绪、
-            // 展开永不发生、磁盘上始终是空的，原生层 2ms 后回一句
-            // `Invalid OfflineTtsConfig`，而日志里连一行「模型展开」都不会有。
-            // 736 就是这么挂的。放在锁里做，避免两句话同时展开同一批文件。
-            ensureExpanded()
+            // 没有「首次展开」这一步了：模型要么整包下好了、要么没下。
+            // 没下时 isReady() 已经让回落链跳过这一档，走到这里只可能是文件被删了一半，
+            // build() 里的体检会把缺的文件名说出来。
             val engine = tts ?: build().also { tts = it }
             val started = System.currentTimeMillis()
             val audio = engine.generate(text, sid = SPEAKER_ID, speed = speed.coerceIn(0.5f, 2.0f))
@@ -178,41 +167,24 @@ class LocalVoiceEngine(private val context: Context) {
      * 把长度摊开写，比对官方包就能立刻看出是哪个文件短了一截。
      */
     private fun checkFiles(dir: File) {
-        val required = listOf(
-            ACOUSTIC_MODEL, VOCODER, "lexicon.txt", "tokens.txt", "date.fst", "number.fst",
-        )
+        // 必需清单只在 [ModelSpec] 里写一份：下载器按它判「装好了没」，
+        // 这里按它判「读之前齐不齐」。两处各写一份，改模型时必然漏掉一处。
+        val required = ModelSpec.TtsMatcha.required.filter { it != "dict" }
         AgentLogger.i(
             tag,
             "本地模型体检：${required.joinToString(", ") { "$it=${File(dir, it).length()}" }}",
         )
-        val missing = required.filter { File(dir, it).length() <= 0 }
-        val dictOk = File(dir, "dict").let { it.isDirectory && it.list()?.isNotEmpty() == true }
-        if (missing.isNotEmpty() || !dictOk) {
-            throw IllegalStateException(
-                "模型文件缺失：$missing" + if (dictOk) "" else " + dict 目录为空" +
-                    "（目录 ${dir.absolutePath}）"
-            )
+        val missing = ModelZip.missingIn(dir, ModelSpec.TtsMatcha.required)
+        if (missing.isNotEmpty()) {
+            throw IllegalStateException("模型文件缺失：$missing（目录 ${dir.absolutePath}）")
         }
     }
 
     /**
-     * 保证 `filesDir/tts/matcha` 里文件齐。
-     *
-     * 与 [isReady] 分得很清：[isReady] 回答「这个音色能不能用」（包里有就算能用，
-     * 否则回落链会把它跳过）；这里回答「磁盘上现在有没有」（没有就去拷）。
-     * 把两件事合成一件，就是 736 的自锁。
-     *
-     * 幂等：逐文件比长度，齐了就 0 拷贝，只花目录遍历的时间。
+     * 模型目录。与 [ModelSpec.TtsMatcha] 的 `home/dirName` 必须是同一个路径——
+     * 下载器往哪儿解、引擎从哪儿读，只能有一个答案。
      */
-    private fun ensureExpanded() {
-        if (expanded) return
-        val dir = modelDir()
-        val copied = TtsAssetInstaller.expand(context, ASSET_ROOT, dir)
-        AgentLogger.i(tag, "本地模型就位：${dir.absolutePath}（本次补拷 $copied 个文件）")
-        expanded = true
-    }
-
-    private fun modelDir(): File = TtsAssetInstaller.destDir(context, "matcha")
+    private fun modelDir(): File = File(File(context.filesDir, "tts"), DIR_NAME)
 
     private fun toPcm16(samples: FloatArray): ShortArray {
         val out = ShortArray(samples.size)
@@ -224,8 +196,7 @@ class LocalVoiceEngine(private val context: Context) {
     }
 
     private companion object {
-        /** assets 下的模型根目录。改这里必须同步 `app/src/main/assets/tts/matcha`。 */
-        const val ASSET_ROOT = "tts/matcha"
+        const val DIR_NAME = "matcha"
         const val ACOUSTIC_MODEL = "model-steps-3.onnx"
         const val VOCODER = "vocos-22khz-univ.onnx"
 

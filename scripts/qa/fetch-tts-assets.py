@@ -34,7 +34,15 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE = os.path.join(ROOT, ".cache", "tts")
-ASSET_DIR = os.path.join(ROOT, "app", "src", "main", "assets", "tts", "matcha")
+
+# 模型**不再进 assets**（2026-11-16）：安装包因此从 361MB 降到 30MB 上下，
+# 四套权重改成在应用内按需下载。这里只负责把权重摊到磁盘上，供 CI 打成 zip
+# 传到 latest Release；APK 里一个字节都不带。
+#
+# 默认落 .cache/tts-models（不在工作树里，不会被打包）；
+# 想自己验证打 zip 的流程就设 POLARIS_TTS_MODEL_DIR 指到别处。
+MODEL_ROOT = os.environ.get("POLARIS_TTS_MODEL_DIR") or os.path.join(ROOT, ".cache", "tts-models")
+ASSET_DIR = os.path.join(MODEL_ROOT, "matcha")
 
 # 1.13.8 起 Kotlin API 才有 ZipVoice 与 GenerationConfig.referenceAudio。
 # 原生 .so 必须与 Kotlin 源码同版本：跨版本混用会在 build() 时报
@@ -52,7 +60,7 @@ MODEL_NAME = "matcha-icefall-zh-baker"
 # 克隆模型的声道与声码器：ZipVoice 原生 24kHz，声码器必须配套，
 # 换成 22kHz 那个（matcha 用的）会在初始化时报 vocoder 输出维度不符。
 ZIPVOICE_TAR = "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/327320447"
-ZIPVOICE_DIR = os.path.join(ROOT, "app", "src", "main", "assets", "tts", "zipvoice")
+ZIPVOICE_DIR = os.path.join(MODEL_ROOT, "zipvoice")
 ZIPVOICE_VOCODER_URL = "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/284752173"
 ZIPVOICE_VOCODER_NAME = "vocos_24khz.onnx"
 ZIPVOICE_VOCODER_SIZE = 54_157_409
@@ -209,6 +217,16 @@ def extract_model(tarball):
 def main():
     os.makedirs(CACHE, exist_ok=True)
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    # POLARIS_MODELS=0：只装原生运行时（.so）。CI 在「模型资产已上传」的那几轮
+    # 用它跳过 335MB 的无谓下载——模型是固定资产，不会每次构建都变。
+    if os.environ.get("POLARIS_MODELS") == "0":
+        runtime_tar = os.path.join(CACHE, "sherpa-android.tar.bz2")
+        if not fetch(ANDROID_TAR, runtime_tar, 46_093_321):
+            log("Android 包下载失败")
+            return 1
+        ok = install_runtime(runtime_tar)
+        log("只装运行时（.so），跳过模型。")
+        return 0 if ok else 2
     android_tar = os.path.join(CACHE, "sherpa-android.tar.bz2")
     model_tar = os.path.join(CACHE, "matcha.tar.bz2")
 

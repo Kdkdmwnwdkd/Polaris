@@ -1,5 +1,7 @@
 package com.beichen.polaris.audio.asr
 
+import com.beichen.polaris.model.ModelSpec
+
 /**
  * 两套可下载的离线识别模型。
  *
@@ -8,37 +10,20 @@ package com.beichen.polaris.audio.asr
  * 但中文短句基本不用改字。用户对「等一秒」和「多 50MB」的容忍度差得很远，
  * 不该由我们替他决定。
  *
- * 字段说明：
- * - [manifest] CI 传上去的清单文件名（含每个文件的 size 与 sha256）
- * - [assetPrefix] 资产名前缀；落盘名 = 去掉这个前缀，与引擎读的名字对齐
- * - [minEntries] 清单至少几行。少于这个数说明拿到的不是清单（多半是错误页）
+ * 2026-11-16 起两者都**不进安装包**，由 [com.beichen.polaris.model.ModelDownloader]
+ * 按需下载、可删。落盘路径不变（`filesDir/asr/<dirName>`），所以从 746 升级上来的
+ * 人不用重下——下载器按「必需文件在不在」判定，与当初怎么装进去的无关。
  */
-enum class AsrModel(
-    val manifest: String,
-    val dirName: String,
-    val assetPrefix: String,
-    val label: String,
-    val approxMb: Int,
-    val minEntries: Int,
-) {
+enum class AsrModel(val spec: ModelSpec) {
 
     /** 流式 zipformer 14M：边说边出字。 */
-    Fast(
-        manifest = "asr-manifest.txt",
-        dirName = "zh-streaming",
-        assetPrefix = "asr-",
-        label = "快速识别",
-        approxMb = 24,
-        minEntries = 4,
-    ),
+    Fast(ModelSpec.AsrFast),
 
     /** 整段 paraformer-zh-small：说完再认，错字少。 */
-    Accurate(
-        manifest = "asr-accurate-manifest.txt",
-        dirName = "zh-paraformer",
-        assetPrefix = "asr2-",
-        label = "更准识别",
-        approxMb = 74,
-        minEntries = 2,
-    ),
+    Accurate(ModelSpec.AsrAccurate),
+    ;
+
+    val dirName: String get() = spec.dirName
+    val label: String get() = spec.label
+    val approxMb: Int get() = spec.approxMb
 }

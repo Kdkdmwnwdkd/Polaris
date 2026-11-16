@@ -18,6 +18,7 @@ MIC="$CORE/voice/MicClaim.kt"
 POLICY="$CORE/voice/InterruptPolicy.kt"
 ARBITER=$(find app/src/main -name "VoiceArbiter.kt" 2>/dev/null | head -1)
 SPEAK_TOOL=$(find app/src/main -name "SpeakTool.kt" 2>/dev/null | head -1)
+ASR_INPUT=$(find app/src/main -name "LocalSpeechInput.kt" 2>/dev/null | head -1)
 CHAT_SCREEN=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
 SPEAKER=app/src/main/java/com/beichen/polaris/audio/TextSpeaker.kt
 VM=app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt
@@ -66,10 +67,14 @@ fi
 
 # 接线：语音输入必须先过仲裁，否则「播报中点麦克风会录到自己的声音」这个
 # 真机上能复现的缺陷依然存在（改造前就是这个样子）。
-if [ -n "$CHAT_SCREEN" ] && grep -qF "beginVoiceCapture(" "$CHAT_SCREEN"; then
-  pass "A5 语音输入前调用 beginVoiceCapture（先停播报、再请求麦克风）"
+# 2026-11-16：聊天的语音改走自带录音层（LocalVoiceSheet），系统识别页那条
+# `beginVoiceCapture` 预检随系统识别一起删了。仲裁没有消失——它挪进了录音层：
+# 开麦前 beginCapture、录音线程 finally 里 endCapture，比页面里管租约更靠得住。
+if [ -n "$ASR_INPUT" ] && grep -qF "beginCapture(" "$ASR_INPUT" \
+   && grep -qF "endCapture(" "$ASR_INPUT"; then
+  pass "A5 自带录音层开麦前过仲裁（先停播报、再请求麦克风，结束时释放）"
 else
-  fail "A5 语音输入没有过仲裁 —— 播报中录音会把播报声录进去"
+  fail "A5 录音层没有过仲裁 —— 播报中录音会把播报声录进去"
 fi
 
 # speak 工具必须走仲裁后的出口，否则模型可以在用户说话时插播。

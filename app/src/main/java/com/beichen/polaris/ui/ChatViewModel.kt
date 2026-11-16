@@ -137,8 +137,6 @@ import com.beichen.polaris.skill.checkCapabilityGate
 import com.beichen.polaris.memory.MemoryItem
 import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.core.voice.Activity
-import com.beichen.polaris.core.voice.AudioLease
-import com.beichen.polaris.core.voice.ClaimResult
 import com.beichen.polaris.core.voice.InterruptDecision
 import com.beichen.polaris.core.voice.InterruptPolicy
 import com.beichen.polaris.core.voice.RequestSource
@@ -683,7 +681,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private val voiceArbiter = AudioGraph.arbiter(app)
 
     /** 当前语音输入持有的麦克风租约（null = 没在录）。 */
-    private var captureLease: AudioLease? = null
 
     // —— 本地 llama.cpp 推理（九步第 3 步）————————————————————————
 
@@ -1163,7 +1160,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         runCatching { terminalPool.releaseAllAsync() }
         // 音频层**不在这里释放**：它是进程级的（[AudioGraph]），引擎要留给后台回合与桌宠。
         // 这一页只交还自己持有的东西——麦克风租约，以及由本页发起的播报。
-        runCatching { endVoiceCapture() }
         runCatching { voiceArbiter.stopSpeech() }
         // W-25：唤醒挂起中的提问/计划，避免 deferred 悬着（协程随 ViewModel 取消）
         runCatching { AskUserBroker.cancel() }
@@ -1575,29 +1571,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     // —— 语音仲裁（MicClaim）——
 
-    override fun beginVoiceCapture(): String? {
-        // 兜底释放：上一次可能没走到 endVoiceCapture（识别器进程被杀、用户按 Home）。
-        // 不释放的话麦克风会被永久占住，表现为「语音按钮从此没反应」。
-        endVoiceCapture()
-        // 不需要先停播报：Capture 的优先级高于 Speak，请求成功即抢占，
-        // 抢占事件由 VoiceArbiter 自己翻译成 speaker.stop()。
-        // 在这里多写一次 stop 只会让「谁负责停」有两个答案。
-        return when (val r = voiceArbiter.beginCapture("语音输入")) {
-            is ClaimResult.Granted -> {
-                captureLease = r.lease
-                null
-            }
-            is ClaimResult.Denied -> {
-                AgentLogger.i("Chat", "语音输入被拒：${r.code} / ${r.message}")
-                r.message
-            }
-        }
-    }
-
-    override fun endVoiceCapture() {
-        captureLease?.let { voiceArbiter.endCapture(it) }
-        captureLease = null
-    }
+    // 2026-11-16：beginVoiceCapture / endVoiceCapture 随系统识别一起删除。
+    // 聊天页的录音改由 LocalSpeechInput 自己向仲裁申请与释放租约。
 
     // —— Phase 2 DoD②：消息分支（重新生成 / 左右切换 / 从中间轮重新发问）——
 

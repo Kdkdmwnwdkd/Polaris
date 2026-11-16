@@ -13,6 +13,9 @@ ASR_DIR=app/src/main/java/com/beichen/polaris/audio/asr
 ENGINE=$ASR_DIR/StreamingAsr.kt
 INPUT=$ASR_DIR/LocalSpeechInput.kt
 INSTALLER=$ASR_DIR/AsrModelInstaller.kt
+MODEL_DIR=app/src/main/java/com/beichen/polaris/model
+DOWNLOADER=$MODEL_DIR/ModelDownloader.kt
+SPEC=$MODEL_DIR/ModelSpec.kt
 ACCURATE=$ASR_DIR/OfflineAsrEngine.kt
 ROUTER=$ASR_DIR/AsrRouter.kt
 PET=app/src/main/java/com/beichen/polaris/pet/PetVoice.kt
@@ -38,16 +41,17 @@ else
   fail "A1 模型路径变了——若改回 assets，安装包会白涨 52MB"
 fi
 
-# 断在半截的 onnx 会让原生层只回一句 failed to create native OnlineRecognizer。
-if grep -qF 'MessageDigest.getInstance("SHA-256")' "$INSTALLER" \
-   && grep -qF 'entry.sha256(part)' "$INSTALLER"; then
-  pass "A2 每个文件下完核对 sha256（截断即失败，不当成功）"
+# 断在半截的 zip 解出来只会是「模型文件缺失」，原生层再回一句看不出原因的话。
+# 校验放在统一下载器里：四套模型都要过同一道关。
+if grep -qF 'MessageDigest.getInstance("SHA-256")' "$DOWNLOADER" \
+   && grep -qF 'entry.digestMatches(part)' "$DOWNLOADER"; then
+  pass "A2 每个整包下完核对 sha256（截断即失败，不当成功）"
 else
   fail "A2 下载没有校验哈希——坏文件会被当成装好了"
 fi
 
 # 删目录前必须释放原生句柄，否则那份模型在内存里继续占着，用户会以为「删了没效果」。
-if awk '/fun remove\(\)/,/^    }/' "$INSTALLER" | grep -q 'releaseAll()'; then
+if grep -qF 'onBeforeRemove = { router.releaseAll() }' "$INSTALLER"; then
   pass "A3 删除先释放两套识别器，再删目录"
 else
   fail "A3 删除没先 release —— 原生层仍持有已删文件"
@@ -55,7 +59,7 @@ fi
 
 # 真机实测（2026-11-15）：`failed to connect to github.com…after 10000ms`。
 # 仓库是自己的没用——**域名**在手机网络上到不了。所以下载器必须有多源候选表。
-if grep -qF 'GitHubMirror.sources(' "$INSTALLER"; then
+if grep -qF 'GitHubMirror.sources(' "$DOWNLOADER"; then
   pass "A4 模型下载走多源候选（镜像 → 镜像 → 直连）"
 else
   fail "A4 下载写死单源 —— 直连 github.com 在真机上超时，模型永远装不上"
@@ -71,7 +75,7 @@ fi
 
 # 失败时必须说清「哪个源、为什么」：只报最后一句的话，用户分不清
 # 「模型没上传」和「网络到不了」。
-if grep -qF 'failures.joinToString' "$INSTALLER"; then
+if grep -qF 'failures.joinToString' "$DOWNLOADER"; then
   pass "A6 多源失败时汇总每个源的原因"
 else
   fail "A6 失败只报一句话 —— 用户无从判断是网络还是服务端缺文件"
@@ -88,16 +92,21 @@ fi
 echo ""
 echo "[B] 接入：两条入口都优先用自带识别"
 
-if grep -qF 'if (localAsr.isInstalled()) return startLocal()' "$PET"; then
-  pass "B1 桌宠先看自带模型，没装才回系统引擎"
+# 系统识别已删除（2026-11-16）：桌宠只剩这一条路，所以判据从「先本地再系统」
+# 变成「没模型就明确拒绝并指路」，以及「文件里不该再有 SpeechRecognizer」。
+# 只看代码行：KDoc 里解释「为什么删掉系统识别」时必然会写 SpeechRecognizer。
+if grep -qF 'if (!localAsr.isInstalled())' "$PET" \
+   && ! grep -vE '^[[:space:]]*(\*|//)' "$PET" | grep -qF 'SpeechRecognizer'; then
+  pass "B1 桌宠只用自带模型，没装时明确拒绝并指路（系统识别已删）"
 else
-  fail "B1 桌宠没有分派到自带识别 —— 装了模型也用不上"
+  fail "B1 桌宠还在走/还留着系统识别 —— 那条路在真机上一个字都出不了"
 fi
 
-if grep -qF 'if (AsrDirectory.of(ctx).isInstalled())' "$CHAT"; then
-  pass "B2 聊天页先看自带模型，没装才弹系统识别页"
+if grep -qF 'if (AsrDirectory.of(ctx).isInstalled())' "$CHAT" \
+   && ! grep -vE '^[[:space:]]*(\*|//)' "$CHAT" | grep -qF 'RecognizerIntent'; then
+  pass "B2 聊天页只用自带识别，没模型就指路（不再弹系统识别页）"
 else
-  fail "B2 聊天页仍只会弹系统识别页 —— 国行机上照样没字"
+  fail "B2 聊天页还留着系统识别页 —— 国行机上照样没字"
 fi
 
 # 两处各写一套录音，迟早出现「桌宠能听、聊天页不能」这种各修一半的状态。
@@ -141,28 +150,62 @@ else
 fi
 
 echo ""
-echo "[D] 发布：模型从同一个 Release 出"
+echo "[D] 发布：四套模型从同一个 Release 出"
 
-if grep -qF 'asr-manifest.txt' "$WORKFLOW" && grep -qF 'gh release upload "$TAG" "$OUT"/asr*' "$WORKFLOW"; then
-  pass "D1 CI 把模型与清单传到 latest Release（与 APK 同源）"
+# 2026-11-16：识别两套、音色两套，全部走 model-manifest.txt + zip。
+# 以前是每套一张清单、逐文件下；四套各写一遍，改一处必然漏一处。
+if grep -qF 'model-manifest.txt' "$WORKFLOW" && grep -qF 'gh release upload "$TAG" "$OUT"/*.zip' "$WORKFLOW"; then
+  pass "D1 CI 把四套模型与统一清单传到 latest Release（与 APK 同源）"
 else
   fail "D1 CI 没上传模型 —— App 里点下载会 404"
 fi
 
-# 每次构建都传 55MB 是纯浪费，而且会把 Release 的更新时间刷成构建时间。
-if grep -qF "grep -qx 'asr-manifest.txt'" "$WORKFLOW"; then
-  pass "D2 上传是幂等的（已存在就跳过）"
+# 每次构建都传 430MB 是纯浪费，而且会把 Release 的更新时间刷成构建时间。
+# 四件资产齐全才跳：只看清单会漏掉「传到一半崩了」，那种情况 App 会一直 404。
+if grep -qF 'complete=1' "$WORKFLOW" && grep -qF 'tts-zipvoice.zip' "$WORKFLOW"; then
+  pass "D2 上传是幂等的（四件资产齐全才跳过）"
 else
-  fail "D2 每轮构建都会重传模型"
+  fail "D2 每轮构建都会重传模型，或漏判「zip 少一个」"
 fi
 
 # 只上传流式那套的话，用户在「更准识别」上点下载会 404。
-if grep -qF 'asr-accurate-manifest.txt' "$WORKFLOW" && grep -qF "assets/155854908" "$WORKFLOW"; then
-  pass "D3 整段识别模型也传了（asr2-*）"
+if grep -qF 'asr-accurate.zip' "$WORKFLOW" && grep -qF "assets/155854908" "$WORKFLOW"; then
+  pass "D3 整段识别模型也传了（asr-accurate.zip）"
 else
   fail "D3 CI 没上传整段模型 —— 「更准识别」点了会 404"
 fi
 
 echo ""
+echo "[E] 音色模型：同样按需下载，安装包不带 335MB"
+
+# 四套模型必须在同一张表里。散着写会出现「识别能删、音色不能删」这种半套体验。
+for spec in AsrFast AsrAccurate TtsMatcha TtsZipVoice; do
+  grep -qF "$spec(" "$SPEC" || fail "E1 ModelSpec 少了 $spec —— 那一套就没法下载/删除"
+done
+grep -qF 'TtsMatcha(' "$SPEC" && grep -qF 'TtsZipVoice(' "$SPEC" \
+  && pass "E1 四套模型统一登记（识别 2 + 音色 2）"
+
+# 引擎读的必需文件必须与下载器判定的同一份，否则「下载说装好了、引擎说缺文件」。
+if grep -qF 'ModelSpec.TtsMatcha.required' app/src/main/java/com/beichen/polaris/audio/tts/LocalVoiceEngine.kt \
+   && grep -qF 'ModelSpec.TtsZipVoice.required' app/src/main/java/com/beichen/polaris/audio/tts/ZipVoiceEngine.kt; then
+  pass "E2 音色引擎按同一份必需清单校验（不再各写一份）"
+else
+  fail "E2 音色引擎还在自己列文件 —— 改模型时必然漏一处"
+fi
+
+# 安装包里一个权重都不该有：fetch 脚本必须只往工作树外写。
+if ! grep -qF 'assets", "tts"' scripts/qa/fetch-tts-assets.py; then
+  pass "E3 拉取脚本不再往 assets/tts 写（安装包因此小 335MB）"
+else
+  fail "E3 拉取脚本仍写入 assets/tts —— 模型会被打进 APK"
+fi
+
+# 包体守卫：assets/tts 非空时 CI 必须红，否则「悄悄涨回 361MB」没人发现。
+if grep -qF 'assets/tts 非空' "$WORKFLOW"; then
+  pass "E4 CI 有包体守卫（assets/tts 非空即失败）"
+else
+  fail "E4 CI 没拦「模型又被打进包」 —— 包体会悄悄涨回去"
+fi
+
 echo "离线识别：$p 通过 / $f 失败"
 [ "$f" -eq 0 ]

@@ -147,11 +147,13 @@ fi
 # `if (!isReady())` 底下。于是首次安装时条件恒为 false —— 判定说就绪、展开永不发生、
 # filesDir 永远是空的，原生层 2ms 后只回一句 `Invalid OfflineTtsConfig`，
 # 日志里连一行「模型展开」都不会有。用户听到的是一声不吭，看不出任何线索。
-if ! grep -qE '^[^/*]*if \(!isReady\(\)\)' "$LOCAL_ENGINE" "$ZIP_ENGINE" 2>/dev/null \
-  && grep -q 'ensureExpanded()' "$LOCAL_ENGINE" && grep -q 'ensureExpanded()' "$ZIP_ENGINE"; then
-  pass "A13 模型展开无条件执行（不再被 isReady 挡住）"
+# 2026-11-16：模型不再随包，也没有「首次展开」这一步了——下载器把整包解到最终目录。
+# 现在要守的是相反的事：引擎不能再去 assets 里展开（那等于把 335MB 塞回安装包）。
+if ! grep -q 'TtsAssetInstaller' "$LOCAL_ENGINE" "$ZIP_ENGINE" 2>/dev/null \
+  && grep -q 'ModelZip.missingIn' "$LOCAL_ENGINE" && grep -q 'ModelZip.missingIn' "$ZIP_ENGINE"; then
+  pass "A13 模型由下载器整包落地，引擎不再从 assets 展开（包体因此小 335MB）"
 else
-  fail "A13 展开仍挂在 if (!isReady()) 下 —— 首次安装必然静音"
+  fail "A13 引擎还在从 assets 展开 —— 权重会被打进安装包"
 fi
 
 # 原生层失败只有一句 `failed to create native OfflineTts`，不说缺哪个文件。

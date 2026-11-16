@@ -135,29 +135,30 @@ jobs:
             echo "POLARIS_SHIZUKU_ASSET=absent" >> "$GITHUB_ENV"
           fi
 
-      # 语音模型与原生推理库：离线音色（matcha 125MB）+ 声音克隆（ZipVoice 155MB）
-      # + sherpa-onnx 的 .so，全都不在仓库里（见 scripts/qa/fetch-tts-assets.py 开头）。
+      # 原生推理库（sherpa-onnx 的 .so）仍然要在构建时拉——它必须打进包里。
+      # 但**四套权重都不进包了**（2026-11-16）：安装包从 361MB 降到 30MB 上下，
+      # 模型改成应用内按需下载（见下面 Publish voice model assets）。
       #
-      # 少了这一步，APK 依然能装、能启动，但音色页显示「模型未就绪」、
-      # 播报静默退回系统 TTS——用户拿到的是个没有声音的空壳（run 734 就是这样：
-      # 36MB，assets/tts 为空）。所以这里**故意不用 continue-on-error**：
-      # 宁可不发，也不发一个功能残缺的包。
-      - name: Cache TTS models
+      # 所以这里只装运行时。脚本里的模型分支用 POLARIS_MODELS=0 关掉：
+      # 构建这台机器不需要 335MB 权重，只需要 .so。
+      - name: Cache native runtime
         uses: actions/cache@v4
         with:
           path: .cache/tts
-          key: tts-assets-${{ hashFiles('scripts/qa/fetch-tts-assets.py') }}
+          key: sherpa-runtime-${{ hashFiles('scripts/qa/fetch-tts-assets.py') }}
 
-      - name: Fetch TTS runtime and models (构建时拉取，不进仓库)
+      - name: Fetch native runtime only (模型走应用内下载)
         run: |
-          python3 scripts/qa/fetch-tts-assets.py
-          # 目录「存在」不等于「有内容」：空目录也能过 ls，必须判非空。
-          du -sh app/src/main/assets/tts/matcha app/src/main/assets/tts/zipvoice
-          for d in matcha zipvoice; do
-            test -n "$(ls -A app/src/main/assets/tts/$d)" \
-              || { echo "::error::assets/tts/$d 为空，拒绝产出无声包"; exit 1; }
-          done
+          POLARIS_MODELS=0 python3 scripts/qa/fetch-tts-assets.py
           ls app/src/main/jniLibs/arm64-v8a/ | head
+
+          # 包体守卫：assets/tts 一旦非空，就等于把 335MB 又塞回包里了。
+          # 这个错误在真机上完全看不出来（能装、能用），只有包体悄悄涨回去——
+          # 所以必须在构建阶段红。
+          if [ -d app/src/main/assets/tts ] && [ -n "$(ls -A app/src/main/assets/tts)" ]; then
+            echo "::error::assets/tts 非空（$(du -sh app/src/main/assets/tts | cut -f1)）——模型应改成应用内下载"
+            exit 1
+          fi
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
@@ -499,93 +500,105 @@ jobs:
             --title "$TITLE" \
             --notes "$NOTES"
 
-      # 离线识别模型（约 52MB）**不进 APK**：只有第一次点语音的人需要它。
-      # 放在同一个 latest Release 里，App 从那里下——国内用户已经在用这条路下 361MB 的包，
-      # 不必再引一个新的下载源。
+      # 四套语音权重（两套识别 24/74MB + 两套音色 139/196MB）**都不进 APK**：
+      # 只有真用语音的人才需要它们。全部放在同一个 latest Release 里，App 用同一套
+      # 下载器取（国内走 GitHubMirror 的加速表，github.com 直连在真机上会超时）。
       #
-      # 幂等：模型是这个项目的固定资产，不会每次构建都变，所以先看清单在不在，
-      # 在就跳过（否则每轮白传 55MB，还会把 release 的更新时间刷成构建时间）。
-      # 两套识别模型都上传到 latest Release（与 APK 同源，App 只认这一个地址）：
-      #   asr-*  流式 zipformer（24MB，边说边出字）
-      #   asr2-* 整段 paraformer（74MB，说完再认，错字少）
-      # 上游把它们放在 k2-fsa/sherpa-onnx 的 asr-models 大 release 里，按 asset id 取最稳
-      # （文件名带训练信息，换版本就变，用 URL 拼名字迟早 404）。
-      - name: Publish ASR model assets (latest)
+      # 幂等：权重是固定资产，不会每次构建都变。四件资产齐全就整段跳过——
+      # 否则每轮白拉 430MB、白传 430MB，还会把 release 的更新时间刷成构建时间。
+      #
+      # 为什么是 zip：克隆模型的 espeak-ng-data 是几千个小文件，逐文件下要几千次请求；
+      # 整包一个 zip，清单一行、校验一次、解压一次。识别那两套本来只有几个文件，
+      # 也一并统一——App 侧就只剩一条下载路径。
+      - name: Publish voice model assets (latest)
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
           TAG=latest
           REPO="${{ github.repository }}"
           HAVE=$(gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' 2>/dev/null || true)
 
-          # 两套分别判：只下过流式模型的人不该被「已存在」的清单挡住更准那套。
-          if grep -qx 'asr-manifest.txt' <<<"$HAVE" && grep -qx 'asr-accurate-manifest.txt' <<<"$HAVE"; then
-            echo "两套识别模型资产都已存在，跳过上传"
+          # 四件资产 + 清单全在才跳过。只看清单会漏掉「上次传到一半崩了」——
+          # 那种情况下清单在、zip 少一个，App 会一直报「服务端还没上传」。
+          complete=1
+          for a in asr-fast.zip asr-accurate.zip tts-matcha.zip tts-zipvoice.zip model-manifest.txt; do
+            grep -qx "$a" <<<"$HAVE" || complete=0
+          done
+          if [ "$complete" = "1" ]; then
+            echo "四套模型与清单都已存在，跳过上传"
             exit 0
           fi
 
-          OUT=/tmp/asr-out && rm -rf "$OUT" && mkdir -p "$OUT"
+          OUT=/tmp/models && rm -rf "$OUT" && mkdir -p "$OUT"
 
-          # 文件名不写死：挑 int8（体积约三分之一，手机 CPU 上快一倍），没有就挑任意一个。
+          # —— 两套识别：从上游 sherpa-onnx 的 asr-models 大 release 按 asset id 取 ——
+          # 文件名带训练信息（`encoder-epoch-99-avg-1.int8.onnx`），换版本就变，
+          # 拼名字迟早 404；按 id 取最稳。
           pick() {
             local dir="$1" pre="$2" hit=""
             hit=$(ls "$dir"/${pre}*.onnx 2>/dev/null | grep -E '\.int8\.onnx$' | head -1 || true)
             [ -n "$hit" ] || hit=$(ls "$dir"/${pre}*.onnx 2>/dev/null | head -1 || true)
             printf '%s' "$hit"
           }
-          write_manifest() {
-            local out="$1"; shift
-            : > "$out"
-            for f in "$@"; do
-              printf '%s %s %s\n' "$f" "$(stat -c%s "/tmp/asr-out/$f")" \
-                "$(sha256sum "/tmp/asr-out/$f" | cut -d' ' -f1)" >> "$out"
-            done
-            cat "$out"
-          }
 
-          if ! grep -qx 'asr-manifest.txt' <<<"$HAVE"; then
           curl -fL --retry 3 --retry-delay 5 \
             -H "Accept: application/octet-stream" \
             -o /tmp/asr.tar.bz2 \
             "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/191971859"
-          mkdir -p /tmp/asr-src && tar -xjf /tmp/asr.tar.bz2 -C /tmp/asr-src --strip-components=1
-          ls -la /tmp/asr-src | head -20
+          rm -rf /tmp/asr-src && mkdir -p /tmp/asr-src
+          tar -xjf /tmp/asr.tar.bz2 -C /tmp/asr-src --strip-components=1
 
           ENC=$(pick /tmp/asr-src encoder); DEC=$(pick /tmp/asr-src decoder); JOI=$(pick /tmp/asr-src joiner)
           [ -n "$ENC" ] && [ -n "$DEC" ] && [ -n "$JOI" ] || { echo "流式模型包结构与预期不符"; exit 1; }
           [ -f /tmp/asr-src/tokens.txt ] || { echo "缺 tokens.txt"; exit 1; }
 
-          cp "$ENC" "$OUT/asr-encoder.int8.onnx"
-          cp "$DEC" "$OUT/asr-decoder.onnx"
-          cp "$JOI" "$OUT/asr-joiner.int8.onnx"
-          cp /tmp/asr-src/tokens.txt "$OUT/asr-tokens.txt"
-          # 清单：名字 字节 sha256。App 下完逐个核对——截断的 onnx 只会让原生层
-          # 报一句 failed to create native OnlineRecognizer，对用户毫无意义。
-          write_manifest "$OUT/asr-manifest.txt" \
-            asr-encoder.int8.onnx asr-decoder.onnx asr-joiner.int8.onnx asr-tokens.txt
-          fi
+          mkdir -p "$OUT/asr-fast"
+          cp "$ENC" "$OUT/asr-fast/encoder.int8.onnx"
+          cp "$DEC" "$OUT/asr-fast/decoder.onnx"
+          cp "$JOI" "$OUT/asr-fast/joiner.int8.onnx"
+          cp /tmp/asr-src/tokens.txt "$OUT/asr-fast/tokens.txt"
 
-          if ! grep -qx 'asr-accurate-manifest.txt' <<<"$HAVE"; then
           curl -fL --retry 3 --retry-delay 5 \
             -H "Accept: application/octet-stream" \
             -o /tmp/asr2.tar.bz2 \
             "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/155854908"
           rm -rf /tmp/asr2-src && mkdir -p /tmp/asr2-src
           tar -xjf /tmp/asr2.tar.bz2 -C /tmp/asr2-src --strip-components=1
-          ls -la /tmp/asr2-src | head -20
 
-          # paraformer 只有单个 model.onnx（外加 tokens.txt），目录里没有 encoder/decoder 之分。
-          # 用 find 而不是假设固定层级：这个包的顶层目录名带日期，换版本就变；
-          # 而 strip 掉一层的前提一旦不成立，cp 会拿到空串、构建直接红。
+          # paraformer 只有单个 model.onnx（外加 tokens.txt），没有 encoder/decoder 之分。
+          # 用 find 而不是假设固定层级：顶层目录名带日期，换版本就变。
           MDL=$(find /tmp/asr2-src -name 'model*.onnx' | grep -E '\.int8\.onnx$' | head -1 || true)
           [ -n "$MDL" ] || MDL=$(find /tmp/asr2-src -name 'model*.onnx' | head -1 || true)
           TOK=$(find /tmp/asr2-src -name 'tokens.txt' | head -1 || true)
           [ -n "$MDL" ] && [ -n "$TOK" ] || { echo "整段模型包结构与预期不符"; exit 1; }
-          cp "$MDL" "$OUT/asr2-model.onnx"
-          cp "$TOK" "$OUT/asr2-tokens.txt"
-          write_manifest "$OUT/asr-accurate-manifest.txt" asr2-model.onnx asr2-tokens.txt
-          fi
+          mkdir -p "$OUT/asr-accurate"
+          cp "$MDL" "$OUT/asr-accurate/model.int8.onnx"
+          cp "$TOK" "$OUT/asr-accurate/tokens.txt"
 
-          gh release upload "$TAG" "$OUT"/asr* --repo "$REPO" --clobber
+          # —— 两套音色：复用本地那份拉取脚本，但输出到临时目录（不进 assets）——
+          POLARIS_TTS_MODEL_DIR="$OUT" python3 scripts/qa/fetch-tts-assets.py
+          test -f "$OUT/matcha/model-steps-3.onnx"
+          test -f "$OUT/zipvoice/encoder.int8.onnx"
+
+          # —— 打包 ——
+          # -q 安静、-r 递归、-y 保留符号链接本身（espeak-ng-data 里没有，但别哪天中招）。
+          (cd "$OUT/asr-fast" && zip -qry "$OUT/asr-fast.zip" .)
+          (cd "$OUT/asr-accurate" && zip -qry "$OUT/asr-accurate.zip" .)
+          (cd "$OUT/matcha" && zip -qry "$OUT/tts-matcha.zip" .)
+          (cd "$OUT/zipvoice" && zip -qry "$OUT/tts-zipvoice.zip" .)
+
+          # 清单：`资产名 字节 sha256`。App 下完整包前先用它判「服务端到底有没有这个模型」，
+          # 也用它核对字节数——下了一半的 zip 解出来只会是「模型文件缺失」，
+          # 而那句话对用户毫无意义。
+          : > "$OUT/model-manifest.txt"
+          for f in asr-fast.zip asr-accurate.zip tts-matcha.zip tts-zipvoice.zip; do
+            printf '%s %s %s\n' "$f" "$(stat -c%s "$OUT/$f")" \
+              "$(sha256sum "$OUT/$f" | cut -d' ' -f1)" >> "$OUT/model-manifest.txt"
+          done
+          cat "$OUT/model-manifest.txt"
+          du -h "$OUT"/*.zip
+
+          gh release upload "$TAG" "$OUT"/*.zip "$OUT/model-manifest.txt" \
+            --repo "$REPO" --clobber

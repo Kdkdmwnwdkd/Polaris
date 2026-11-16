@@ -57,25 +57,22 @@ def dex_string_pool(dex):
 # ---- 判据表 ----------------------------------------------------------------
 
 POOL_GROUPS = {
-    "语音能力判定（pool 池条目精确匹配）": [
-        ("能力判定表", "Lcom/beichen/polaris/core/voice/SpeechCapabilityPolicy;"),
-        ("判定结果类型", "Lcom/beichen/polaris/core/voice/SpeechCapability;"),
-        ("路径枚举（谁来录音）", "Lcom/beichen/polaris/core/voice/VoicePath;"),
-        ("出路枚举（该做什么）", "Lcom/beichen/polaris/core/voice/SpeechRemedy;"),
-        ("环境探测层", "Lcom/beichen/polaris/audio/SpeechProbe;"),
+    # 2026-11-16：系统识别整条路删除（PetVoice / ChatScreen / SpeechProbe /
+    # SpeechCapabilityPolicy / EngineSelector 全部移除）。这里改成断言
+    # 「自带离线识别 + 统一模型下载」那一套真的进了包——
+    # 判据跟着**现在支持的功能**走，而不是跟着已删的代码走。
+    "离线识别与模型下载（pool 池条目精确匹配）": [
+        ("模型清单", "Lcom/beichen/polaris/model/ModelSpec;"),
+        ("模型下载器", "Lcom/beichen/polaris/model/ModelDownloader;"),
+        ("整包解压", "Lcom/beichen/polaris/model/ModelZip;"),
+        ("识别模型入口", "Lcom/beichen/polaris/audio/asr/AsrModelInstaller;"),
+        ("识别路由", "Lcom/beichen/polaris/audio/asr/AsrRouter;"),
+        ("流式识别", "Lcom/beichen/polaris/audio/asr/StreamingAsr;"),
+        ("整段识别", "Lcom/beichen/polaris/audio/asr/OfflineAsrEngine;"),
+        ("自带录音层", "Lcom/beichen/polaris/audio/asr/LocalSpeechInput;"),
+        ("模型下载方法", "download"),
+        ("模型删除方法", "remove"),
         ("语音诊断报告", "Lcom/beichen/polaris/audio/VoiceDiagnostics;"),
-        ("聊天页语音纯逻辑", "Lcom/beichen/polaris/ui/VoiceInputLogic;"),
-        ("判定入口方法", "decide"),
-        ("路径判别方法", "hasSystemRecognizerPage"),
-        ("错误码翻译入口", "explainError"),
-        ("引擎能力数据", "Lcom/beichen/polaris/core/voice/EngineCapability;"),
-        ("引擎适配档位", "Lcom/beichen/polaris/core/voice/EngineFit;"),
-        ("引擎选择逻辑", "Lcom/beichen/polaris/core/voice/EngineSelector;"),
-        ("语言标签比较", "Lcom/beichen/polaris/core/voice/LanguageTag;"),
-        ("逐引擎探测方法", "probeEngines"),
-        ("指定引擎创建", "createSpeechRecognizer"),
-        ("引擎名字生成", "Lcom/beichen/polaris/core/voice/EngineLabel;"),
-        ("引擎选择持久化", "Lcom/beichen/polaris/audio/VoiceEngineStore;"),
         ("语音引擎选择页", "Lcom/beichen/polaris/ui/VoiceEngineScreenKt;"),
     ],
     "音色与回落（pool 池条目精确匹配）": [
@@ -382,24 +379,29 @@ ABSENT_POOL = [
     # 2026-11-14 第四轮：真机截图证明「默认应用」里没有「语音识别」这一项。
     # 这句指路文案必须从包里彻底消失，否则我们还在把用户送进死路。
     ("旧的「去系统设置换识别服务」文案已移除", "到系统设置 → 默认应用 → 语音识别"),
+    # 2026-11-16：系统识别整条路删除。这几条是「真的删干净了」的证据——
+    # 留着任意一条，用户就还能走到一条注定出不了中文的路上。
+    ("系统识别页 Intent 已移除", "android.speech.action.RECOGNIZE_SPEECH"),
+    ("系统识别器创建已移除", "createSpeechRecognizer"),
+    ("逐引擎语言探测已移除", "checkRecognitionSupport"),
+    ("系统默认识别引擎读取已移除", "voice_recognition_service"),
 ]
 
 BYTES_GROUPS = {
-    "语音能力文案（bytes 子串）": [
-        ("没装语音服务的提示", "本机没有语音识别服务，暂时只能用文字"),
-        ("没选默认引擎的提示", "系统还没选定语音识别服务"),
-        ("没有系统识别页的提示", "本机没有系统语音识别页"),
-        ("权限缺失的提示", "没有麦克风权限。去系统设置给「北辰」打开麦克风后重试"),
-        ("ERROR_CLIENT 的新文案", "识别服务连不上，去系统设置里确认已选定语音识别服务"),
+    # 2026-11-16：系统识别整条路删除之后，这些文案必须换成「下模型」的说法。
+    # 断言的是**现在真的会出现在包里**的句子，而不是已删代码的旧文案——
+    # 旧文案留着会变成「测试在验一段没人执行的字符串」。
+    "离线语音文案（bytes 子串）": [
+        ("没装模型时桌宠的说法", "还没下载离线识别模型"),
+        ("为什么不再依赖系统", "下完就能说话，不再依赖系统识别服务"),
+        ("缺麦克风权限的说法", "要听你说话，得先允许「录音」权限"),
+        ("聊天页没模型时的提示", "还没下载离线识别模型"),
         ("语音诊断入口", "语音诊断"),
-        ("语言不支持的新文案（指向应用内语音页）", "当前引擎不认中文"),
-        ("所有引擎都不认中文的提示", "这台设备上的识别服务都不支持中文"),
-        # 2026-11-14 第三轮：「没问到」必须与「不支持」在文案上区分开。
-        # 两者混为一谈的后果是用户去换引擎——而真正要做的只是再问一次。
-        ("未应答引擎的说明文案", "没问到（引擎没在超时内应答"),
-        ("诊断里「先按默认试一次」", "先按系统默认试一次"),
-        ("引擎适配度文案（离线）", "离线可用"),
-        ("引擎适配度文案（需下载）", "支持但没下语言包"),
+        ("识别页标题", "离线识别模型"),
+        ("两套模型的选择说明", "两套都装时自动用「更准」那个"),
+        ("模型行的删除提示", "点一下可以删掉，随时能重下"),
+        ("音色页下载提示", "先在下面下载「内置音色」模型"),
+        ("安装包变小的说明", "安装包因此小了"),
     ],
     "W9-A 文案（描述 / 失败指引，长常量片段，bytes 子串）": [
         ("描述：已授予无障碍即可使用", "已授予无障碍权限即可使用"),
@@ -509,7 +511,8 @@ BYTES_GROUPS = {
         ("清空收藏确认", "清空收藏"),
         ("语音输入按钮", "语音输入"),
         ("语音未识别提示", "没听清，再说一次试试"),
-        ("无语音服务提示", "本机没有可用的语音识别服务"),
+        # 系统识别删除后，聊天页没模型时给的是这句（见 startVoiceInput）。
+        ("没模型时的提示", "还没下载离线识别模型"),
         ("收藏页说明", "删掉会话也不会丢"),
     ],
     "W29 文案（bytes 子串）": [

@@ -1,29 +1,15 @@
 package com.beichen.polaris.pet
 
-import android.content.ComponentName
+import android.Manifest
 import android.content.Context
-import android.content.Intent
-import android.os.Bundle
+import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import com.beichen.polaris.audio.AudioGraph
-import com.beichen.polaris.audio.SpeechProbe
-import com.beichen.polaris.audio.asr.LocalSpeechInput
 import com.beichen.polaris.audio.asr.AsrDirectory
-import com.beichen.polaris.audio.VoiceEngineStore
+import com.beichen.polaris.audio.asr.LocalSpeechInput
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.text.SpeechLogic
-import com.beichen.polaris.core.voice.AudioLease
-import com.beichen.polaris.core.voice.ClaimResult
-import com.beichen.polaris.core.voice.EngineSelector
-import com.beichen.polaris.core.voice.SpeechCapability
-import com.beichen.polaris.core.voice.SpeechCapabilityPolicy
-import com.beichen.polaris.core.voice.SpeechRemedy
-import com.beichen.polaris.core.voice.VoicePath
-import java.util.Locale
 
 /**
  * 桌宠语音输入的状态机。
@@ -52,39 +38,23 @@ sealed interface PetVoiceState {
 }
 
 /**
- * 桌宠的语音输入：`SpeechRecognizer` 直连，不弹系统页。
+ * 桌宠的语音输入：**只用自带的离线识别**。
  *
- * ## 为什么不复用对话页那套
+ * ## 2026-11-16：把系统识别整条路删了
  *
- * `ChatScreen` 走的是 [RecognizerIntent.ACTION_RECOGNIZE_SPEECH] 的 **Activity** 版：
- * 发一个 Intent，系统弹一个识别界面，用户在那边说完点确定，结果回传。那条路一定可用
- * （有识别服务的机器都能跑），代价是全屏弹窗。
+ * 以前这里是双路径——有自带模型走自带，没有就退到 `SpeechRecognizer`。
+ * 两个系统引擎在真机上都没用：Google 的服务在国内不可达，高通引擎不认中文，
+ * 用户在它们之间切来切去，得到的都是「一个字的识别结果都没有」。
  *
- * 对桌宠这是致命的：它存在的全部意义是「一直在这儿、随手问一句」。弹一次系统页就退化成
- * 「打开一个应用」。所以这里用 [SpeechRecognizer] 的 **API** 版——同样的识别服务，
- * 不弹界面。spec §2 把这件事写成了需求决定的，不是技术偏好。
+ * 留着那条路只有一种效果：用户以为「没装模型也能用」，点下去等 20 秒，然后失败。
+ * 所以现在模型没装就直接说清「去下模型，约 74MB，下完一定能用」——
+ * 这是唯一一条在这类机器上真的能出字的路。
  *
  * ## 三条硬约束
  *
- * 1. **必须在主线程**：`createSpeechRecognizer` 与 `startListening` 都只能在主线程调，
- *    否则抛 `RuntimeException: SpeechRecognizer should be used only from the main thread`。
- *    本类所有公开方法都假定调用方在主线程（Compose 手势、Service 生命周期都满足）。
- * 2. **一次只有一个会话**：同一个 `SpeechRecognizer` 实例在 `startListening` 期间再调一次
- *    会得到 `ERROR_RECOGNIZER_BUSY`。所以每次录音**新建一个实例，用完就 destroy**——
- *    复用实例在部分 ROM 上会出现「第二次录音没有任何回调」的静默失败，那种问题没法在
- *    CI 里发现，代价远高于每次多花 300ms。
- * 3. **必须有超时**：引擎的静音判定依赖厂商实现，`EXTRA_SPEECH_INPUT_*_SILENCE_LENGTH_MILLIS`
- *    在很多 ROM 上直接被忽略。没有兜底的话，一次「按下去、没说话」会让状态永久停在
- *    [PetVoiceState.Listening]，桌宠看起来像死了。
- *
- * ## 与声音仲裁的关系
- *
- * 录音前先向 [com.beichen.polaris.core.voice.MicClaim] 请求 `Capture`。请求成功意味着
- * 播报已经被自动停掉（[com.beichen.polaris.audio.VoiceArbiter] 的 revoked 回调负责），
- * 所以这里**不需要**先调 `stopSpeech()`——互斥是仲裁的结果，不是调用方的义务。
- *
- * 反过来，被拒时（别的应用在录音、通话中）原样把仲裁给的原因显示出来，不要自己编一句
- * 「麦克风不可用」——用户看到「正在通话中」才知道该挂电话。
+ * 1. **一次只有一个会话**：`active` 之外再按一次直接忽略。
+ * 2. **必须有超时**：环境噪音可能让端点检测永远不触发，20 秒强制收尾。
+ * 3. **麦克风租约由录音层申请**：申请两次会被仲裁判成自己占用自己。
  */
 class PetVoiceInput(
     context: Context,
@@ -92,42 +62,25 @@ class PetVoiceInput(
     private val onState: (PetVoiceState) -> Unit,
     /** 识别成功的最终文本（已清洗，非空）。主线程回调。 */
     private val onText: (String) -> Unit,
-    /** 一句话的可执行提示（没权限 / 没服务 / 没听清 / 被占用）。主线程回调。 */
+    /** 一句话的可执行提示（没权限 / 没模型 / 没听清 / 被占用）。主线程回调。 */
     private val onProblem: (String) -> Unit,
-
-    /**
-     * 带**结构化出路**的提示回调。默认走 [onProblem]。
-     *
-     * 为什么需要它：调用方要据此决定要不要给「去授权」这个动作——
-     * 只有 [SpeechRemedy.GrantMicPermission] 是**当场就能解决**的
-     * （点一下跳到系统权限页），而「没听清」「识别服务正忙」给个按钮只会让人多点一次。
-     *
-     * 传的是枚举而不是字符串：字符串写错一个字母不会编译报错，
-     * 只会静默地不再跳权限页——正是「按了没反应」这一类最难查的问题。
-     */
-    private val onProblemWithCode: ((String, SpeechRemedy) -> Unit)? = null,
+    /** 需要麦克风权限时的直达动作（跳到本应用的权限页）。参数是给用户看的原因。 */
+    private val onNeedPermission: (String) -> Unit = onProblem,
+    /** 需要下载识别模型时的直达动作（跳到语音页）。参数是给用户看的原因。 */
+    private val onNeedModel: (String) -> Unit = onProblem,
 ) {
 
     private val app = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
-    private val arbiter = AudioGraph.arbiter(app)
-
-    /** 识别能力探测。与聊天页共用同一套结论——两边说法不一致会让用户以为其中一边坏了。 */
-    private val probe = SpeechProbe(app)
-
-    private var lease: AudioLease? = null
-    private var recognizer: SpeechRecognizer? = null
 
     /**
-     * 自带的离线识别。模型装了就优先用它。
+     * 自带的离线识别。
      *
-     * 为什么优先级在系统识别之前：系统识别是「厂商给什么用什么」，国行机上经常整条死掉
-     * （Google 不可达、高通引擎不认中文）。自己的模型只要装了，就一定认中文、一定不联网。
-     * 模型没装时仍然走系统那条，两条腿都不耽误。
+     * 进程内单例：加载一次模型要 600–900ms，聊天页与桌宠共用同一份，
+     * 不共享就等于同一台手机上常驻两份权重。
      */
     private val localAsr = AsrDirectory.of(app)
     private var localInput: LocalSpeechInput? = null
-    private var usingLocal = false
 
     /** 本次会话是否还活着。所有异步回调先查它，避免迟到的回调改动新会话的状态。 */
     private var active = false
@@ -148,179 +101,35 @@ class PetVoiceInput(
     }
 
     /**
-     * 主动结束后的结果等待上限。
-     *
-     * 结束 → 引擎上传/解码 → 出结果，正常 300–1500ms。5 秒还没回来说明引擎侧没响应，
-     * 只能当作没听清。这段时间的 UI 是 [PetVoiceState.Transcribing]，用户不会以为卡死。
-     */
-    private val resultTimeout = Runnable {
-        if (!active) return@Runnable
-        finishWithProblem("没听清，再说一次试试")
-    }
-
-    private val listener = object : RecognitionListener {
-
-        override fun onReadyForSpeech(params: Bundle?) {
-            if (!active) return
-            onState(PetVoiceState.Listening(""))
-        }
-
-        override fun onBeginningOfSpeech() {
-            // 引擎检测到人声。onReadyForSpeech 更早，UI 已经在「听」的状态里，这里不重复。
-        }
-
-        override fun onRmsChanged(rmsdB: Float) {
-            // 音量变化每秒几十次。做波形很好看，但每帧重组 Canvas 不值得——
-            // 形象本身有呼吸和眨眼，已经足够表达「它活着」。
-        }
-
-        override fun onBufferReceived(buffer: ByteArray?) = Unit
-
-        override fun onEndOfSpeech() {
-            // 引擎认为说完了。**这里不要调 stopListening()**：
-            // 部分引擎在 onEndOfSpeech 之后已经开始解码，再 stop 会让它直接 cancel，
-            // 结果是「说完了却什么都没识别到」。让它自己走 onResults。
-        }
-
-        override fun onError(error: Int) {
-            if (!active) return
-            val message = errorText(error)
-            AgentLogger.i(TAG, "识别失败 code=$error → $message")
-            finishWithProblem(message)
-        }
-
-        override fun onResults(results: Bundle?) {
-            if (!active) return
-            val raw = results
-                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                ?.firstOrNull()
-            val cleaned = raw?.let { SpeechLogic.cleanResult(it) }
-            // 先收尾再回调：onText 里会立刻发起新一轮 Agent 请求，
-            // 若此时麦克风还没释放，Agent 里的 speak 工具会拿到一次假 busy。
-            teardown("识别完成")
-            if (cleaned != null) onText(cleaned) else onProblem("没听清，再说一次试试")
-        }
-
-        override fun onPartialResults(partialResults: Bundle?) {
-            if (!active || finishing) return
-            val p = partialResults
-                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                ?.firstOrNull()
-            if (!p.isNullOrBlank()) onState(PetVoiceState.Listening(p))
-        }
-
-        override fun onEvent(eventType: Int, params: Bundle?) = Unit
-    }
-
-    /**
      * 开始听。
      *
-     * @return true = 已经开始（状态会先 [PetVoiceState.Arming] 再 [PetVoiceState.Listening]）；
-     *         false = 没能开始，原因已经通过 [onProblem] 给出，调用方不要额外编文案。
+     * @return true = 已经开始；false = 没能开始，原因已经通过 [onProblem] 给出，
+     *         调用方不要额外编文案。
      */
     fun start(): Boolean {
         if (active) return false
 
-        // 先看自己的腿。模型没装才回头找系统——顺序不能反：
-        // 反了的话，系统识别「能启动但识别不出一个字」（国行机常见）会把用户卡在那儿，
-        // 而明明装了离线模型却不被使用。
-        if (localAsr.isInstalled()) return startLocal()
-
-        // 「能不能识别」要查三件事，缺一件都会静默失败：
-        //   ① 有没有识别服务；
-        //   ② 系统**选了**哪个引擎（Android 14 的 SpeechRecognizer 绑定时读
-        //      Settings.Secure.VOICE_RECOGNITION_SERVICE，它为空时绑定直接失败，
-        //      应用侧只能看到笼统的 ERROR_CLIENT）；
-        //   ③ 引擎**认不认**当前语言（只能在录音前问，方式是 checkRecognitionSupport，
-        //      它不碰麦克风）。
-        //
-        // 三件事合起来才是完整判定，所以统一交给探测层，与聊天页共用同一套结论——
-        // 两边说的不一样，用户会以为其中一边坏了。
-        //
-        // 这里**不再自己先判权限**：那会让桌宠的结论顺序（先说缺权限）与聊天页
-        // （先说缺服务）不一致，而这两条路必须给出同一句结论。
-        // 判定顺序里「没服务」排在「没权限」前面，理由见 SpeechCapabilityPolicy 的注释。
-        //
-        // 桌宠走的是**自己录音**那条路（[VoicePath.SelfRecorded]）：
-        // 录音发生在我们的进程里，所以我们的麦克风权限是硬前置。
-        // 聊天页走系统识别页，那边的权限归系统管——两边不能用同一套要求。
-        when (val cap = probe.check(VoicePath.SelfRecorded)) {
-            is SpeechCapability.Available -> Unit
-            is SpeechCapability.Unavailable -> {
-                reportSelfRecordedUnusable(cap.message, cap.remedy)
-                return false
-            }
-            is SpeechCapability.LanguageUnsupported -> {
-                reportSelfRecordedUnusable(cap.message, cap.remedy)
-                return false
-            }
-        }
-
-        when (val r = arbiter.beginCapture("桌面助手语音输入")) {
-            is ClaimResult.Granted -> lease = r.lease
-            is ClaimResult.Denied -> {
-                AgentLogger.i(TAG, "麦克风被拒：${r.code} / ${r.message}")
-                onProblem(r.message)
-                return false
-            }
-        }
-
-        val rec = createRecognizer()
-        if (rec == null) {
-            releaseLease("创建识别器失败")
-            onProblem("语音识别服务启动失败，请稍后再试")
+        if (!localAsr.isInstalled()) {
+            AgentLogger.i(TAG, "没装离线识别模型，拒绝开麦")
+            onNeedModel(
+                "还没下载离线识别模型（约 74MB）。下完就能说话，不再依赖系统识别服务——" +
+                    "手机上那两个系统引擎在这台机器上出不了中文"
+            )
             return false
         }
-        rec.setRecognitionListener(listener)
-        recognizer = rec
+
+        // 录音发生在我们的进程里，RECORD_AUDIO 是硬前置。桌宠走的就是这条路，
+        // 所以这里的判定只针对自己，不再有「系统页那条路不需要权限」的分叉。
+        if (!hasMic()) {
+            onNeedPermission("要听你说话，得先允许「录音」权限")
+            return false
+        }
+
         active = true
         finishing = false
         onState(PetVoiceState.Arming)
 
-        val started = runCatching { rec.startListening(buildIntent()) }
-        if (started.isFailure) {
-            AgentLogger.w(TAG, "startListening 抛异常：${started.exceptionOrNull()?.message}")
-            teardown("启动失败")
-            onProblem("语音识别启动失败，请稍后再试")
-            return false
-        }
-        handler.postDelayed(hardTimeout, HARD_TIMEOUT_MS)
-        return true
-    }
-
-    /**
-     * 系统识别用不了时的说法。
-     *
-     * 系统给的出路是「去系统设置换一个识别服务」——在真机上这条建议是死路：
-     * 两个引擎一个国内不可达、一个没中文包，换过去还是没字。所以只要自带模型还没装，
-     * 就把出路改成「在应用内下载模型」，并说清为什么（用户不该被反复指去系统设置里打转）。
-     */
-    private fun reportSelfRecordedUnusable(message: String, remedy: SpeechRemedy) {
-        if (localAsr.isInstalled()) {
-            report(message, remedy)
-            return
-        }
-        report(
-            "这台机器上的系统识别服务都用不了（Google 的国内不可达，高通的没有中文包）。" +
-                "去「设置 → 语音识别」下载离线识别模型（约 24MB），之后不再依赖系统引擎。",
-            SpeechRemedy.DownloadOfflineModel,
-        )
-    }
-
-    /**
-     * 走自带离线识别。
-     *
-     * 与系统那条的差别：麦克风租约由 [LocalSpeechInput] 自己申请与释放（它在录音线程的
-     * finally 里释放，比这里更靠得住），所以这里**不**再 beginCapture——
-     * 申请两次会被自己判成 busy。
-     */
-    private fun startLocal(): Boolean {
-        active = true
-        finishing = false
-        usingLocal = true
-        onState(PetVoiceState.Arming)
-
-        val input = LocalSpeechInput(app, localAsr, arbiter)
+        val input = LocalSpeechInput(app, localAsr, AudioGraph.arbiter(app))
         localInput = input
         val started = input.start { event ->
             // 回调来自录音线程，UI 状态与 onText 都必须在主线程。
@@ -333,7 +142,7 @@ class PetVoiceInput(
                     is LocalSpeechInput.Event.Final -> {
                         if (!active) return@post
                         val text = SpeechLogic.cleanResult(event.text)
-                        teardown("本地识别完成")
+                        teardown("离线识别完成")
                         if (text != null) onText(text) else onProblem("没听清，再说一次试试")
                     }
                     is LocalSpeechInput.Event.Failed -> {
@@ -347,7 +156,6 @@ class PetVoiceInput(
         }
         if (!started) {
             active = false
-            usingLocal = false
             localInput = null
             onState(PetVoiceState.Idle)
             return false
@@ -357,111 +165,23 @@ class PetVoiceInput(
     }
 
     /**
-     * 选定的识别引擎，`包名/类名`；null = 用系统默认。
+     * 结束录音：让录音线程收尾。最终文本通过 [LocalSpeechInput.Event.Final] 回来。
      *
-     * 为什么需要它：真机上「语音用不了」常常不是没装引擎，而是**装了好几个、
-     * 默认那个不认中文**。此时最省事的修法不是让用户去系统设置里翻，
-     * 而是我们直接把识别指向一个能用的引擎——
-     * `SpeechRecognizer.createSpeechRecognizer(ctx, componentName)` 就是为这件事存在的。
-     *
-     * 值由 [com.beichen.polaris.audio.SpeechProbe.probeEngines] 的探测结果决定，
-     * 挑选规则在 [com.beichen.polaris.core.voice.EngineSelector.pick]。
-     */
-    @Volatile
-    var preferredEngine: String? = null
-        set(value) {
-            if (field == value) return
-            field = value
-            AgentLogger.i(TAG, "识别引擎切换为 ${value ?: "系统默认"}")
-        }
-
-    /**
-     * 探一遍「哪个引擎认当前语言」，把能用的那个接上。
-     *
-     * 什么时候调：桌宠服务起来时调一次（[com.beichen.polaris.pet.PetOverlay] 建完窗口）。
-     * 不放在 [start] 里——探测要连上每个引擎问一遍，几百毫秒起步，
-     * 而用户长按要的是「立刻开始听」。
-     *
-     * 挑中的是系统默认那个时，仍走默认路径（不锁死组件）：默认引擎可能被系统改掉，
-     * 锁死一个组件反而会在用户换引擎后继续用旧的那个。
-     */
-    fun refreshEngine() {
-        probe.probeEngines { engines ->
-            val chosen = EngineSelector.pick(engines)
-            preferredEngine = if (chosen == null || chosen.isDefault) null else chosen.component
-            when {
-                // 查不到服务 / 系统版本低：不动，`start()` 里还会按默认路径再判一次。
-                engines.isEmpty() -> Unit
-                // 只有「每个引擎都明确说不支持」才会走到这里。
-                chosen == null -> AgentLogger.w(
-                    TAG,
-                    "没有引擎支持当前语言（${probe.currentLanguageTag()}）：" +
-                        engines.joinToString("、") { it.component },
-                )
-                // 没问到 ≠ 不支持。这种情况**不换引擎**，让它按自己的方式试一次——
-                // 我们没有证据说它不行（见 EngineCapability.probed）。
-                !chosen.probed -> AgentLogger.w(
-                    TAG,
-                    "引擎 ${chosen.component} 未在超时内应答，先按默认路径试一次",
-                )
-            }
-        }
-    }
-
-    /**
-     * 建一个识别器，优先用用户指定的引擎，其次用探测挑出来的。
-     *
-     * 顺序说明：**用户的选择高于自动探测**。自动那套的规则是「默认引擎能用就别换」，
-     * 它解决的是「用户不知道该怎么办」的场景；一旦用户自己点了某个引擎，
-     * 再让探测结果盖掉他的选择就成了「App 觉得自己更懂」。
-     *
-     * 指定引擎创建失败时**静默回退系统默认**：用户此刻要的是「说话能被识别」，
-     * 不是「必须用某个引擎」。为了一次创建失败就弹一句技术错误，等于把内部
-     * 选择逻辑的失败转嫁给用户。
-     */
-    private fun createRecognizer(): SpeechRecognizer? {
-        val chosen = VoiceEngineStore.pinned(app) ?: preferredEngine
-        if (chosen != null) {
-            val component = ComponentName.unflattenFromString(chosen)
-            if (component != null) {
-                val rec = runCatching {
-                    SpeechRecognizer.createSpeechRecognizer(app, component)
-                }.getOrNull()
-                if (rec != null) {
-                    AgentLogger.i(TAG, "使用指定引擎：$chosen")
-                    return rec
-                }
-                AgentLogger.w(TAG, "指定引擎 $chosen 创建失败，回退系统默认")
-            }
-        }
-        return runCatching { SpeechRecognizer.createSpeechRecognizer(app) }.getOrNull()
-    }
-
-    /**
-     * 结束录音：请引擎尽快给结果。不会立刻释放麦克风——那要等 [onResults] / [onError]。
-     *
-     * 正常路径下**不会**被调用：识别引擎自带静音判定，说完它会自己走 [onResults]。
-     * 这个方法给的是「用户点麦克风提前结束」——比如他说完了但引擎还在等更多内容。
+     * 正常路径下用户松手就会调它；模型自带的端点检测也可能先把录音停下。
      */
     fun stop() {
         if (!active || finishing) return
         finishing = true
         handler.removeCallbacks(hardTimeout)
         onState(PetVoiceState.Transcribing)
-        if (usingLocal) {
-            // 本地识别不需要等「引擎出结果」的宽限：收尾就是几毫秒的 decode。
-            localInput?.stop()
-            return
-        }
-        runCatching { recognizer?.stopListening() }
-        handler.postDelayed(resultTimeout, RESULT_TIMEOUT_MS)
+        // 收尾就是几毫秒的 decode，不需要给「等引擎回结果」的宽限。
+        localInput?.stop()
     }
 
     /**
-     * 取消：立刻释放，不等结果。
+     * 取消：立刻释放，丢弃已录内容。
      *
-     * 用在拖动手势抢占、窗口销毁、Service 停止。与 [stop] 的区别是**丢弃**已录内容，
-     * 因为触发取消的动作（拖桌宠、关桌宠）说明用户不想说了。
+     * 用在拖动手势抢占、窗口销毁、Service 停止——这些动作说明用户不想说了。
      */
     fun cancel() {
         if (!active) return
@@ -476,42 +196,8 @@ class PetVoiceInput(
 
     // —— 内部 ——
 
-    private fun buildIntent(): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-        putExtra(
-            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-        )
-        // 用系统语言的 BCP-47 形式（`zh-CN`）而不是 [Locale.toString]（`zh_CN`）：
-        // 后者不是 BCP-47，严格按规范解析的引擎会读不出语言。
-        // 双语用户的手机可能是英文，硬编码 zh-CN 会让他说中文被识别成一串英文音近词。
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
-        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, app.packageName)
-        // 这里**故意不传** EXTRA_PREFER_OFFLINE。
-        //
-        // 以前传了 true，想法是「有离线包就用离线，更快、不费流量」。但它是
-        // **prefer**，在厂商实现里常被当成 **require**：Google 的识别服务在没装
-        // 当前语言离线包时，收到这个 extra 会直接回
-        // ERROR_LANGUAGE_NOT_SUPPORTED(12)，而不是退回在线识别。
-        //
-        // 2026-11-14 的真机日志正好是这一幕：桌宠每按一次就是 code=12，
-        // 而同机的在线识别本来是能用的。也就是说，这一行 extra 可能一直在
-        // 把「能用」变成「不能用」——代价（一次几百 KB 流量）完全不对等。
-        //
-        // 不传之后由识别服务自己决定走离线还是在线：装了离线包它照样会优先用，
-        // 没装才会走网络。这个决定应该由引擎做，不该由我们替它做。
-    }
-
-    /**
-     * 报一个提示，优先走带结构化出路的回调。
-     *
-     * 带出路的回调存在时由它负责展示——否则两条路会弹两次提示。
-     */
-    private fun report(message: String, remedy: SpeechRemedy) {
-        val cb = onProblemWithCode
-        if (cb != null) cb(message, remedy) else onProblem(message)
-    }
+    private fun hasMic(): Boolean =
+        app.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     private fun finishWithProblem(message: String) {
         if (!active) return
@@ -519,53 +205,19 @@ class PetVoiceInput(
         onProblem(message)
     }
 
-    /** 收尾：停回调、销毁引擎、释放麦克风、回 Idle。顺序不能换（见类注释第 2 条）。 */
+    /** 收尾：停回调、停录音、回 Idle。幂等——录音线程已经走完时 cancel 是空操作。 */
     private fun teardown(reason: String) {
         handler.removeCallbacks(hardTimeout)
-        handler.removeCallbacks(resultTimeout)
         active = false
         finishing = false
-        if (usingLocal) {
-            // 已经走完的会话再 cancel 是幂等的（录音线程 running 已为 false）。
-            localInput?.cancel()
-            localInput = null
-            usingLocal = false
-        }
-        val rec = recognizer
-        recognizer = null
-        if (rec != null) {
-            // cancel 先于 destroy：destroy 在部分引擎上不等回调就拆底层连接，
-            // 先 cancel 能让它走正常收尾路径。
-            runCatching { rec.cancel() }
-            runCatching { rec.destroy() }
-        }
-        releaseLease(reason)
+        localInput?.cancel()
+        localInput = null
         onState(PetVoiceState.Idle)
+        AgentLogger.i(TAG, "语音会话结束：$reason")
     }
-
-    private fun releaseLease(reason: String) {
-        val l = lease ?: return
-        lease = null
-        runCatching { arbiter.endCapture(l) }
-            .onFailure { AgentLogger.w(TAG, "释放麦克风失败（$reason）：${it.message}") }
-    }
-
-    /**
-     * 错误码 → 给人看的一句话。
-     *
-     * 翻译表放在 [SpeechCapabilityPolicy.explainError]，与聊天页共用一份。
-     * 两处各写一套的结果是：同一个错误码在桌宠上显示「识别失败」，在聊天页显示
-     * 「网络不太好」，用户没法判断到底是哪一种。
-     *
-     * 特别地，`ERROR_CLIENT`（=5）**不是**「未知错误」，它是信息量最大的一个：
-     * Android 14 的识别器在「系统没选定默认引擎」和「绑定引擎失败」时都走这一条，
-     * 应用侧看不出区别，所以文案给最可能的那条出路。
-     */
-    private fun errorText(code: Int): String = SpeechCapabilityPolicy.explainError(code)
 
     private companion object {
         const val TAG = "PetVoice"
         const val HARD_TIMEOUT_MS = 20_000L
-        const val RESULT_TIMEOUT_MS = 5_000L
     }
 }

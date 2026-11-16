@@ -38,8 +38,8 @@ SESSION=app/src/main/java/com/beichen/polaris/pet/PetAgentSession.kt
 OVERLAY=app/src/main/java/com/beichen/polaris/pet/PetOverlay.kt
 PANEL=app/src/main/java/com/beichen/polaris/pet/PetPanel.kt
 VOICE=app/src/main/java/com/beichen/polaris/pet/PetVoice.kt
-# 探测层：两条语音入口共用的能力探测（2026-11-14 起权限判定挪到这里）
-PROBE_FILE=app/src/main/java/com/beichen/polaris/audio/SpeechProbe.kt
+# 自带录音层：桌宠与聊天页共用的「开麦 + 离线识别」一次会话
+ASR_INPUT=app/src/main/java/com/beichen/polaris/audio/asr/LocalSpeechInput.kt
 TILE=app/src/main/java/com/beichen/polaris/pet/PetTileService.kt
 SETTINGS=app/src/main/java/com/beichen/polaris/ui/SettingsScreen.kt
 GRAPH=app/src/main/java/com/beichen/polaris/AppGraph.kt
@@ -318,12 +318,16 @@ if [ ! -f "$VOICE" ]; then
 else
   good "H0 语音层独立成文件"
 
-  # H1 必须是 API 版。Activity 版（RecognizerIntent + StartActivityForResult）会全屏弹
-  # 系统识别页，那正是桌宠要避免的——「一直在桌面」的幻觉一次弹窗就碎了。
-  if grep -q 'createSpeechRecognizer' "$VOICE"; then
-    good "H1 走 SpeechRecognizer API（不弹系统识别页）"
+  # H1 系统识别必须彻底不存在。2026-11-16 起删掉整条路：
+  # 真机上两个系统引擎（Google / 高通）都出不了中文——Google 的国内不可达、
+  # 高通的不支持当前语言且没有中文包。留着入口只会让人点进去等 20 秒，
+  # 然后一个字都没有，还以为是 App 坏了。
+  # 只查**代码**行：KDoc 里为了解释「为什么删掉」必然会写这个词。
+  # 按全文匹配会把说明当成实现，逼着下一个人删注释——那是最坏的一种断言。
+  if grep -vE '^[[:space:]]*(\*|//)' "$VOICE" | grep -q 'SpeechRecognizer'; then
+    bad "H1 PetVoice 里还有 SpeechRecognizer —— 系统识别已删除，不该复活"
   else
-    bad "H1 没有用 createSpeechRecognizer —— 桌宠不能弹系统识别页"
+    good "H1 桌宠不走系统识别（只用自带离线模型）"
   fi
 
   # H2 不许从这个文件里拉起任何 Activity。系统识别页一旦被 launch，用户就跳出悬浮窗了。
@@ -333,78 +337,56 @@ else
     good "H2 语音路径不启动任何 Activity"
   fi
 
-  # H3 必须先请麦克风。不请就录 = 播报没停、录进自己的声音（一期修过的那个 bug）。
-  if grep -q 'beginCapture' "$VOICE" && grep -q 'endCapture' "$VOICE"; then
-    good "H3 录音前后都走声音仲裁（beginCapture / endCapture）"
+  # H3 必须走自带录音层，且录音前后过声音仲裁。不仲裁 = 播报没停，录进自己的声音。
+  # 租约由录音层申请（它在录音线程的 finally 里释放，比桌宠这边更靠得住），
+  # 所以断言的是「用了那一层」，而不是「本文件里出现 beginCapture」。
+  if grep -q 'LocalSpeechInput(' "$VOICE" &&
+     grep -q 'beginCapture' "$ASR_INPUT" && grep -q 'endCapture' "$ASR_INPUT"; then
+    good "H3 走自带录音层，录音前后都过声音仲裁"
   else
-    bad "H3 没有走声音仲裁 —— 播报中点麦克风会把自己念的内容录进去"
+    bad "H3 没走自带录音层或没走仲裁 —— 播报中点麦克风会把自己念的内容录进去"
   fi
 
-  # H4 引擎必须销毁。不复用、不销毁都会让「第二次录音没有任何回调」。
-  if grep -q '\.destroy()' "$VOICE" && grep -q '\.cancel()' "$VOICE"; then
-    good "H4 每次会话结束都 cancel + destroy 引擎"
+  # H4 会话必须能收尾且幂等。以前是 destroy SpeechRecognizer；现在是停下录音线程、
+  # 丢掉句柄、回 Idle——漏一步都会让第二次录音静默失败。
+  if grep -q 'localInput?.cancel()' "$VOICE" && grep -q 'onState(PetVoiceState.Idle)' "$VOICE"; then
+    good "H4 会话结束会停下录音线程并回到 Idle"
   else
-    bad "H4 没有 destroy SpeechRecognizer —— 第二次录音会静默失败"
+    bad "H4 会话收尾不完整 —— 第二次录音会静默失败或状态卡在 Listening"
   fi
 
-  # H5 必须有超时。引擎的静音判定各家不同，没有兜底会永久卡在「在听」。
+  # H5 必须有超时。端点检测靠环境安静程度，安静不下来就永远不结束。
   if grep -q 'postDelayed' "$VOICE" && grep -q 'removeCallbacks' "$VOICE"; then
-    good "H5 有硬超时与结果超时兜底"
+    good "H5 有硬超时兜底"
   else
     bad "H5 没有超时 —— 按下去不说话会让状态永久停在 Listening"
   fi
 
-  # H6 错误码必须逐条映射。全塞进「未知错误」等于没处理：
-  # 用户看到「未知错误」只能再试一次，看到「没听到声音」才知道该大声点。
-  #
-  # 映射表现在住在 core/voice/SpeechCapabilityPolicy（2026-11-14 起）——
-  # 桌宠与聊天页共用一份，两边说法不一致会让人以为其中一边坏了。
-  # 所以这里数的是**那张表**里的分支数，不是桌宠文件里的常量出现次数。
-  #
-  # 数的范围是整个判定表文件，而不是某个函数体：那张表的 `when` 分支
-  # （"说什么" + "该做什么"）在 specFor 里，两个公开入口（explainError /
-  # remedyForError）都从它取。钉死函数名等于把实现细节写进断言——
-  # 改个函数名就红，而行为一点没变。
-  #
-  # 顺带验一件更要紧的事：桌宠真的在用那张表，而不是自己另写一套。
-  POLICY_FILE=core/src/main/java/com/beichen/polaris/core/voice/SpeechCapabilityPolicy.kt
-  if [ -f "$POLICY_FILE" ]; then
-    mapped=$(grep -cE 'ErrorCode\.[A-Z_]+ ->' "$POLICY_FILE")
-    if [ "$mapped" -ge 8 ]; then
-      good "H6 错误码映射 $mapped 条（用户能据此知道该做什么）"
-    else
-      bad "H6 错误码只映射了 $mapped 条 —— 其余会落到「识别失败」这种不可执行的文案"
-    fi
-    if grep -qF 'SpeechCapabilityPolicy.explainError(' "$VOICE"; then
-      good "H6b 桌宠走统一错误码翻译表（与聊天页说法一致）"
-    else
-      bad "H6b 桌宠没有走统一错误码翻译表 —— 同一错误码两个入口说法会不一样"
-    fi
+  # H6 失败原因必须原样给用户。系统错误码表随系统识别一起删了；
+  # 现在的原因来自录音层（没权限 / 模型没装 / 麦克风被占），每一条都是人话。
+  # 全塞成「识别失败」等于没处理：用户只能再试一次，而不知道该修哪里。
+  if grep -q 'LocalSpeechInput.Event.Failed' "$VOICE"; then
+    good "H6 录音层的失败原因原样显示（不是「识别失败」四个字）"
   else
-    bad "H6 找不到统一错误码翻译表 core/voice/SpeechCapabilityPolicy.kt"
+    bad "H6 失败原因被吞掉了 —— 用户看到的只会是「点了没反应」"
   fi
 
-  # H7 权限必须查。Service 不能申请权限，只能查；不查就 start 会拿到
-  # ERROR_INSUFFICIENT_PERMISSIONS，用户看到的是一句不像原因的原因。
-  #
-  # 2026-11-14：这条断言从「桌宠文件里出现 RECORD_AUDIO」改成
-  # 「桌宠走自己录音路径，且探测层确实查了麦克风权限」。
-  # 查的是**行为**（这条路径缺权限会被拦下并给引导），不是**查在哪个文件**——
-  # 桌宠文件里不再有权限代码了：权限判定挪进了统一的探测层（SpeechProbe）。
-  if grep -qF "VoicePath.SelfRecorded" "$VOICE" &&
-     grep -q "RECORD_AUDIO" "$PROBE_FILE"; then
-    good "H7 桌宠走自己录音路径，该路径的麦克风权限由探测层强制（缺权限 → 拦下并给引导）"
+  # H7 权限必须查，并且缺权限时要给一条直达权限页的出路。
+  # Service 不能自己申请权限，只能查 + 引导。
+  if grep -q "RECORD_AUDIO" "$VOICE" && grep -q 'onNeedPermission' "$VOICE"; then
+    good "H7 缺麦克风权限时当场拦下并给直达权限页的出路"
   else
-    bad "H7 桌宠路径的麦克风权限没查 —— start 会拿到 ERROR_INSUFFICIENT_PERMISSIONS，用户看到的是一句不像原因的原因"
+    bad "H7 没查麦克风权限 —— 开麦会拿到一句不像原因的原因"
   fi
 fi
 
-# H8 引擎只能有一个创建点。散在 UI 里就会出现两个会话抢同一个麦克风，
-# 表现为「按住说话没反应」，而日志里只有一条 ERROR_RECOGNIZER_BUSY。
-if grep -qE 'createSpeechRecognizer' "$PANEL" "$OVERLAY" "$SERVICE" 2>/dev/null; then
-  bad "H8 桌宠 UI 里直接创建了 SpeechRecognizer —— 语音引擎只能由 PetVoice 持有"
+# H8 系统识别器不许在桌宠任何文件里出现（含 UI 与服务）。
+# 删掉一条路就要删干净：留一个入口，用户就还能走到「说什么都没字」的死路上。
+if cat "$PANEL" "$OVERLAY" "$SERVICE" "$VOICE" 2>/dev/null | grep -vE '^[[:space:]]*(\*|//)' \
+   | grep -qE 'SpeechRecognizer|createSpeechRecognizer'; then
+  bad "H8 桌宠路径里还有系统识别器 —— 系统识别已删除，不该复活"
 else
-  good "H8 语音引擎只有 PetVoice 一个创建点"
+  good "H8 桌宠整条路径没有系统识别器（只剩自带模型）"
 fi
 
 # H9 识别结果必须走 PetPanel 的 send，不能自己拼一条消息。

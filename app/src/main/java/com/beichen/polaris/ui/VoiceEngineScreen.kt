@@ -1,8 +1,5 @@
 package com.beichen.polaris.ui
 
-import android.os.Handler
-import android.os.Looper
-import android.widget.Toast
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -10,69 +7,35 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import com.beichen.polaris.audio.SpeechProbe
-import com.beichen.polaris.audio.VoiceDiagnostics
-import com.beichen.polaris.audio.VoiceEngineStore
-import com.beichen.polaris.audio.asr.AsrModel
-import com.beichen.polaris.audio.asr.AsrModelInstaller
-import com.beichen.polaris.core.voice.EngineCapability
-import com.beichen.polaris.core.voice.EngineLabel
-import com.beichen.polaris.core.voice.EngineSelector
-import kotlinx.coroutines.launch
-import kotlin.math.max
+import com.beichen.polaris.audio.asr.AsrDirectory
+import com.beichen.polaris.model.ModelSpec
 
 /**
- * 语音识别页。
+ * 语音识别页：只剩「下载哪套离线模型」。
  *
- * ## 为什么需要这一页
+ * ## 为什么把「引擎」那一组删了
  *
- * 原来的提示语是「到系统设置 → 默认应用 → 语音识别 换一个服务」。
- * 2026-11-14 用户拍了三张截图回来：他的「默认应用」里只有「文字转语音输出」，
- * 点进去是 TTS 的首选引擎（MultiTTS / Google / Qualcomm），**根本没有「语音识别」这一项**。
+ * 以前这一页列着系统里的识别引擎（Google / 高通 / 厂商自定义），让用户挑一个。
+ * 2026-11-15 的真机日志证明这台机器上**两个引擎都用不了**：Google 的查询语言支持
+ * 直接超时（国内不可达），高通的明确「不支持当前语言」且没有中文离线包。
+ * 用户在这份清单里换来换去，得到的永远是「一个字都没有」——选项本身就是假的。
  *
- * 也就是说，我们一直在把用户送进一条死路。而且那不是用户的机器特殊——
- * 很多国产 ROM 都不把 `VOICE_RECOGNITION_SERVICE` 暴露成设置项，
- * 系统只是自己挑了一个默认值写进去。
+ * 2026-11-16 用户明确要求「那个没用，删了」。于是整条系统识别路径（含本页的引擎清单、
+ * 语言支持探测、系统识别页 Intent）全部移除。剩下的路只有一条：**下模型，在自己进程里算**。
  *
- * 好在应用侧本来就能指定引擎：`createSpeechRecognizer(ctx, component)`。
- * 既然能指定，就不该要求用户去一个可能不存在的系统页面里翻——
- * 把选择搬到我们自己的页面上，这是唯一不依赖 ROM 的做法。
+ * ## 两套都装时用哪套
  *
- * ## 2026-11-15：多了一条更硬的路
- *
- * 真机日志证明这台机器上**两个系统引擎都用不了**：Google 的查询语言支持直接超时
- * （国内不可达），Qualcomm 的明确「不支持当前语言」且没有中文离线包。
- * 在这种机器上，无论把引擎换成谁都不会有字。
- *
- * 所以页面最上面加了一组「离线识别（自带）」：模型装在应用私有目录里，
- * 录、算、出字全在我们进程内，不认任何系统服务。装了它，下面那组引擎就退居备用。
+ * 「更准」优先（见 `AsrRouter.active`）。快的那套只适合「随口问一句」，
+ * 而真机反馈里它把「你在这吗」认成「你在这好」——快 0.8 秒换一个错字，不值。
+ * 留两套是因为 24MB 与 74MB 对存储紧张的人是两种选择，不是所有人都愿意为准确率付 50MB。
  */
 @Composable
 fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
     val context = LocalContext.current
-    var engines by remember { mutableStateOf<List<EngineCapability>?>(null) }
-    var probing by remember { mutableStateOf(true) }
-    var pinned by remember { mutableStateOf(VoiceEngineStore.pinned(context)) }
-
-    // 进页面就重探一次：用户来这里往往刚装/卸过语言包，读缓存会给他看旧结论。
-    LaunchedEffect(Unit) {
-        probing = true
-        SpeechProbe(context).probeEngines(force = true) {
-            engines = it
-            probing = false
-        }
-    }
 
     Column(
         modifier = Modifier
@@ -88,7 +51,7 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
     ) {
         AkDisplayTitle(
             title = "语音识别",
-            subtitle = "先看「离线识别」那一组：装了它就不依赖系统引擎；没装才用下面的",
+            subtitle = "装一套离线模型：录音和识别都在手机里算，不依赖系统引擎，也不联网",
         )
 
         if (onOpenStyle != null) {
@@ -103,158 +66,45 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
         }
 
         AkGroup(
-            title = "离线识别（自带）",
-            description = "装了就不用系统引擎。两套都装时用「更准」那个——慢一点，但不用改字",
+            title = "离线识别模型",
+            description = "两套都装时自动用「更准」那个。删掉随时能重下，不占着空间也不会坏",
         ) {
-            AsrModelRow(
-                model = AsrModel.Fast,
+            ModelRow(
+                spec = ModelSpec.AsrFast,
                 title = "快速识别",
                 hint = "边说边出字，随口问一句最顺手；错字相对多",
+                // 删之前先放掉原生识别器：文件删了但内存里还拿着句柄，
+                // 表现是「删了还占着空间」，下次识别也未必能立刻重建。
+                onBeforeRemove = { AsrDirectory.of(context).releaseAll() },
             )
-            AsrModelRow(
-                model = AsrModel.Accurate,
+            ModelRow(
+                spec = ModelSpec.AsrAccurate,
                 title = "更准识别",
                 hint = "松手后约一秒出字，中文短句基本不用改；占地方多一点",
+                onBeforeRemove = { AsrDirectory.of(context).releaseAll() },
             )
-        }
-
-        AkGroup(
-            title = "引擎",
-            description = "只影响桌宠长按说话；改完下次长按就生效"
-        ) {
-            AkListItem(
-                icon = null,
-                title = "自动",
-                description = "按当前语言挑一个能用的（推荐）",
-                selected = pinned.isNullOrBlank(),
-                onClick = {
-                    VoiceEngineStore.pin(context, null)
-                    pinned = null
-                },
-            )
-            engines.orEmpty().forEach { e ->
-                AkListItem(
-                    icon = null,
-                    title = EngineLabel.friendly(e.component),
-                    description = buildString {
-                        append(EngineSelector.describe(EngineSelector.fit(e)))
-                        if (e.isDefault) append(" · 系统默认")
-                    },
-                    selected = pinned == e.component,
-                    onClick = {
-                        VoiceEngineStore.pin(context, e.component)
-                        pinned = e.component
-                    },
-                )
-            }
-            if (probing) {
-                AkListItem(
-                    icon = null,
-                    title = "正在探测本机的识别引擎…",
-                    description = "约 2 秒，探完上面会列出实际引擎",
-                    onClick = null,
-                )
-            } else if (engines.orEmpty().isEmpty()) {
-                AkListItem(
-                    icon = null,
-                    title = "没探到识别引擎",
-                    description = "系统版本低于 Android 13，或本机没有语音识别服务",
-                    onClick = null,
-                )
-            }
         }
 
         AkGroup(title = "这页在做什么", description = null) {
             AkListItem(
                 icon = null,
-                title = "为什么系统设置里找不到「语音识别」",
-                description = "很多机型（含这台魅族）不把它做成设置项。所以选择放在这里，点一下就能改",
+                title = "为什么不再列系统识别引擎",
+                description = "这台机器上两个系统引擎都出不了中文（Google 的国内不可达，高通的没有中文包）。" +
+                    "列出来只会让人白点一遍，所以整条路都删了",
                 onClick = null,
             )
             AkListItem(
                 icon = null,
-                title = "聊天页现在也会用离线识别",
-                description = "装了上面的模型，聊天页就不再弹系统识别页，直接在我们自己的界面里录",
+                title = "聊天页与桌宠用的是同一套模型",
+                description = "下完就都能用：聊天页在弹层里录，桌宠长按直接录，都不弹系统页面",
                 onClick = null,
             )
             AkListItem(
-                icon = Icons.Outlined.Mic,
-                title = "生成语音诊断",
-                description = "把本机的引擎清单与结论复制出来，排查时发给我",
-                onClick = {
-                    Toast.makeText(context, "正在探测语音引擎…", Toast.LENGTH_SHORT).show()
-                    VoiceDiagnostics.buildReportAsync(context) { report ->
-                        runCatching {
-                            val cm = context.getSystemService(android.content.ClipboardManager::class.java)
-                            cm?.setPrimaryClip(
-                                android.content.ClipData.newPlainText("北辰语音诊断", report)
-                            )
-                        }
-                        Toast.makeText(context, "诊断报告已复制到剪贴板", Toast.LENGTH_LONG).show()
-                    }
-                },
+                icon = null,
+                title = "模型不在安装包里",
+                description = "安装包因此小了 300 多MB；只有真正用语音的人才付这份流量与存储",
+                onClick = null,
             )
         }
     }
-}
-
-/**
- * 一套识别模型的下载 / 删除行。
- *
- * 抽成独立 composable 而不是在页面里写两遍：两套模型的下载状态（进度、错误、体积）
- * 必须各管各的——共用一份状态时，下第二套会显示第一套的进度，看起来像「卡住了」。
- */
-@Composable
-private fun AsrModelRow(model: AsrModel, title: String, hint: String) {
-    val context = LocalContext.current
-    val installer = remember(model) { AsrModelInstaller(context, model) }
-    val main = remember { Handler(Looper.getMainLooper()) }
-    val scope = rememberCoroutineScope()
-
-    var ready by remember { mutableStateOf(installer.isInstalled()) }
-    var bytes by remember { mutableStateOf(installer.bytesOnDisk()) }
-    var busy by remember { mutableStateOf(false) }
-    var progress by remember { mutableStateOf(0.0f) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    AkListItem(
-        icon = Icons.Outlined.Mic,
-        title = when {
-            busy -> "$title · 下载中 ${(progress * 100).toInt()}%"
-            ready -> "$title · 已下载 ${max(1L, bytes / 1048576)}MB"
-            else -> "$title（约 ${model.approxMb}MB）"
-        },
-        description = error ?: when {
-            ready -> "点一下可以删掉，随时能重下"
-            busy -> hint
-            else -> hint
-        },
-        onClick = when {
-            busy -> null
-            ready -> ({
-                installer.remove()
-                ready = false
-                bytes = 0
-                error = null
-            })
-            else -> ({
-                busy = true
-                error = null
-                progress = 0.0f
-                scope.launch {
-                    runCatching {
-                        installer.download { done, total, _ ->
-                            val ratio = done.toFloat() / max(1L, total)
-                            main.post { progress = ratio }
-                        }
-                    }.onFailure { e -> main.post { error = e.message ?: "下载失败" } }
-                    main.post {
-                        busy = false
-                        ready = installer.isInstalled()
-                        bytes = installer.bytesOnDisk()
-                    }
-                }
-            })
-        },
-    )
 }

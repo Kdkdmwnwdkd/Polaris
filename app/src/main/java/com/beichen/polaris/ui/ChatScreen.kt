@@ -12,7 +12,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
 import android.util.Base64
 import android.widget.Toast
@@ -95,8 +94,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import com.beichen.polaris.core.text.ChatTime
 import com.beichen.polaris.core.text.SpeechLogic
-import com.beichen.polaris.core.voice.VoicePath
-import com.beichen.polaris.audio.SpeechProbe
 import com.beichen.polaris.audio.asr.AsrDirectory
 import android.Manifest
 import android.content.pm.PackageManager
@@ -251,13 +248,6 @@ fun ChatScreen(
     // 功能四：模型切换弹窗开关（指示条点击打开）
     var showModelSwitch by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
-    // 语音能力探测。与桌宠共用同一个实现——两条路必须给出同一个结论。
-    val speechProbe = remember(ctx) { SpeechProbe(ctx) }
-    // 进页面就探一次「哪个引擎认当前语言」，结果进进程级缓存。
-    // 不探的话，只用聊天页、从没开过桌宠的用户永远拿不到这个结论：
-    // 点麦克风 → 系统识别页弹出 → 说完什么都没发生，因为默认引擎不认中文。
-    // 空回调即可——探测结果由 SpeechProbe 自己缓存，判定时读。
-    LaunchedEffect(speechProbe) { speechProbe.probeEngines { } }
     // 功能五（P1-2）：TTS 朗读（离开对话页即 shutdown，防系统绑定泄漏）
     val tts = remember { TtsController(ctx) }
     DisposableEffect(Unit) { onDispose { tts.shutdown() } }
@@ -272,76 +262,22 @@ fun ChatScreen(
     var localVoice by remember { mutableStateOf(false) }
     val inputScope = rememberCoroutineScope()
     /**
-     * W-30：语音输入。
+     * 语音输入：只用自带的离线识别。
      *
-     * 用系统的 [RecognizerIntent]（各家 ROM 自带识别服务），不自己录音——
-     * 自己录音要申请 RECORD_AUDIO、要处理采样率/降噪，收益远不如直接借系统。
-     * 识别结果经 [SpeechLogic.cleanResult] 清洗后**追加**到已有输入，不覆盖用户已打的字。
+     * 以前这里会弹系统识别页（`RecognizerIntent` 的 Activity 版）：录音与识别都在
+     * 系统进程里，看起来省事。但这台真机上两个系统引擎都出不了中文（Google 的服务
+     * 国内不可达、高通引擎没有中文包），弹出来只会是「说什么都没字」。
      *
-     * 2026-11-13：启动前先过声音仲裁（[ChatViewModel.beginVoiceCapture]）。
-     * 改造前这里只 launch，播报仍在继续，录音把 AI 自己的声音也收进去——
-     * 识别结果是一团乱码，而用户完全不知道发生了什么。现在拿到麦克风即意味着播报已停。
+     * 2026-11-16 起系统那条路整条删掉：装了模型就在我们自己的录音层里说
+     * （[LocalVoiceSheet]），没装就明确告诉用户去哪儿下——不留一条注定失败的入口。
      */
-    val voiceLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        // 三条路径（拿到结果 / 取消 / 出错）都必须释放：漏一条，麦克风就被永久占住，
-        // 下次点麦克风会被自己判成 busy——而那种状态只能杀掉 App 才恢复。
-        vm.endVoiceCapture()
-        if (result.resultCode == Activity.RESULT_OK) {
-            val spoken = result.data
-                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-                ?.firstOrNull()
-            val cleaned = spoken?.let { SpeechLogic.cleanResult(it) }
-            if (cleaned != null) {
-                vm.input.value = SpeechLogic.appendTo(vm.input.value, cleaned)
-            } else if (spoken != null) {
-                Toast.makeText(ctx, "没听清，再说一次试试", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-    /**
-     * 真正发起系统识别。
-     *
-     * 2026-11-14 简化：原先这里绕了一层 `remember { mutableStateOf<(() -> Unit)?>(null) }`，
-     * 是为了打破「权限回调声明在它之前」的顺序限制。权限入口撤掉后（理由见下），
-     * 那层间接就没有存在意义了——去掉它也顺带去掉了「在组合过程中写状态」这个坏味道。
-     */
-    val launchVoiceRecognizer: () -> Unit = {
-        val denied = vm.beginVoiceCapture()
-        if (denied != null) {
-            // 被拒的原因是「别的应用在录音」「通话中」这类，必须原样告诉用户，
-            // 否则他会以为语音按钮坏了。
-            Toast.makeText(ctx, denied, Toast.LENGTH_SHORT).show()
-        } else {
-            val launched = runCatching {
-                voiceLauncher.launch(VoiceInputLogic.buildRecognizeIntent())
-            }
-            if (launched.isFailure) {
-                vm.endVoiceCapture()
-                Toast.makeText(ctx, "本机没有可用的语音识别服务", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    // 麦克风权限不在这里拦：本地识别那条路在真正开麦时才检查，没授权会当场说明
-    // 怎么开（拦在按钮上只会让「本来能用的路」变成「点了没反应」）。
-
     val startVoiceInput: () -> Unit = {
-        // 自带离线识别优先：系统识别页在国行机上经常整条不通（Google 的识别服务
-        // 在国内不可达，厂商引擎又不认中文），模型装了就用自己这条，不弹系统页。
-        // 没装模型时才回到系统识别页——那套判定与桌宠共用 SpeechProbe，
-        // 但走不同路径（录音在系统进程里，我们的麦克风权限不参与判定）。
         if (AsrDirectory.of(ctx).isInstalled()) {
             localVoice = true
-        } else when (val action = VoiceInputLogic.actionFor(
-            speechProbe.check(VoicePath.SystemPage)
-        )) {
-            is VoiceInputLogic.Action.Start -> launchVoiceRecognizer()
-            // 系统识别给不了字时，别把用户指去系统设置里打转——出路是装自带模型。
-            is VoiceInputLogic.Action.Notify -> Toast.makeText(
+        } else {
+            Toast.makeText(
                 ctx,
-                action.message + "（也可在 设置 → 语音识别 下载离线识别模型）",
+                "还没下载离线识别模型。到 设置 → 语音识别 里下「更准识别」（约 74MB），下完就能说话",
                 Toast.LENGTH_LONG,
             ).show()
         }

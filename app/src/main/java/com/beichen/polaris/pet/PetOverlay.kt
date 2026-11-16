@@ -27,7 +27,6 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.AppScope
-import com.beichen.polaris.core.voice.SpeechRemedy
 import com.beichen.polaris.ui.AgentKitTheme
 import com.beichen.polaris.ui.AppearanceState
 import kotlinx.coroutines.CoroutineScope
@@ -225,8 +224,8 @@ class PetOverlayHost(
         view = compose
         params = lp
 
-        // 语音引擎与窗口同生同灭。放在 addView 之后：加窗失败就没必要建它。
-        // 构造时不创建 SpeechRecognizer（只在 start() 里建），所以这一步是零成本的。
+        // 语音输入与窗口同生同灭。放在 addView 之后：加窗失败就没必要建它。
+        // 构造时不加载模型（第一次点麦克风才加载），所以这一步是零成本的。
         voice = PetVoiceInput(
             context = context,
             onState = { voiceState = it },
@@ -236,36 +235,12 @@ class PetOverlayHost(
                 voicePrompt = text
             },
             onProblem = { message -> showNotice(message) },
-            onProblemWithCode = { message, remedy ->
-                // 缺权限是唯一「当场就能解决」的一种：给一条直达系统权限页的出路。
-                // 其他原因（没服务 / 被占用 / 没听清）不给按钮——给了也只是让人多点一次。
-                //
-                // 注意这里必须写成单行 if 表达式：写成带花括号的分支时，
-                // Kotlin 编译器会在生成可调用引用上崩（ICE）——已复现。
-                showNotice(
-                    message,
-                    when (remedy) {
-                        // 缺权限：直达本应用的权限页。
-                        SpeechRemedy.GrantMicPermission -> ({ openAppPermissionSettings() })
-                        // 换引擎：直达**本应用**的语音识别页。
-                        // 系统「语音识别」设置项在部分机型上根本不存在
-                        // （2026-11-14 真机截图：默认应用里只有「文字转语音输出」），
-                        // 所以出路必须是我们自己的页面。
-                        SpeechRemedy.SwitchEngine -> ({ openVoiceEngineSettings() })
-                        // 系统没选定默认引擎：那一项确实在系统设置里，跳系统页。
-                        SpeechRemedy.SelectDefaultEngine -> ({ openVoiceInputSettings() })
-                        // 系统引擎换无可换：带到本应用的语音识别页，那里能下自带模型。
-                        SpeechRemedy.DownloadOfflineModel -> ({ openVoiceEngineSettings() })
-                        else -> null
-                    },
-                )
-            }
+            // 缺权限是唯一「当场就能解决」的一种：给一条直达系统权限页的出路。
+            // 没模型也一样给直达——要在我们自己的语音页里下，而不是去系统设置里翻，
+            // 那里面根本没有「语音识别」这一项（2026-11-14 真机截图）。
+            onNeedPermission = { why -> showNotice(why, { openAppPermissionSettings() }) },
+            onNeedModel = { why -> showNotice(why, { openVoiceEngineSettings() }) },
         )
-
-        // 起来就问一遍「哪个引擎认中文」，把能用的那个接上。
-        // 真机上最常见的失败不是没装引擎，而是装了好几个、默认那个不认中文
-        // （Google TTS 自带的识别服务要单独下中文离线包）。探测到就不去麻烦用户。
-        voice?.refreshEngine()
 
         compose.post { snapToEdge() }
     }

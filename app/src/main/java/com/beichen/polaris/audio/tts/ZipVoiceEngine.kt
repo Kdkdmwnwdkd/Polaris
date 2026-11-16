@@ -2,6 +2,8 @@ package com.beichen.polaris.audio.tts
 
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.model.ModelSpec
+import com.beichen.polaris.model.ModelZip
 import com.k2fsa.sherpa.onnx.GenerationConfig
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
@@ -47,19 +49,14 @@ class ZipVoiceEngine(private val context: Context) {
     @Volatile
     private var tts: OfflineTts? = null
 
-    /** 本进程内是否已确认模型落盘。展开幂等，但不必每次合成都遍历目录。 */
-    @Volatile
-    private var expanded = false
-
     /**
-     * 模型是否可用：已展开 **或** 包里带着（首次点击时才展开）。
+     * 模型是否可用：磁盘上必需文件齐全（含 `espeak-ng-data` 目录非空）。
      *
-     * 与 [LocalVoiceEngine.isReady] 同一个理由：展开在 synthesize 里，synthesize 要先被
-     * 回落链选中，而链头就是用它筛的。只看 filesDir 会自锁成「永远未就绪」。
+     * 与 [LocalVoiceEngine.isReady] 同一个理由：模型由下载器整包落到最终目录，
+     * 不再有「包里有 → 第一次再展开」那一步，所以判定只看磁盘。
      */
     fun isReady(): Boolean =
-        TtsAssetInstaller.allPresent(destDir(), REQUIRED_FILES) ||
-            TtsAssetInstaller.availableInAssets(context, ASSET_ROOT, REQUIRED_FILES)
+        ModelZip.missingIn(destDir(), ModelSpec.TtsZipVoice.required).isEmpty()
 
     /**
      * 用 [reference] 的音色念 [text]。
@@ -81,10 +78,8 @@ class ZipVoiceEngine(private val context: Context) {
             throw IllegalArgumentException("缺少参考文本，克隆会明显失真")
         }
         mutex.withLock {
-            // 同 LocalVoiceEngine：不能写成 `if (!isReady())`。isReady 为了不自锁已经把
-            // 「包里有」算成就位，那条件首次安装时恒 false，展开永不发生，
-            // 原生层只会回一句 Invalid OfflineTtsConfig。
-            ensureExpanded()
+            // 模型要么整包在、要么没下（没有「首次展开」了）。build() 里的体检
+            // 会把缺的文件名写进日志，而不是让原生层回一句 Invalid OfflineTtsConfig。
             val engine = tts ?: build().also { tts = it }
             val started = System.currentTimeMillis()
             val audio = engine.generateWithConfig(
@@ -119,27 +114,11 @@ class ZipVoiceEngine(private val context: Context) {
         runCatching { e.free() }
     }
 
-    /**
-     * 保证 `filesDir/tts/zipvoice` 里文件齐。与 [isReady] 的分工见 [LocalVoiceEngine]。
-     * 幂等：逐文件比长度，齐了就 0 拷贝。
-     */
-    private fun ensureExpanded() {
-        if (expanded) return
-        val dir = destDir()
-        val copied = TtsAssetInstaller.expand(context, ASSET_ROOT, dir)
-        AgentLogger.i(tag, "克隆模型就位：${dir.absolutePath}（本次补拷 $copied 个文件）")
-        expanded = true
-    }
-
     private fun build(): OfflineTts {
         NativeStderr.install()
         val dir = destDir()
         // 同 LocalVoiceEngine：原生层的报错不带缺了哪个文件，自己先查。
-        val missing = REQUIRED_FILES.filter { rel ->
-            val f = File(dir, rel)
-            // espeak-ng-data 是目录，判非空；其余判长度。
-            if (rel == "espeak-ng-data") !f.isDirectory || f.list()?.isNotEmpty() != true else f.length() <= 0
-        }
+        val missing = ModelZip.missingIn(dir, REQUIRED_FILES)
         if (missing.isNotEmpty()) {
             throw IllegalStateException("克隆模型文件缺失：$missing（目录 ${dir.absolutePath}）")
         }
@@ -170,25 +149,17 @@ class ZipVoiceEngine(private val context: Context) {
         }
     }
 
-    private fun destDir(): File = TtsAssetInstaller.destDir(context, DIR_NAME)
+    private fun destDir(): File = File(File(context.filesDir, "tts"), DIR_NAME)
 
     private companion object {
-        const val ASSET_ROOT = "tts/zipvoice"
         const val DIR_NAME = "zipvoice"
         const val VOCODER = "vocos_24khz.onnx"
         const val NUM_STEPS = 4
 
         /**
-         * 少了任何一个都会在 build() 里失败，而失败信息只有一句「Invalid OfflineTtsConfig」。
-         * 在这里列全，[isReady] 才能在下一次合成前就把缺的文件名写进日志。
+         * 必需清单与 [ModelSpec.TtsZipVoice] 同源：下载器按它判「装好了没」，
+         * build() 按它判「读之前齐不齐」。两处各写一份必然漏一处。
          */
-        val REQUIRED_FILES = listOf(
-            "tokens.txt",
-            "encoder.int8.onnx",
-            "decoder.int8.onnx",
-            VOCODER,
-            "lexicon.txt",
-            "espeak-ng-data",
-        )
+        val REQUIRED_FILES: List<String> = ModelSpec.TtsZipVoice.required
     }
 }
