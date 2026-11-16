@@ -79,9 +79,19 @@ class TerminalSession(
     @Volatile
     private var destroyed = false
 
-    /** 会话是否仍在运行（已启动且未销毁、未退出）。 */
+    /**
+     * shell 自己退出了（EOF / 子进程结束），与 [destroyed] 是两件事。
+     *
+     * 分开记的理由：`destroyed` 是"我们主动杀"，`exited` 是"它自己没了"。
+     * 混用一个标志会让"读完最后一行才发现进程已退"的窗口里，[isAlive] 仍报 true——
+     * 池据此把这个会话判成可复用，下一条命令写进一条死 pty，白等到 20 分钟超时。
+     */
+    @Volatile
+    private var exited = false
+
+    /** 会话是否仍在运行（已启动、未销毁、未退出）。 */
     val isAlive: Boolean
-        get() = started && !destroyed && handle != 0L
+        get() = started && !destroyed && !exited && handle != 0L
 
     /**
      * 启动会话：构造环境变量 → forkpty 执行 shell → 起读循环。
@@ -175,6 +185,9 @@ class TerminalSession(
             AgentLogger.i(TAG, "终端会话结束，退出码=$code")
             postExit(code)
         }
+        // 无论主动还是被动，读循环退出即"这条会话不再可用"。
+        // 先于 postExit 置位：池的 isAlive 判定与 onExit 回调不同线程，越早越安全。
+        exited = true
     }
 
     /**

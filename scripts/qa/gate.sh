@@ -43,7 +43,7 @@ if [ -f "$BROKEN_FILE" ]; then
     printf '%s\n' "$entries" | sed 's/^/    - /' >&2
     say "  修好一条就删一条；确实修不好就先修，别让失效项沉淀成常态。"
   else
-    say "GATE OK 1/5：known-broken.txt 已归零（0 条）"
+    say "GATE OK 1/6：known-broken.txt 已归零（0 条）"
   fi
 else
   fail "known-broken.txt 不存在（$BROKEN_FILE）——门禁无法判定，请检查文件是否被误删"
@@ -51,7 +51,8 @@ fi
 
 # ---------------------------------------------------------------- 门禁 2 & 3
 if [ -z "$LOG" ]; then
-  say "GATE SKIP 2-4：未提供 QA 日志路径，只做了清单检查"
+  partial=1
+  say "GATE SKIP 2-6：未提供 QA 日志路径，只做了门禁 1（结论不完整）"
   say "  CI 里本脚本会自动取 /tmp/qa.log；本地可手动传：bash scripts/qa/gate.sh qa-logs/xxx.log"
 elif [ ! -f "$LOG" ]; then
   fail "QA 日志不存在：$LOG（QA harness 可能被 QA_HARNESS=off 跳过了）"
@@ -75,7 +76,7 @@ else
       fail "编译产物比源码旧（run-all 打了 ENV STALE）：$(grep -E '^ENV STALE' "$LOG" | head -1)"
       say "  先 ./gradlew :app:compileDebugKotlin 再跑，否则「找不到符号」全是假象。"
     else
-      say "GATE OK 2/5：FAIL=0（PASS=${p:-?} XFAIL=${x:-?}）"
+      say "GATE OK 2/6：FAIL=0（PASS=${p:-?} XFAIL=${x:-?}）"
     fi
   fi
 
@@ -83,7 +84,7 @@ else
     fail "QA 日志出现 XPASS（脚本已修好但仍列在 known-broken.txt），请从清单移除："
     grep -E '^XPASS ' "$LOG" | sed 's/^/    - /' >&2
   else
-    say "GATE OK 3/5：无 XPASS"
+    say "GATE OK 3/6：无 XPASS"
   fi
 
   # ------------------------------------------------------------ 门禁 4
@@ -121,7 +122,7 @@ else
   elif [ "${ran:-0}" -lt "${runners:-0}" ]; then
     fail "run-*.sh 有 $runners 个，但日志里只跑了 $ran 个（有 runner 没被 run-all 收录）"
   else
-    say "GATE OK 4/5：harness 覆盖完整（$runners 个 runner 全部跑到，无孤儿 harness）"
+    say "GATE OK 4/6：harness 覆盖完整（$runners 个 runner 全部跑到，无孤儿 harness）"
   fi
 
   # ------------------------------------------------------------ 门禁 5
@@ -138,17 +139,39 @@ else
   if [ ! -f "$BASELINE" ]; then
     fail "基线文件缺失（$BASELINE）——门禁 5 无法判定"
   else
-    base=$(awk '!/^[[:space:]]*(#|$)/ {print $1; exit}' "$BASELINE")
+    # 取**最后**一个非注释行：这份文件是追加式账本，每次调整都在末尾写新数字，
+    # 中间那些历史值留着是为了能读懂「为什么从 87 涨到 147」。
+    #
+    # 修前这里写的是 `{print $1; exit}`——取第一个，于是读到的永远是 2026-11-04
+    # 那个 142，之后每一次「往上调一个」都是空写。后果不是红，是**悄悄变松**：
+    # 新增了 5 个 harness、其中 5 个被改成 SKIP，PASS 仍 ≥142，门禁照过。
+    # 边界比「漏报」更糟的那类错误——它让门禁看起来在工作。
+    base=$(awk '!/^[[:space:]]*(#|$)/ {v=$1} END{print v}' "$BASELINE")
+    if [ -z "$base" ]; then
+      # 不 return：门禁 5 判不了，但后面几条还要跑（它们的结论仍然有用）。
+      # fail 已经记账，最终 BLOCKED。
+      fail "基线文件里没有数字（$BASELINE）——门禁 5 判不了"
+      base=0
+    fi
     sk=$(printf '%s' "$summary" | sed -n 's/.*SKIP=\([0-9]\+\).*/\1/p')
     if [ -z "$p" ]; then
       fail "无法从汇总行解析 PASS 数，门禁 5 判不了"
     elif [ "${sk:-0}" -gt 0 ]; then
-      # R-17：门禁 5 的前提是「所有 runner 都真跑了」（SKIP=0）。有 SKIP 时这个前提
-      # 不成立——本机 PASS=64、CI 齐备时 106，两者谁高谁低只反映环境，不反映覆盖度。
-      # 在这里硬比基线只会让门禁长期红，而长期红等于没有门禁。
-      # 有 SKIP 时改由门禁 6 逐条核对：谁没跑、缺件是否真的缺（run-all 已 stat 过）、
-      # 登记册有没有变长。那三把尺子比一个总数精确得多。
-      say "GATE SKIP 5/6：本轮 SKIP=$sk（PASS=$p），PASS 下限不可比 —— 由门禁 6 逐条核对"
+      # R-17 原文：有 SKIP 时 PASS 下限不可比，改由门禁 6 逐条核对。
+      # 那个理由只对了一半：不可比的是「PASS 的绝对值」，可比的是「PASS 有没有被 SKIP 兑掉」。
+      # 于是 SKIP>0 变成了整个门禁 5 的免检牌——把 40 个 runner 改成首行 exit 3，
+      # PASS 掉到 60 也照样过，只要门禁 6 的名字还都在登记册里。
+      # 现在的判据：每个 SKIP 都要从下限里等额扣掉（PASS ≥ 基线 − SKIP）。
+      # SKIP 越多，要求越低，但不可能低到「一条都不跑也算过」。
+      floor=$(( base - sk ))
+      [ "$floor" -lt 0 ] && floor=0
+      if [ "$p" -lt "$floor" ]; then
+        fail "PASS=$p 低于本轮下限 $floor（基线 $base − SKIP $sk）—— 有 harness 没真跑"
+        grep -E '^SKIP ' "$LOG" | head -5 | sed 's/^/    - /' >&2
+        say "  环境问题就修环境；确实删掉了 harness，再往下调 $BASELINE 并写清理由。"
+      else
+        say "GATE OK 5/6：PASS=$p ≥ 下限 $floor（基线 $base − SKIP $sk）"
+      fi
     elif [ "$p" -lt "${base:-0}" ]; then
       fail "PASS=$p 低于基线 $base —— 有 harness 没真跑（断言变少不等于变绿）："
       nskip=$(grep -cE '^SKIP ' "$LOG" || true)
@@ -157,9 +180,9 @@ else
       say "  环境问题就修环境（多半是找不到 kotlinc 或 app/build 产物）；"
       say "  确实删掉了 harness，再往下调 $BASELINE 并写清理由。"
     elif [ "$p" -gt "$base" ]; then
-      say "GATE OK 5/5：PASS=$p 高于基线 $base（新增了 harness？把 $BASELINE 里的数字改成 $p）"
+      say "GATE OK 5/6：PASS=$p 高于基线 $base（新增了 harness？把 $BASELINE 里的数字改成 $p）"
     else
-      say "GATE OK 5/5：PASS=$p 与基线一致"
+      say "GATE OK 5/6：PASS=$p 与基线一致"
     fi
   fi
 
@@ -236,7 +259,13 @@ if [ "${QA_GATE:-}" = "warn" ] && [ "$rc" -ne 0 ]; then
 fi
 
 if [ "$rc" -eq 0 ]; then
-  echo "GATE PASS：全部检查通过"
+  if [ "${partial:-0}" -eq 1 ]; then
+    # 「只跑了门禁 1」不等于「全部通过」。旧版在这里照样打印 GATE PASS，
+    # 于是 `bash gate.sh`（不带日志）在 CI 之外永远看起来是绿的——最容易被当成"验过了"。
+    echo "GATE PARTIAL：只做了门禁 1，2-6 未跑（请传 QA 日志路径）"
+  else
+    echo "GATE PASS：全部检查通过"
+  fi
 else
   echo "GATE BLOCKED：门禁未通过" >&2
 fi

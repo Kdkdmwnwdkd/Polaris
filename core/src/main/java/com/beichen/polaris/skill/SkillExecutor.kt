@@ -6,8 +6,11 @@ import com.beichen.polaris.core.ToolCall
 import com.beichen.polaris.core.ToolResult
 import com.beichen.polaris.core.ToolRegistry
 import com.beichen.polaris.core.agent.AgentScope
+import com.beichen.polaris.core.agent.AgentSeams
 import com.beichen.polaris.core.agent.DEFAULT_READ_ONLY_BUDGET_MS
 import com.beichen.polaris.core.agent.DEFAULT_WRITE_BUDGET_MS
+import com.beichen.polaris.core.agent.GuardContext
+import com.beichen.polaris.core.agent.GuardDecision
 import com.beichen.polaris.core.agent.NoopHooks
 import com.beichen.polaris.core.agent.RegistryToolExecutor
 import com.beichen.polaris.core.agent.ToolCallOutcome
@@ -316,7 +319,15 @@ class SkillRuntimeBridge(
      * 否则恢复器按 (step, callId) 配对时会对不上。
      */
     private val dispatchedStep: java.util.concurrent.atomic.AtomicInteger =
-        java.util.concurrent.atomic.AtomicInteger(0)
+        java.util.concurrent.atomic.AtomicInteger(0),
+    /**
+     * 接缝③（D-3）：与主对话共用同一条守卫链。
+     *
+     * 放在桥上而不是只在 [SkillExecutor] 上，是因为脚本内每一次工具调用都经由
+     * [executeWithJournal]——那里才是「脚本驱动工具」的唯一收口。桥拿不到守卫，
+     * 守卫链就只管得到模型直接发起的调用，脚本可以绕过它。
+     */
+    private val seams: AgentSeams = AgentSeams.NONE
 ) {
     private val logs = StringBuilder()
 
@@ -448,6 +459,16 @@ class SkillRuntimeBridge(
         val step = dispatchedStep.get()
         val descriptor = registry.descriptorOf(call.name)
             ?: ToolDescriptor(call.name, call.name, "{}")
+        // 接缝③（D-3）：守卫链**先于** executor。位置与主路径 [RealAgentLoop.executeOne]
+        // 一致：守卫在这一步拒绝的调用没有越过执行边界，所以不会留下 DISP
+        // （DISP 由执行器的 beforeEffect 写）——崩溃恢复不会把它误判成「结局未知」。
+        val guard = seams.checkTool(
+            GuardContext(call, descriptor, step, scope = "skill:${skill.id}")
+        )
+        if (guard is GuardDecision.Deny) {
+            turn?.toolSettled(step, call.id, ToolSettleStatus.FAILED)
+            return ToolResult.fail(guard.code, guard.message, guard.hint)
+        }
         val outcome = try {
             executor.execute(call, descriptor)
         } catch (cancel: kotlinx.coroutines.CancellationException) {
@@ -544,6 +565,17 @@ class SkillExecutor(
     private val jsEngine: JsEngine? = null,
     private val readBody: (SkillManifest) -> String,
     private val readEntry: (SkillManifest) -> String?,
+    /**
+     * 接缝③：与主对话**共用同一条**守卫链（D-3）。
+     *
+     * 修前技能桥（[SkillRuntimeBridge.invoke]）直接调 `executor.execute(...)`，完全绕开
+     * `RealAgentLoop.executeOne`，于是守卫链在主对话里装了也管不到脚本——
+     * 脚本是「模型间接驱动的工具调用」，不存在"技能调用的工具不需要守"的说法。
+     *
+     * 默认 [AgentSeams.NONE]：空装配时 `checkTool` 第一行就返回弃权，行为与改造前一致
+     * （harness 与不关心守卫的调用点不必改）。
+     */
+    private val seams: AgentSeams = AgentSeams.NONE,
 ) {
 
     /**
@@ -620,7 +652,7 @@ class SkillExecutor(
             )
             return runCatching {
                 val bridge = SkillRuntimeBridge(
-                    registry, skill, workspace, toolExecutor, scope, dispatchedStep
+                    registry, skill, workspace, toolExecutor, scope, dispatchedStep, seams
                 )
                 val engine = jsEngine!!
                 val out = engine.eval(entry, mapOf("input" to inputJson, "agent" to bridge))

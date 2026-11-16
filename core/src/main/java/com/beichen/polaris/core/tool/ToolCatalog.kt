@@ -150,7 +150,20 @@ object ToolCatalog {
         // 整体不可用——旧分支 CI 第 4 轮就是栽在这（报告里写的「真漏网」）。
         CatalogTool("knowledge_search", "memory", Capability.SAFE),
         // ── skill：加载与使用技能
-        CatalogTool("load_skill", "skill", Capability.SAFE),
+        // D-1：装技能包是**往设备写可执行语义**的动作——指令正文会常驻系统提示
+        // （见 buildSkillSystemPrompt），脚本（若为 packaged 才执行）能调工具。
+        // 两处修前都是敞开的：
+        //  1) 目录里给的是 SAFE 且无审批归组，LoadSkillTool 也没声明 needsApproval，
+        //     于是模型可以零弹窗从任意 https 地址装一个包进来——提示注入的唯一
+        //     持久化落地方式（装上就一直在，不用每轮重新注入）；
+        //  2) SAFE 让 imported 技能（maxCapability=PRIVILEGED）也能调它，等于允许
+        //     技能**自举**：一个导入的技能可以再装一个技能，链式绕过用户的安装判断。
+        // 升 DANGEROUS 后 imported/remote 技能装不了新包，只有 packaged 与主对话能装。
+        CatalogTool("load_skill", "skill", Capability.DANGEROUS, Approval.SKILL_INSTALL),
+        // use_skill 刻意**不加** approval：它用的是已装技能，信任根在安装那一步，
+        // 装配后再逐次弹窗只会把正常使用拖成几十次确认（R-08 的老问题反过来）。
+        // 脚本执行另有闸门：imported 技能 allowScript=false（policyFor），
+        // 脚本内调工具还要过白名单 + 能力门 + SkillNetGrant 三关。
         CatalogTool("use_skill", "skill", Capability.PRIVILEGED),
         // ── workflow：工作流的增删改查与开关
         CatalogTool("workflow_create", "workflow", Capability.PRIVILEGED),
@@ -239,6 +252,15 @@ object ToolCatalog {
          * 换掉了整个相册的读取权。粒度按目录记（`/sdcard/DCIM`），换目录重问。
          */
         const val SHELL_READ = "shell_read"
+
+        /**
+         * 安装技能包（D-1）。信任根在这里：装上之后 `use_skill` 不再逐次确认，
+         * 所以「这一次装的是谁的包」必须过一次人。
+         *
+         * 粒度按**来源域名**记（`skill_install:example.com`）：同一个站点重装/换版本
+         * 不再问，换一个源就要重问——用户同意的是「信任这个发布者」，不是「信任装包这件事」。
+         */
+        const val SKILL_INSTALL = "skill_install"
 
         /**
          * 读用户私有数据（剪贴板 / 通知）。审计 F9。

@@ -157,12 +157,14 @@ import com.beichen.polaris.core.agent.AgentRunStateStore
 import com.beichen.polaris.core.agent.AutoResumeDecision
 import com.beichen.polaris.core.agent.AutoResumeInput
 import com.beichen.polaris.core.agent.AutoResumePolicy
-import com.beichen.polaris.core.agent.ApprovalGrant
 import com.beichen.polaris.core.agent.ApprovalGrouping
 import com.beichen.polaris.core.agent.ApprovalTier
 import com.beichen.polaris.core.agent.ApprovalScope
 import com.beichen.polaris.core.agent.awaitApprovalDecision
 import com.beichen.polaris.core.agent.PlanBroker
+import com.beichen.polaris.core.agent.PlanModeGuard
+import com.beichen.polaris.core.agent.AgentSeams
+import com.beichen.polaris.core.agent.productionSeams
 import com.beichen.polaris.tools.SubAgentTool
 import com.beichen.polaris.core.agent.SubAgentRunner
 import com.beichen.polaris.core.agent.TitleLogic
@@ -250,97 +252,6 @@ import java.util.UUID
 
 /** `SkillUiInfo` / `SkillToolInfo` 已搬到 SkillUi.kt（纯数据，不必占这个冻结文件的行数）。 */
 
-/**
- * W-30：一条消息的翻译状态。
- *
- * @param text 译文（成功时非空）
- * @param error 失败原因（失败时非空，UI 用 error 色显示而不是假装翻出来了）
- */
-data class TranslationUi(val text: String? = null, val error: String? = null)
-
-/**
- * 一次待确认的危险工具调用（L10）：由 AgentLoop 发起、UI 弹窗、用户决策后回填。
- *
- * @param toolName 待执行的工具名（如 ui_tap）。
- * @param argsPreview 入参预览（截断到 500 字符，避免超长参数撑爆 Dialog）。
- * @param deferred UI 用它回复 AgentLoop：complete(true) 放行、complete(false) 拒绝。
- */
-data class ApprovalRequest(
-    val toolName: String,
-    val argsPreview: String,
-    val deferred: CompletableDeferred<Boolean>,
-    /**
-     * 本次授权的作用域（R-08）：键、展示名、能否记住。
-     */
-    val grant: ApprovalGrant = ApprovalGrant("", "", true)
-)
-
-/**
- * 供应商瞬时失败的「自动恢复」进行态（Phase 2 DoD③）。
- *
- * 由 [ChatViewModel.retryState] 暴露：非 null 时 UI 显示「正在恢复（n/N）· 原因」横幅，
- * 恢复成功 / 最终失败 / 用户取消时清回 null。**取消不算失败，但必须立即清状态**
- * （T05 不变量：点停止后不得残留「正在恢复」）。
- *
- * @param attempt 1-based 重试序号（第几次重试）。
- * @param max 最大重试次数（= providerRetry）。
- * @param reason 面向用户的可读原因（已脱敏，不含原始异常 message）。
- */
-data class RetryState(
-    val attempt: Int,
-    val max: Int,
-    val reason: String
-)
-
-/** 「测试连接」的诊断结果：配置页卡片直接消费。 */
-data class TestResult(
-    /** 是否连通（HTTP 2xx）。 */
-    val ok: Boolean,
-    /** HTTP 状态码；网络异常时为 -1。 */
-    val code: Int,
-    /** 实际发起请求的完整端点。 */
-    val endpoint: String,
-    /** Key 指纹：len=35 head=sk-a tail=d38d。 */
-    val fingerprint: String,
-    /** 响应体前 200 字（已脱敏）；异常时为异常文案。 */
-    val bodyPreview: String,
-    /** 针对状态码的修复建议（失败时有值）。 */
-    val suggestion: String = "",
-    /** 失败归因（P1，2026-10-21）：UI 据此决定给哪个补救按钮，不再只给一句建议。 */
-    val kind: FailureKind = FailureKind.NONE,
-    /** 可直接执行的补救动作（去拿 Key / 拉模型列表 / 重试）。 */
-    val action: RecoveryAction = RecoveryAction.NONE
-)
-
-/**
- * UI 与业务的唯一桥梁：持有注册表、Agent 循环与配置，对外只暴露 StateFlow。
- * 业务规则（工具注册、循环策略、Skill 接入）都在这里组装，Compose 只负责渲染。
- */
-/**
- * 功能五（P1-4）：待发文件——文件名 + 已提取的正文文本。
- *
- * 文本在读取时就抽好（读文件是 IO 重活），发送时只是字符串拼接；
- * UI 只负责展示文件名与移除，不碰解析细节。
- */
-data class PendingFile(val name: String, val text: String)
-
-/**
- * 功能五（P1-4）：文件附件处理结果——三条成功路径 + 一条失败路径。
- *
- * 之所以要区分 [Text] 与 [Images]：用户需要知道「这份 PDF 是被当图片读的」
- * （影响模型能否引用原文精确字句），而不是笼统一句「已添加」。
- */
-sealed interface FileAttachResult {
-    /** 文本类文件已直读（[chars] = 实际取用字符数）。 */
-    data class Text(val name: String, val chars: Int) : FileAttachResult
-
-    /** PDF 已渲染为 [pages] 张图片并入图片链路。 */
-    data class Images(val name: String, val pages: Int) : FileAttachResult
-
-    /** 不支持的类型 / 读取失败——[reason] 直接展示给用户。 */
-    data class Failed(val reason: String) : FileAttachResult
-}
-
 /** W-14：单台 MCP 服务器最多接入的工具数（工具描述要进系统提示，不能无限扩张）。 */
 private const val MCP_MAX_TOOLS_PER_SERVER = 30
 
@@ -353,6 +264,10 @@ private const val MENTION_TOTAL_LIMIT = 24_000
 /** W-28：项目规则文件（AGENTS.md/README）注入上限。 */
 private const val PROJECT_RULES_LIMIT = 4_000
 
+/**
+ * UI 与业务的唯一桥梁：持有注册表、Agent 循环与配置，对外只暴露 StateFlow。
+ * 业务规则（工具注册、循环策略、Skill 接入）都在这里组装，Compose 只负责渲染。
+ */
 class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     BookmarksContract, LogsContract, MemoryBankContract, PromptLibraryContract,
     WorkflowContract, SkillLibraryContract, SkillMarketContract,
@@ -898,6 +813,30 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private val _translatingIndex = MutableStateFlow<Int?>(null)
     override val translatingIndex: StateFlow<Int?> = _translatingIndex.asStateFlow()
 
+    /**
+     * D-3：接缝③的唯一装配点——**主对话、技能桥、子代理三处共用这一个实例**。
+     *
+     * 修前 `productionSeams` 零调用方：三处 `RealAgentLoop(...)` 全走默认 `AgentSeams.NONE`，
+     * 守卫链在真实路径上一次都没跑过，缝③只有形状没有内容。
+     *
+     * 声明在 [registry] **之前**，因为 `registry` 的 `apply` 块里要构造 `SubAgentRunner`，
+     * 而子代理也必须装同一条链。代价是两个依赖都只能写成 lambda（**调用时**才求值）：
+     *  - `settingsFacade` 要到 1292 行才初始化 —— lambda 捕获的是 `this`，不是当时的值；
+     *  - `registry` 在这里还没建好 —— 同样延迟到第一次 `checkTool` 才读。
+     *
+     * 若把 `settingsFacade.planMode.value` 写成属性初始化器里的裸表达式，冷启动就会 NPE；
+     * 若把 `registry.get(...)` 写在 `apply` 之前的裸表达式里，同理。
+     */
+    private val agentSeams: AgentSeams = productionSeams(
+        toolGuards = listOf(
+            PlanModeGuard(
+                planMode = { settingsFacade.planMode.value },
+                // fail-closed：查不到（工具未注册/名字写错）一律按「会写」处理。
+                readOnlyOf = { name -> registry.get(name)?.readOnly ?: false },
+            )
+        )
+    )
+
     private val registry = ToolRegistry(startup.toolProfiler).apply {
         startup.mark("preRegistry") // 口径：ToolRegistry() 构造极轻，重的是下面 45 个 register
         register(HttpRequestTool())
@@ -998,7 +937,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     // R4：审批穿过子代理边界（白名单当前无副作用工具，但不能再依赖这个巧合）。
                     // 用 lambda 间接引用而不是直接传值：registry 的初始化早于 approvalHandler，
                     // 直接取值会捕到 null；lambda 在真正弹窗时才读。
-                    approval = { tool, args -> approvalHandler(tool, args) }
+                    approval = { tool, args -> approvalHandler(tool, args) },
+                    // D-3：同一条守卫链——子代理不是绕过守卫的后门
+                    seams = agentSeams
                 )
             )
         )
@@ -1035,7 +976,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         workspace = workspace,
         jsEngine = jsEngine,
         readBody = { sk -> if (sk.id in importedIds) SkillLoader.readImportedBody(app, sk) else SkillLoader.readSkillBody(app, sk) },
-        readEntry = { sk -> if (sk.id in importedIds) SkillLoader.readImportedEntry(app, sk) else SkillLoader.readEntry(app, sk) }
+        readEntry = { sk -> if (sk.id in importedIds) SkillLoader.readImportedEntry(app, sk) else SkillLoader.readEntry(app, sk) },
+        // D-3：技能桥与主对话共用同一条守卫链（脚本不是绕开守卫的后门）
+        seams = agentSeams
     )
 
     init {
@@ -1049,8 +992,12 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             val interrupted = runCatching {
                 agentRunStateStore.reconcile()?.also { _interruptedNotice.value = it.note }
             }.getOrNull()
-            runStateReady.complete(interrupted)
+            // 顺序是契约，不是风格：先修日志，再放行 runStateReady。
+            // 自动续跑 await 到放行就立刻 send()，而"上次那条写可能已生效"的提示
+            // 要到 recoverInterruptedJournal 里才算出——反过来的话续跑看到的 note 恒为 null，
+            // 模型会把已经落盘的写重做一遍（熔断只防反复被杀，不防同一副作用做两次）。
             runCatching { recoverInterruptedJournal() }
+            runStateReady.complete(interrupted)
         }
         if (skillsSnapshot.isNotEmpty()) {
             // use_skill 工具的 systemPrompt 会被 AgentLoop 自动拼进系统提示（利用工具自带提示特性）
@@ -1100,47 +1047,48 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 这个两轴区分是本次改造的核心——只按「工具有没有副作用」判，会让一个根本没启动的
      * `rm` 也走一遍「先核对」，白烧一轮；只按「日志有没有记录」判，又会让已生效的写操作被重放。
      *
-     * 全部包在 runCatching 里：启动阶段任何异常都不该阻止 App 起来（日志坏了就退化成旧行为）。
+     * 调用方用 runCatching 包住：启动阶段任何异常都不该阻止 App 起来（日志坏了就退化成旧行为）。
+     *
+     * **必须是 suspend 且由调用方顺序执行**：它的产出（[pendingRecoveryNote]）是自动续跑
+     * 首条请求的一部分。内部再 launch 一层就等于「提交了但没等」，续跑照样读不到。
      */
-    private fun recoverInterruptedJournal() {
-        viewModelScope.launch {
-            val results = turnJournal.scanAndRepair()
-            if (results.isEmpty()) return@launch
-            val orphans = results.flatMap { it.orphans }
-            val anomalies = results.flatMap { it.anomalies }
-            if (anomalies.isNotEmpty()) {
-                AgentLogger.w(
-                    "Recovery",
-                    "回合日志不一致 ${anomalies.size} 条：" + anomalies.joinToString("；")
-                )
-            }
-            if (orphans.isEmpty()) return@launch
-            val unknown = orphans.filter { it.mayHaveTakenEffect }
-            val safe = orphans.filterNot { it.mayHaveTakenEffect }
+    private suspend fun recoverInterruptedJournal() {
+        val results = turnJournal.scanAndRepair()
+        if (results.isEmpty()) return
+        val orphans = results.flatMap { it.orphans }
+        val anomalies = results.flatMap { it.anomalies }
+        if (anomalies.isNotEmpty()) {
             AgentLogger.w(
                 "Recovery",
-                "上次回合被中止：${unknown.size} 个写操作结局未知，${safe.size} 个未派发。明细=" +
-                    orphans.joinToString { "${it.toolName}:${it.status}" }
+                "回合日志不一致 ${anomalies.size} 条：" + anomalies.joinToString("；")
             )
-            val note = buildString {
-                append("上次执行被系统中止。")
-                if (unknown.isNotEmpty()) {
-                    append("其中 ${unknown.size} 个写操作（")
-                    append(unknown.map { it.toolName }.distinct().joinToString("、"))
-                    append("）可能已经生效——继续之前建议先核对结果，我不会自动重做。")
-                }
-                if (safe.isNotEmpty()) {
-                    if (unknown.isNotEmpty()) append(" 另有 ")
-                    append("${safe.size} 个调用还没开始执行，可以安全重试。")
-                }
+        }
+        if (orphans.isEmpty()) return
+        val unknown = orphans.filter { it.mayHaveTakenEffect }
+        val safe = orphans.filterNot { it.mayHaveTakenEffect }
+        AgentLogger.w(
+            "Recovery",
+            "上次回合被中止：${unknown.size} 个写操作结局未知，${safe.size} 个未派发。明细=" +
+                orphans.joinToString { "${it.toolName}:${it.status}" }
+        )
+        val note = buildString {
+            append("上次执行被系统中止。")
+            if (unknown.isNotEmpty()) {
+                append("其中 ${unknown.size} 个写操作（")
+                append(unknown.map { it.toolName }.distinct().joinToString("、"))
+                append("）可能已经生效——继续之前建议先核对结果，我不会自动重做。")
             }
-            pendingRecoveryNote = note
-            // 提示优先级：**有写操作结局未知时，以这一句为准**。实测的坑：运行态那句
-            // 「上次任务已被系统中断」先到把这里挡住，用户只看到「可以直接说继续」——
-            // 而这恰恰是最不能直接继续的情况；没有未知写操作时才让位给运行态那句。
-            if (unknown.isNotEmpty() || _interruptedNotice.value == null) {
-                _interruptedNotice.value = note
+            if (safe.isNotEmpty()) {
+                if (unknown.isNotEmpty()) append(" 另有 ")
+                append("${safe.size} 个调用还没开始执行，可以安全重试。")
             }
+        }
+        pendingRecoveryNote = note
+        // 提示优先级：**有写操作结局未知时，以这一句为准**。实测的坑：运行态那句
+        // 「上次任务已被系统中断」先到把这里挡住，用户只看到「可以直接说继续」——
+        // 而这恰恰是最不能直接继续的情况；没有未知写操作时才让位给运行态那句。
+        if (unknown.isNotEmpty() || _interruptedNotice.value == null) {
+            _interruptedNotice.value = note
         }
     }
 
@@ -1702,9 +1650,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private val _pendingApproval = MutableStateFlow<ApprovalRequest?>(null)
     override val pendingApproval: StateFlow<ApprovalRequest?> = _pendingApproval.asStateFlow()
 
-    /** 「本次会话始终允许」的授权键，按对话隔离（审计 F3），实现与理由见 [ApprovalWhitelistStore]。 */
-    private val sessionAllowed: MutableSet<String> get() = ApprovalWhitelistStore.of(_activeConversationId.value)
-
     /**
      * W-8 P1-C：ui_screenshot 的本回合批准缓存（见 [requestApproval]）。
      * 每个用户回合（send() 入口）重置——跨回合不继承，每次新任务首次截图仍会问一次。
@@ -1720,6 +1665,15 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 已在本次会话「始终允许」过的工具直接放行，不再打扰用户。
      */
     private suspend fun requestApproval(tool: AgentTool, args: JsonObject): Boolean = approvalMutex.withLock {
+        // D-4：**在这一刻**固定发起审批的会话 id。
+        //
+        // 这行取值之后要跨过一次用户交互（等弹窗），期间 `_activeConversationId` 会变：
+        // 用户切去看别的会话、或者后台会话的回合正好在这时也撞上审批。修前
+        // approveAlways 写的是「当前活跃会话的桶」，于是会出现
+        // 「在 A 会话点的『不再询问』，记进了 B 会话」——两边都错：A 下次还问，
+        // B 反而多了一条它从没同意过的授权。后者更糟：B 里模型可以直接绕过弹窗。
+        val convId = _activeConversationId.value
+        val allowed = ApprovalWhitelistStore.of(convId)
         // W-36/R-08：按「同类操作」放行而非工具名；shell 再看命令内容——不可逆命令永不记忆。
         val grant = ApprovalScope.of(tool.name, args)
         // W-RT3：档位判定统一走 ApprovalTier——「逐步确认」连会话白名单也失效；
@@ -1730,7 +1684,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // 而对其它组又碰巧对——那种「碰巧对」最难查。
         val mode = settingsFacade.approvalTier.value
         val group = ApprovalGrouping.groupOf(tool.name)
-        if (ApprovalTier.shouldSkipDialog(mode, group, ApprovalScope.allows(grant, sessionAllowed))) {
+        if (ApprovalTier.shouldSkipDialog(mode, group, ApprovalScope.allows(grant, allowed))) {
             return@withLock true
         }
         // W-8 P1-C：截图按回合缓存批准（真机日志里「看一眼点一下」被对话框反复打断）；
@@ -1744,7 +1698,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             toolName = tool.name,
             argsPreview = args.toString().take(500),
             deferred = deferred,
-            grant = grant
+            grant = grant,
+            // D-4：发起时的会话，不是点「始终允许」时的那一个。
+            convId = convId
         )
         // R-03：超时归 ViewModel（切页卸载弹窗后照样生效），不在 Composable 的倒计时里。
         // finally 保证无论用户怎么关掉弹窗，pending 都会清空，不会残留卡住下一个工具。
@@ -1759,10 +1715,18 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         _pendingApproval.value?.deferred?.complete(true)
     }
 
-    /** 用户选择「本次会话始终允许」：记入会话白名单后放行；不可逆命令（R-08）只放行本次。 */
+    /**
+     * 用户选择「本次会话始终允许」：记入会话白名单后放行；不可逆命令（R-08）只放行本次。
+     *
+     * D-4：写进 [ApprovalRequest.convId] 的桶，不是 `_activeConversationId`。用户可能在
+     * 弹窗开着的时候切走了会话——那时候「本次会话」指的是**发起这次调用**的那个，
+     * 不是他现在正在看的那个。
+     */
     override fun approveAlways() {
         val pending = _pendingApproval.value ?: return
-        if (pending.grant.memorizable) sessionAllowed += pending.grant.key
+        if (pending.grant.memorizable) {
+            ApprovalWhitelistStore.of(pending.convId) += pending.grant.key
+        }
         pending.deferred.complete(true)
     }
 
@@ -2021,7 +1985,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // 用户在模型页切换供应商不必重启 App，下一次调用就该用新档位。
         retryProfileProvider = { ProviderCatalog.retryOf(_config.value.providerId) },
         // W-102：粘性激活——同一会话第二次问「帮我截图」不必再开一遍 ui 组
-        activeGroups = activeToolGroups
+        activeGroups = activeToolGroups,
+        // D-3：接缝③装上（与技能桥共用同一实例）。不传的话守卫链永远不会跑。
+        seams = agentSeams
     )
 
     /**
@@ -2445,9 +2411,12 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      *
      * 选图在 UI 线程拿 Uri，转 base64 是重活——放 IO 线程由 [attachImageFromUri] 处理，
      * 完成后统一落到这里，发送时一次性带走。UI 只读这个流渲染缩略图，不碰编码细节。
+     *
+     * D-5：按会话隔离（[ConversationBuckets]）。修前是进程级单例——在 A 会话挑的三张图
+     * 会跟着用户进到 B 会话的输入框，发出去就成了 B 的附件。
      */
-    private val _pendingImages = MutableStateFlow<List<String>>(emptyList())
-    override val pendingImages: StateFlow<List<String>> = _pendingImages.asStateFlow()
+    private val pendingImageBuckets = ConversationBuckets<String>()
+    override val pendingImages: StateFlow<List<String>> = pendingImageBuckets.visible
 
     /**
      * 功能四（P0-2）：把相册选中的图片读成 data URL 挂到待发列表。
@@ -2459,7 +2428,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         runCatching {
             // 审计 F27：待发图片此前无数量上限。每张 base64 约 200~400KB，
             // 连选 30 张就是 10MB 常驻 StateFlow，且整个拼进请求体——供应商多半直接拒。
-            if (_pendingImages.value.size >= AttachmentIo.MAX_PENDING_IMAGES) return@runCatching false
+            val convId = _activeConversationId.value
+            if (pendingImageBuckets.size(convId) >= AttachmentIo.MAX_PENDING_IMAGES) return@runCatching false
             // 审计 F26：修前是 decodeStream 直接解原图。一张 108MP 的照片是
             // 12000×9000×4B ≈ 432MB 的位图，decode 当场 OOM——scaleDown 根本没机会执行
             // （它注释里写的「两阶段解码在调用方已完成」其实并不存在）。
@@ -2475,7 +2445,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 bitmap.recycle()
             }
             val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            _pendingImages.value = _pendingImages.value + "data:image/jpeg;base64,$encoded"
+            pendingImageBuckets.append(convId, "data:image/jpeg;base64,$encoded")
             true
         }.getOrDefault(false)
     }
@@ -2538,7 +2508,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     /** 功能四（P0-2）：移除待发图片。 */
     override fun removePendingImage(url: String) {
-        _pendingImages.value = _pendingImages.value.filter { it != url }
+        pendingImageBuckets.removeIf(_activeConversationId.value) { it == url }
     }
 
     /**
@@ -2551,8 +2521,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 其它二进制格式明确拒绝并给出可读原因——**不做「静默忽略」**，
      * 用户点了「＋」却什么都没发生是最差的反馈。
      */
-    private val _pendingFiles = MutableStateFlow<List<PendingFile>>(emptyList())
-    override val pendingFiles: StateFlow<List<PendingFile>> = _pendingFiles.asStateFlow()
+    private val pendingFileBuckets = ConversationBuckets<PendingFile>()
+    override val pendingFiles: StateFlow<List<PendingFile>> = pendingFileBuckets.visible
 
     /** 功能五（P1-4）：读取文件并按其类型挂到待发清单；返回精确结果供 UI 反馈。 */
     override suspend fun attachFileFromUri(uri: Uri): FileAttachResult = withContext(Dispatchers.IO) {
@@ -2564,7 +2534,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 ext == "pdf" -> {
                     // 审计 F27：PDF 一次产出最多 5 张，必须与已有待发图共用同一个额度，
                     // 否则「先选 8 张图，再发一个 5 页 PDF」就能绕过上限。
-                    val room = (AttachmentIo.MAX_PENDING_IMAGES - _pendingImages.value.size).coerceAtLeast(0)
+                    val convId = _activeConversationId.value
+                    val room = (AttachmentIo.MAX_PENDING_IMAGES - pendingImageBuckets.size(convId)).coerceAtLeast(0)
                     if (room == 0) {
                         FileAttachResult.Failed("最多同时发 $AttachmentIo.MAX_PENDING_IMAGES 张图片，请先移除几张")
                     } else {
@@ -2572,7 +2543,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                         if (images.isEmpty()) {
                             FileAttachResult.Failed("PDF 打开失败或没有可渲染页面")
                         } else {
-                            _pendingImages.value = _pendingImages.value + images
+                            pendingImageBuckets.appendAll(convId, images)
                             FileAttachResult.Images(name, images.size)
                         }
                     }
@@ -2584,7 +2555,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     if (text.isBlank()) {
                         FileAttachResult.Failed("DOCX 里没有提取到文字（可能是纯图片文档）")
                     } else {
-                        _pendingFiles.value = _pendingFiles.value + PendingFile(name, text.take(MAX_FILE_CHARS))
+                        pendingFileBuckets.append(
+                            _activeConversationId.value,
+                            PendingFile(name, text.take(MAX_FILE_CHARS))
+                        )
                         FileAttachResult.Text(name, text.length)
                     }
                 }
@@ -2595,7 +2569,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     if (text.isNullOrBlank()) {
                         FileAttachResult.Failed("文件为空或无法读取")
                     } else {
-                        _pendingFiles.value = _pendingFiles.value + PendingFile(name, text)
+                        pendingFileBuckets.append(_activeConversationId.value, PendingFile(name, text))
                         FileAttachResult.Text(name, text.length)
                     }
                 }
@@ -2611,7 +2585,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     /** 功能五（P1-4）：移除待发文件。 */
     override fun removePendingFile(name: String) {
-        _pendingFiles.value = _pendingFiles.value.filterNot { it.name == name }
+        pendingFileBuckets.removeIf(_activeConversationId.value) { it.name == name }
     }
 
     /** ContentResolver 查显示名（拿不到就回落 null，由调用方兜底命名）。 */
@@ -2711,18 +2685,18 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         }
         // W-8 P1-C：新回合重置截图批准缓存——上个回合批准过不算数，本回合首次截图仍询问
         screenshotApprovedThisTurn = false
-        // 功能四（P0-2）/ 功能五（P1-4）：先摘走待发附件并清空，避免本轮发出后仍留在输入区
-        val images = _pendingImages.value
-        _pendingImages.value = emptyList()
-        val files = _pendingFiles.value
-        _pendingFiles.value = emptyList()
+        // 功能四（P0-2）/ 功能五（P1-4）：先摘走待发附件并清空，避免本轮发出后仍留在输入区。
+        // D-5：按**归属会话**取，而且 take 是一次原子操作——`of(...)` 再 `set(empty)` 是两步，
+        // 两条发送路径交错时会一边发出重复附件、一边发出空。
+        val owner = _activeConversationId.value
+        val images = pendingImageBuckets.take(owner)
+        val files = pendingFileBuckets.take(owner)
         input.value = ""
         // 功能五（P1-8）：发送成功即草稿使命结束——清掉该会话草稿，
         // 否则切走再回来输入框会复活刚发过的原文（用户视角：见鬼了）
         draftStore.remove(_activeConversationId.value)
-        // hotfix30：捕获在途归属会话——此后所有在途写（appendToStore/handleAgentEvent/
-        // 流式草稿）按它落盘，用户切走再切回不写串；finally 清
-        val owner = _activeConversationId.value
+        // hotfix30：owner 见上（D-5 起在这里就取，附件也按它归属）——此后所有在途写
+        // （appendToStore / handleAgentEvent / 流式草稿）按它落盘，用户切走再切回不写串；finally 清
         // W-46：先把历史摊平（此时当前这句还没落库，天然不含本轮）——loop 每回合只造
         // 「系统提示 + 当前输入」，不带历史就会出现「它 / 继续 / 第二个方案」全失忆
         // （放在 begin 之前：摊平是纯读 store，不需要运行态已置位）
@@ -3188,6 +3162,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private fun loadConversation(id: String) {
         draftStore.set(_activeConversationId.value, input.value)
         _activeConversationId.value = id
+        // D-5：待发附件跟着会话走（与草稿同一语义）。不切换的话，UI 上还挂着上个会话的图，
+        // 而点发送时按 id 取到的是空——用户看到「图上还在、发出去没了」。
+        pendingImageBuckets.activate(id)
+        pendingFileBuckets.activate(id)
         replaceUiItems(projection.loadOf(id))
         // W-30：会话切换后消息下标全变，旧译文清掉（否则会显示到别的消息下面）
         _translations.value = emptyMap()
@@ -3643,42 +3621,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /**
      * W-23：下载技能包 zip（load_skill 的传输层）。
      *
-     * 三重限制：只允许 https（由 LoadSkillLogic 先校验）、体积上限 2 MB（流式读取随时中止，
-     * 不信任 Content-Length）、请求超时 20 秒。返回字节供安装器做 Zip Slip / 炸弹检查。
+     * 实现搬到了 [com.beichen.polaris.tools.SkillZipFetcher]：重定向必须逐跳校验，
+     * 那需要循环和状态，塞在这里会把已经顶到行数上限的类再撑大。这里只留委托。
      */
-    private suspend fun downloadSkillZip(url: String): Result<ByteArray> = withContext(Dispatchers.IO) {
-        runCatching {
-            // R-13：技能包下载并入共享预设（原 10/20s，short 为 10/30s，只放宽）
-            val client = LlmHttp.short
-            val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", "Polaris")
-                .get()
-                .build()
-            client.newCall(request).execute().use { resp ->
-                if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
-                val body = resp.body ?: throw IOException("响应体为空")
-                if (body.contentLength() > LoadSkillLogic.MAX_ZIP_BYTES) {
-                    throw IOException("技能包过大（上限 2 MB）")
-                }
-                val out = java.io.ByteArrayOutputStream()
-                body.byteStream().use { input ->
-                    val buf = ByteArray(64 * 1024)
-                    var total = 0
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        total += n
-                        if (total > LoadSkillLogic.MAX_ZIP_BYTES) {
-                            throw IOException("技能包超过 2 MB 上限，已中止")
-                        }
-                        out.write(buf, 0, n)
-                    }
-                }
-                out.toByteArray()
-            }
-        }
-    }
+    private suspend fun downloadSkillZip(url: String): Result<ByteArray> =
+        com.beichen.polaris.tools.SkillZipFetcher.fetch(url)
 
     /**
      * W-17 列表载入。**必须留在类体最末**：Kotlin 按书写顺序执行属性初始化器与 init 块，

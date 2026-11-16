@@ -140,6 +140,10 @@ fun main() {
             // 2026-11-10 F9：读用户私有数据（剪贴板 / 通知）。它进目录（clipboard、
             // device_notifications 两个工具都标注了），粒度由 ApprovalScope 再细到工具名。
             ToolCatalog.Approval.PRIVATE_READ,
+            // 2026-11-16 D-1：安装技能包。它是**持久化落地**的一类动作——装上之后
+            // 技能正文常驻系统提示，不需要每轮重新注入，所以必须过一次人。
+            // 只由 load_skill 产出；use_skill 刻意不加（信任根在安装那一步）。
+            ToolCatalog.Approval.SKILL_INSTALL,
         )
         val bad = ToolCatalog.tools.mapNotNull { it.approval }.filter { it !in allowed }
         expect(bad.isEmpty(), "所有审批键都在 Approval 词表内", { bad.toString() })

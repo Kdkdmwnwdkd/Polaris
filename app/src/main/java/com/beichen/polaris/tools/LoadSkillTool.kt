@@ -62,6 +62,26 @@ class LoadSkillTool(
     /** 写操作：会往设备写文件、可能替换既有技能。 */
     override val readOnly = false
 
+    /**
+     * D-1：安装技能包必须过一次人。
+     *
+     * 修前这里什么都没有——[AgentTool.needsApproval] 默认 false，于是模型可以自己
+     * 从任意 https 地址装一个技能进来。这不是「多一个工具」的问题：技能包的指令正文
+     * 会通过 [buildSkillSystemPrompt] 常驻系统提示，装上之后每一轮都在，是提示注入
+     * **唯一能长期存活**的落地点（其余注入点都要每轮重新塞进对话）。
+     *
+     * `needsApproval = true` 是兜底（参数看不懂时一律问）；`list` 只读枚举已装技能、
+     * 不产生任何写入，逐次弹窗只会训练用户闭眼点允许——由 [needsApprovalFor] 放行。
+     */
+    override val needsApproval = true
+
+    override fun needsApprovalFor(args: JsonObject): Boolean {
+        val action = args["action"]?.primOrNull()?.contentOrNull?.trim()?.lowercase()
+        // 缺 action / 未知 action 也算需要确认：工具侧会拒，但审批是独立的一层，
+        // 不假设下游一定拦住（`null != "list"` → 问）。
+        return action != ACTION_LIST
+    }
+
     override suspend fun execute(args: JsonObject): ToolResult = withContext(Dispatchers.IO) {
         runCatching {
             val action = args["action"]?.primOrNull()?.contentOrNull?.trim()?.lowercase()
@@ -72,7 +92,10 @@ class LoadSkillTool(
                 )
 
             when (action) {
-                "list" -> list()
+                // 只给 list 提常量：它的取值直接决定「是否弹窗」（见 needsApprovalFor），
+                // 漂移一次就是一次静默放行。其余动作的字符串漂移只会让参数校验报错，
+                // 是可见的失败，不需要同一套防护。
+                ACTION_LIST -> list()
                 "install_url" -> installFromUrl(
                     args["url"]?.primOrNull()?.contentOrNull.orEmpty()
                 )
@@ -183,5 +206,10 @@ class LoadSkillTool(
             code = "skill_uninstalled",
             message = "已卸载技能「$rawId」（其授权也已撤销）"
         )
+    }
+
+    private companion object {
+        /** 唯一免审批的动作：只列出已装技能，不写入任何东西。 */
+        const val ACTION_LIST = "list"
     }
 }

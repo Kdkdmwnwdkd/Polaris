@@ -71,10 +71,26 @@ else
 fi
 
 svc_block=$(awk '/\.pet\.PetOverlayService/{f=1} f{print} f&&/\/>/{exit}' "$MANI")
-if printf '%s' "$svc_block" | grep -q 'foregroundServiceType="specialUse"'; then
-  good "A2 前台服务类型为 specialUse（Android 14 上不声明会起不来）"
+# D-10：类型位不再只写 specialUse，而是 `specialUse|microphone`——桌宠要在悬浮窗里听语音，
+# 而 Android 14 起「声明了 specialUse 却在录音」会判 MissingForegroundServiceType 直接崩。
+# 所以这里判的是「specialUse 在，后面允许跟别的位」，不是「这一串必须恰好等于 specialUse」。
+if printf '%s' "$svc_block" | grep -qE 'foregroundServiceType="[^"]*\bspecialUse\b'; then
+  good "A2 前台服务类型含 specialUse（Android 14 上不声明会起不来）"
 else
   bad "A2 缺少 foregroundServiceType=\"specialUse\""
+fi
+
+# A2b：声明了 microphone 位就必须同时声明 RECORD_AUDIO 权限，否则装到 Android 14 上
+# 起服务时抛 SecurityException——那种崩在用户看来就是「开了桌宠就闪退」。
+# 反向也守：没声明 microphone 位却占了 RECORD_AUDIO，说明权限与用途不一致。
+if printf '%s' "$svc_block" | grep -qE 'foregroundServiceType="[^"]*\bmicrophone\b'; then
+  if grep -q 'android.permission.RECORD_AUDIO' "$MANI"; then
+    good "A2b 声明了 microphone 位且申明了 RECORD_AUDIO"
+  else
+    bad "A2b 声明了 microphone 位但没申明 RECORD_AUDIO —— 起服务会抛 SecurityException"
+  fi
+else
+  good "A2b 没有声明 microphone 位（不需要额外权限）"
 fi
 
 if printf '%s' "$svc_block" | grep -q 'android:exported="false"'; then
@@ -296,7 +312,10 @@ say "[G] 范围控制"
 # 识别交给系统的 SpeechRecognizer，它内部处理了采样率、降噪、VAD、音频焦点。
 # 一旦这里出现 AudioRecord，说明有人开始手搓录音——那会带来一整条新的
 # 音频链路（缓冲、重采样、超时、静音判定），而它和识别服务的能力完全重复。
-if grep -qE '\bAudioRecord\b' "$SERVICE" "$OVERLAY" "$SESSION" "$VOICE" 2>/dev/null; then
+# 判据带左括号：`AudioRecord(` 是构造调用，而注释里提到这个词是正常的。
+# 修前是裸词 `\bAudioRecord\b`，于是 PetOverlayService 里一句「调用 AudioRecord 会崩」
+# 的说明就能把这条守卫点红——守卫第一次是因为注释而报警，就不会有人再信它。
+if grep -qE '\bAudioRecord\s*\(' "$SERVICE" "$OVERLAY" "$SESSION" "$VOICE" 2>/dev/null; then
   bad "G1 出现了 AudioRecord —— 语音识别应走 SpeechRecognizer，不要自己开录音"
 else
   good "G1 没有自己开 AudioRecord（识别交给系统服务）"

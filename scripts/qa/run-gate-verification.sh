@@ -47,7 +47,10 @@ mk_skip_repo() {
 }
 
 # 真实基线值：沙盒日志的 PASS 数要与之一致，否则「全绿应通过」的场景会被门禁 5 拦下。
-BASE=$(awk '!/^[[:space:]]*(#|$)/ {print $1; exit}' "$ROOT/scripts/qa/harness-baseline.txt")
+# 取**最后**一个非注释行，与 gate.sh 的读法保持一致——这份文件是追加式账本，
+# 末尾那个数字才是当前值。两处取法不一致时，验证用的 BASE 会永远停在历史值上，
+# 于是「场景 1 应 PASS」在真实基线已经上调之后仍然用旧数字构造日志（假绿）。
+BASE=$(awk '!/^[[:space:]]*(#|$)/ {v=$1} END{print v}' "$ROOT/scripts/qa/harness-baseline.txt")
 
 # ---------------------------------------------------------------- 场景 1
 echo "== 场景 1：清单归零 + 日志全绿 → 应 PASS =="
@@ -193,28 +196,65 @@ if printf '%s' "$OUT10" | grep -q "低于基线"; then ok "输出说明 PASS 低
 else bad "输出说明 PASS 低于基线" "$(printf '%s' "$OUT10" | tail -3)"; fi
 
 # ---------------------------------------------------------------- 场景 10b
-# R-17：有 SKIP 时门禁 5 必须**主动让位**，不能继续硬比基线。
-# 否则本机（PASS=64 / SKIP=42）与 CI（PASS=106 / SKIP=0）永远有一个是红的，
-# 而长期红的门禁等于没有门禁。让位之后由门禁 6 接手：谁没跑、缺件是否真缺、
-# 登记册有没有变长——三把更细的尺子。
-echo "== 场景 10b：有 SKIP 时门禁 5 让位（不比基线，也不静默） =="
+# 有 SKIP 时门禁 5 怎么判（D-8 改写了这里的规则，所以断言跟着改）。
+#
+# 旧规则是「SKIP>0 → PASS 下限不可比 → 整条门禁 5 不判」。理由是对的：本机
+# （PASS=64 / SKIP=42）与 CI（PASS=144 / SKIP=0）拿同一个绝对下限去比，总有一个红。
+# 但「不判」也把整条门禁变成了免检牌：把 40 个 runner 改成首行 exit 3，
+# PASS 掉到 60 也照样过——只要门禁 6 的名字还都在登记册里。
+#
+# 新规则：**每个 SKIP 从下限里等额扣掉**（PASS ≥ 基线 − SKIP）。
+# 不可比的是「PASS 的绝对值」，可比的是「PASS 有没有被 SKIP 兑掉」。
+# 所以这个场景拆成两条：
+#   10b  全部 SKIP、PASS=0  → 下限被扣到 0，放行（不能误伤缺环境的本机）
+#   10c  SKIP 一半、PASS=10 → 仍然红（这才是旧规则漏掉的那类）
+echo "== 场景 10b：全部 SKIP（PASS=0）→ 下限被扣到 0，应放行 =="
+N_RUNNERS=$(ls "$ROOT"/scripts/qa/run-*.sh | grep -vc 'run-all\.sh$')
 LOG10B="$WORK/qa10b.log"
 {
   for s in $(ls "$ROOT"/scripts/qa/run-*.sh | grep -v 'run-all\.sh$'); do
     echo "SKIP  ${s#"$ROOT"/}"
   done
-  echo "==== 汇总：PASS=0 SKIP=106 XFAIL=0 FAIL=0"
+  echo "==== 汇总：PASS=0 SKIP=$N_RUNNERS XFAIL=0 FAIL=0"
 } > "$LOG10B"
 set +e
 OUT10B=$(bash "$ROOT/scripts/qa/gate.sh" "$LOG10B" 2>&1)
+RC10B=$?
 set -e
-if printf '%s' "$OUT10B" | grep -q "PASS 下限不可比"; then ok "输出说明不可比（让位）"
-else bad "输出说明不可比（让位）" "$(printf '%s' "$OUT10B" | grep 'GATE' | head -4)"; fi
-if printf '%s' "$OUT10B" | grep -q "PASS=0 低于基线"; then
-  bad "不再拿 PASS 跟基线比" "仍然报了低于基线"
+# 退出码这里**不断言 0**：全部 SKIP 时门禁 6 会红（147 个 SKIP 里只有 42 个在登记册上），
+# 那是它该做的事。这一条只验门禁 5 的判定，所以断言"红不是门禁 5 造成的"。
+if printf '%s' "$OUT10B" | grep -qE "低于基线|低于本轮下限"; then
+  bad "门禁 5 不再误伤全 SKIP 的本机" "仍然报了 PASS 不足"
 else
-  ok "不再拿 PASS 跟基线比"
+  ok "门禁 5 不再误伤全 SKIP 的本机"
 fi
+if printf '%s' "$OUT10B" | grep -q "下限 0"; then ok "输出说明下限被扣到 0（不是静默放行）"
+else bad "输出说明下限被扣到 0（不是静默放行）" "$(printf '%s' "$OUT10B" | grep 'GATE' | head -4)"; fi
+if printf '%s' "$OUT10B" | grep -q "低于基线"; then
+  bad "不再拿 PASS 跟裸基线比" "仍然报了低于基线"
+else
+  ok "不再拿 PASS 跟裸基线比"
+fi
+
+# ---------------------------------------------------------------- 场景 10c
+# 这一条是 D-8 的核心：旧规则下它会被放过（SKIP>0 → 整条门禁不判）。
+# 构造：一半 runner 报 SKIP，PASS 只有 10 —— 低于「基线 − SKIP」很远。
+echo "== 场景 10c：SKIP 一半但 PASS 严重不足 → 应失败（旧规则漏掉的那类） =="
+HALF=$((N_RUNNERS / 2))
+LOG10C="$WORK/qa10c.log"
+{
+  for s in $(ls "$ROOT"/scripts/qa/run-*.sh | grep -v 'run-all\.sh$' | head -"$HALF"); do
+    echo "SKIP  ${s#"$ROOT"/}"
+  done
+  echo "==== 汇总：PASS=10 SKIP=$HALF XFAIL=0 FAIL=0"
+} > "$LOG10C"
+set +e
+OUT10C=$(bash "$ROOT/scripts/qa/gate.sh" "$LOG10C" 2>&1)
+RC10C=$?
+set -e
+if [ "$RC10C" -ne 0 ]; then ok "退出码非 0"; else bad "退出码非 0" "实际 0（SKIP 成了免检牌）"; fi
+if printf '%s' "$OUT10C" | grep -q "低于本轮下限"; then ok "输出说明低于本轮下限"
+else bad "输出说明低于本轮下限" "$(printf '%s' "$OUT10C" | grep 'GATE' | head -4)"; fi
 
 # ---------------------------------------------------------------- 场景 11
 # 产物陈旧：PASS 数够、FAIL=0，但结论不可信 —— 依赖 classpath 的 harness 读的是旧字节码，
@@ -239,7 +279,7 @@ if [ "$RC11" -ne 0 ]; then ok "退出码非 0"; else bad "退出码非 0" "实�
 if printf '%s' "$OUT11" | grep -q "产物比源码旧"; then ok "输出说明产物陈旧"
 else bad "输出说明产物陈旧" "$(printf '%s' "$OUT11" | grep 'GATE' | head -3)"; fi
 # 红必须来自产物陈旧，不是别的门禁顺带触发（否则断言指向了别的原因）
-if printf '%s' "$OUT11" | grep -q "GATE OK 5/5"; then ok "门禁 5 仍放行（红的是产物陈旧）"
+if printf '%s' "$OUT11" | grep -q "GATE OK 5/6"; then ok "门禁 5 仍放行（红的是产物陈旧）"
 else bad "门禁 5 仍放行（红的是产物陈旧）" "$(printf '%s' "$OUT11" | grep 'GATE' | head -5)"; fi
 
 # ---------------------------------------------------------------- 场景 12
@@ -261,7 +301,7 @@ if [ "$RC12" -ne 0 ]; then ok "退出码非 0"; else bad "退出码非 0" "实�
 if printf '%s' "$OUT12" | grep -q "没有在 skip-allowlist.txt 登记"; then ok "输出说明未登记"
 else bad "输出说明未登记" "$(printf '%s' "$OUT12" | grep 'GATE' | head -3)"; fi
 # 红必须来自门禁 6：门禁 4 满足、门禁 5 让位，否则断言指向了别的原因
-if printf '%s' "$OUT12" | grep -q "GATE OK 4/5"; then ok "门禁 4 仍放行（红的是门禁 6）"
+if printf '%s' "$OUT12" | grep -q "GATE OK 4/6"; then ok "门禁 4 仍放行（红的是门禁 6）"
 else bad "门禁 4 仍放行（红的是门禁 6）" "$(printf '%s' "$OUT12" | grep 'GATE' | head -5)"; fi
 
 # ---------------------------------------------------------------- 场景 13

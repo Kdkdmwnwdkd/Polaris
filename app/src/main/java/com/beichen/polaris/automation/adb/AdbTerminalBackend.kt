@@ -72,8 +72,18 @@ internal class AdbTerminalBackend : TerminalBackend {
     @Volatile
     private var closed = false
 
+    /**
+     * shell 自己结束了（读到 null 或 Exit 帧）：与 [closed]（我们主动 release）分开记。
+     *
+     * 不分开的后果是实测过的：`stream` 要等 `release()` 才清，而 readLoop 在 EOF 上只是
+     * `break`，于是 shell 已经死了、`isAlive` 仍报 true。池据此复用这条死会话，
+     * 下一条命令写进一个关掉的流，一路等到 20 分钟工具预算烧完才报 `send_failed`。
+     */
+    @Volatile
+    private var exited = false
+
     override val isAlive: Boolean
-        get() = !closed && stream != null
+        get() = !closed && !exited && stream != null
 
     override suspend fun start(): Boolean = withContext(Dispatchers.IO) {
         if (stream != null) return@withContext isAlive
@@ -139,6 +149,9 @@ internal class AdbTerminalBackend : TerminalBackend {
                 }
             }
         } finally {
+            // 读循环退出即"这条 shell 不再可用"，无论是因为 EOF、退出帧还是异常。
+            // 先于 channel.close() 置位：池可能在另一个线程同时问 isAlive。
+            exited = true
             channel.close()
         }
     }

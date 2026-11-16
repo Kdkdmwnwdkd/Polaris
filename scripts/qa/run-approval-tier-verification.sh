@@ -36,6 +36,14 @@ hasnt() {
     if grep -qF -- "$needle" "$file" 2>/dev/null; then fail "$name（不该出现：$needle）"; else pass "$name"; fi
 }
 
+# 正则版：判「这两样东西出现在同一行」比判一整行原文稳。D-4 把白名单变量从
+# sessionAllowed（当前活跃会话）换成 allowed（发起审批那个会话），原文断言就整条失效了——
+# 而它守的语义（放行判定必须走 allows、用的必须是归组键）一点没变。
+has_re() {
+    local name="$1" file="$2" pat="$3"
+    if grep -qE -- "$pat" "$file" 2>/dev/null; then pass "$name"; else fail "$name（无匹配：$pat）"; fi
+}
+
 echo "== 静态：结构 =="
 
 if [ -f "$TIER" ]; then pass "档位规则存在"; else fail "档位规则缺失：$TIER"; fi
@@ -67,7 +75,10 @@ has "Facade 有 setter" "$FACADE" "fun setApprovalTier(mode: String)"
 has "视图模型有状态" "$VM" "approvalTier: StateFlow<String>"
 has "视图模型有 setter" "$VM" "fun setApprovalTier"
 # 传的是归组键而不是 grant.key：shell 的 key 带命令前缀，拿 key 比集合永远不等。
-has "审批入口走档位判定" "$VM" "ApprovalTier.shouldSkipDialog(mode, group, ApprovalScope.allows(grant, sessionAllowed))"
+has_re "审批入口走档位判定" "$VM" 'ApprovalTier\.shouldSkipDialog\(mode, group, ApprovalScope\.allows\(grant, [A-Za-z_]+\)\)'
+# D-4：白名单必须按**发起审批的那个会话**取，不能读当前活跃会话——
+# 这行取值之后要跨过一次用户交互（等弹窗），期间用户可能已经切走了。
+has_re "白名单按发起会话取" "$VM" 'val allowed = ApprovalWhitelistStore\.of\(convId\)'
 has "审批入口取归组键" "$VM" "val group = ApprovalGrouping.groupOf(tool.name)"
 # 逐步确认档下截图回合缓存要失效，否则「每次都问」名不副实。
 has "逐步确认不用截图回合缓存" "$VM" "mode != ApprovalTier.STRICT &&"

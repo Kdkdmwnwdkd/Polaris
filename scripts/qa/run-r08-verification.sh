@@ -104,14 +104,23 @@ else
 fi
 
 # G2：approveAlways 必须看 memorizable。只看 group 就写白名单，等于把 rm 记进去了。
-if grep -q 'if (pending.grant.memorizable) sessionAllowed += pending.grant.key' "$VM"; then
+# D-4 之后写法变成「写进**发起审批那个会话**的桶」，所以匹配放宽到
+# `<任意接收者> += pending.grant.key`，但两个要害仍然逐个断言：
+# 必须被 memorizable 挡住，且必须用 pending.convId 而不是当前活跃会话。
+if grep -q 'if (pending.grant.memorizable) {' "$VM"; then
   g_good "G2 approveAlways 对不可记忆档不写白名单"
 else
-  g_bad "G2 approveAlways 仍在无条件写 sessionAllowed"
+  g_bad "G2 approveAlways 仍在无条件写白名单"
+fi
+if grep -q 'ApprovalWhitelistStore.of(pending.convId) += pending.grant.key' "$VM"; then
+  g_good "G2b 白名单写进发起审批的那个会话（不是当前活跃会话）"
+else
+  g_bad "G2b 白名单落错会话桶 —— 在 A 会话点的「不再询问」会记进 B"
 fi
 
-# G3：白名单判定要走 allows（它同时检查 memorizable）。直接 `key in sessionAllowed` 会漏掉防御。
-if grep -q 'ApprovalScope.allows(grant, sessionAllowed)' "$VM"; then
+# G3：白名单判定要走 allows（它同时检查 memorizable）。直接 `key in <集合>` 会漏掉防御。
+# 变量名从 sessionAllowed 改成 allowed（D-4：按发起会话取），所以用正则而不是原文。
+if grep -qE 'ApprovalScope\.allows\(grant, [A-Za-z_]+\)' "$VM"; then
   g_good "G3 放行判定走 ApprovalScope.allows"
 else
   g_bad "G3 放行判定没走 allows"

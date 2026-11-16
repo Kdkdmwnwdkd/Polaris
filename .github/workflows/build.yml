@@ -623,6 +623,12 @@ jobs:
           (cd "$OUT/asr-fast" && zip -qry "$OUT/asr-fast.zip" .)
           (cd "$OUT/asr-accurate" && zip -qry "$OUT/asr-accurate.zip" .)
           (cd "$OUT/matcha" && zip -qry "$OUT/tts-matcha.zip" .)
+
+          # ZipVoice 的包里带 espeak-ng-data（GPL-3.0）。用户在设备上下载的是**这一个 zip**，
+          # 不是 APK——所以许可全文与源码获取声明必须打进包里，光放 APK 的 assets 覆盖不到
+          # 这条分发路径。见 docs/DEPENDENCIES.md §4.3。
+          cp app/src/main/assets/3rdparty/espeak-ng/COPYING "$OUT/zipvoice/espeak-ng-COPYING.txt"
+          cp app/src/main/assets/3rdparty/espeak-ng/SOURCE_OFFER.txt "$OUT/zipvoice/espeak-ng-SOURCE-OFFER.txt"
           (cd "$OUT/zipvoice" && zip -qry "$OUT/tts-zipvoice.zip" .)
 
           # 清单：`资产名 字节 sha256`。App 下完整包前先用它判「服务端到底有没有这个模型」，

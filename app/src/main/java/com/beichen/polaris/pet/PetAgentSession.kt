@@ -10,7 +10,9 @@ import com.beichen.polaris.core.LLMConfig
 import com.beichen.polaris.core.ProviderManager
 import com.beichen.polaris.core.SystemMessage
 import com.beichen.polaris.core.ToolRegistry
+import com.beichen.polaris.core.agent.PlanModeGuard
 import com.beichen.polaris.core.agent.RealAgentLoop
+import com.beichen.polaris.core.agent.productionSeams
 import com.beichen.polaris.core.workspace.WorkspaceStore
 import com.beichen.polaris.memory.MemorySearchTool
 import com.beichen.polaris.memory.MemoryStore
@@ -112,9 +114,22 @@ class PetAgentSession(context: Context) {
             // 工具表只有五个，不该被「小模型核心集」再裁一遍——裁掉 read_file 它就瞎了
             forceFullTools = true,
             // 瞬时抖动重试一次就够：桌宠是即时交互，等 30 秒重试不如早点说「没连上」
-            providerRetry = 1
+            providerRetry = 1,
             // approval 保持 null：见类注释「工具集为什么这么小」。
             // 加任何有副作用的工具之前，先把审批通道补上。
+            //
+            // D-3：接缝③仍然要装。它现在是空转的（四个工具全只读），但空转的原因是
+            // 「工具表恰好只读」这个**当下事实**，不是契约——[NO_SIDE_EFFECT] 一旦松动，
+            // 守卫是唯一不需要改代码就能拦住的那一层。planMode 直读 SharedPreferences：
+            // 同一进程内写入立即可见，不必跟 ChatViewModel 同步状态。
+            seams = productionSeams(
+                toolGuards = listOf(
+                    PlanModeGuard(
+                        planMode = { ConfigStore(appContext).isPlanModeEnabled() },
+                        readOnlyOf = { name -> registry.get(name)?.readOnly ?: false },
+                    )
+                )
+            )
         )
     }
 

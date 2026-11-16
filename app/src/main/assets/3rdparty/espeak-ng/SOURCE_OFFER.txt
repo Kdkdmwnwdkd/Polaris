@@ -1,0 +1,45 @@
+北辰（Polaris）—— espeak-ng 数据文件的源码获取声明
+==================================================
+
+本应用在「声音克隆」（ZipVoice）功能中会下载并读取 espeak-ng 的词典与音素数据
+（`espeak-ng-data/` 目录）。该数据来自 espeak-ng 项目，按 **GNU General Public
+License 第 3 版**（GPL-3.0）分发。许可全文见同目录下的 `COPYING`。
+
+一、我们分发了什么
+
+  espeak-ng-data/ 目录下的数据文件（词典、音素表、语言配置），原样分发，未作修改。
+  它随 ZipVoice 模型包一起提供给用户，位置在应用私有目录
+  `filesDir/tts/zipvoice/espeak-ng-data/`，**不包含在安装包内**——只有用户主动
+  下载「声音克隆」模型时才会到达设备。
+
+二、对应的源码在哪
+
+  espeak-ng 项目主页：https://github.com/espeak-ng/espeak-ng
+  许可全文：https://www.gnu.org/licenses/gpl-3.0.txt
+
+  数据文件的生成脚本与源数据都在这两个位置：
+    - 仓库根目录 `espeak-ng-data/`（数据文件本身）
+    - `data/` 与 `dictsource/`（生成这些数据文件的源文件与词典源）
+
+  我们使用的数据文件由 sherpa-onnx 的 ZipVoice 模型包提供，该包内数据与上游
+  espeak-ng 仓库同一版本的内容一致，未作二次加工。
+
+三、怎么拿到源码
+
+  方式一（推荐，可复现）：
+      git clone https://github.com/espeak-ng/espeak-ng
+      git checkout <与所下载模型包对应的 tag>     # 例如 1.52
+      数据在 espeak-ng-data/，源文件在 data/ 与 dictsource/
+
+  方式二：向我们索取。发邮件到项目 issue 页
+      https://github.com/Kdkdmwnwdkd/Polaris/issues
+      说明需要 espeak-ng 源码，我们会提供与所分发数据文件对应的完整源码包
+      （含构建脚本），有效期三年，从你收到本应用之日起算。
+
+四、为什么这份声明单独存在
+
+  GPL-3.0 对「随产品分发」的要求是提供对应源码的获取方式，而不只是附一份许可全文。
+  数据文件不像 proot 那样是独立可执行程序（那种情况下传染边界很清楚），
+  所以这里按更严的口径处理：附许可全文 + 明确的源码获取渠道。
+
+  如果你在本应用里找不到本文件，说明你手上的版本不合规，请更新到最新版。

@@ -50,7 +50,18 @@ class SubAgentRunner(
      * 白名单一旦加进任何需要确认的工具，就是一条静默旁路。传上去，让安全属性
      * 由「白名单恰好没放危险工具」变成「执行器本身会问」。
      */
-    private val approval: ToolApproval? = null
+    private val approval: ToolApproval? = null,
+    /**
+     * D-3：接缝③穿透子代理边界。
+     *
+     * 子代理的工具表本来就按 [SubAgentLogic.NO_SIDE_EFFECT_TOOLS] 裁过一遍，所以
+     * 「计划模式下不许写」这条对它是**空转**的——但守卫链不该依赖「白名单恰好是安全的」。
+     * 今天白名单安全，明天有人给 `NO_SIDE_EFFECT_TOOLS` 加一个带副作用的工具，
+     * 子代理就成了一条绕过守卫的路，而且没有任何地方会响。
+     *
+     * 默认 [AgentSeams.NONE]：不传等价于改造前（harness 与既有调用点不必改）。
+     */
+    private val seams: AgentSeams = AgentSeams.NONE,
 ) {
 
     /**
@@ -108,7 +119,9 @@ class SubAgentRunner(
                     forceFullTools = true,
                     // R7：写进主回合日志，事件带 scope=sub:<标题>
                     journalTurn = subTurn,
-                    scope = subScope
+                    scope = subScope,
+                    // D-3：同一条守卫链——计划模式穿过子代理继续生效
+                    seams = seams
                 ).send(SubAgentLogic.userPrompt(task.instruction), emptyList(), emptyList())
             }
             val texts = history.mapNotNull { (it as? AssistantMessage)?.content }
