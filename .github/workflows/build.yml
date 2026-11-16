@@ -543,8 +543,11 @@ jobs:
             printf '%s' "$hit"
           }
 
+          # 必须带 token：匿名拉未认证的 asset 会被 403（要么限流，要么直接拒）。
+          # 2026-11-16 第一次跑就是这里挂的——`curl: (22) ... error: 403`。
           curl -fL --retry 3 --retry-delay 5 \
             -H "Accept: application/octet-stream" \
+            -H "Authorization: Bearer $GH_TOKEN" \
             -o /tmp/asr.tar.bz2 \
             "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/191971859"
           rm -rf /tmp/asr-src && mkdir -p /tmp/asr-src
@@ -562,6 +565,7 @@ jobs:
 
           curl -fL --retry 3 --retry-delay 5 \
             -H "Accept: application/octet-stream" \
+            -H "Authorization: Bearer $GH_TOKEN" \
             -o /tmp/asr2.tar.bz2 \
             "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/155854908"
           rm -rf /tmp/asr2-src && mkdir -p /tmp/asr2-src
