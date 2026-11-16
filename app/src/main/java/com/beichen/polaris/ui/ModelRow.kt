@@ -3,6 +3,9 @@ package com.beichen.polaris.ui
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.material.icons.Icons
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.runtime.Composable
@@ -51,6 +54,7 @@ fun ModelRow(
     var busy by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0.0f) }
     var error by remember { mutableStateOf<String?>(null) }
+    var confirmDelete by remember { mutableStateOf(false) }
 
     AkListItem(
         icon = if (spec.kind == ModelSpec.Kind.ASR) Icons.Outlined.Mic else Icons.Outlined.VolumeUp,
@@ -60,19 +64,15 @@ fun ModelRow(
             else -> "$title（约 ${spec.approxMb}MB）"
         },
         description = error ?: when {
-            ready -> "点一下可以删掉，随时能重下"
+            ready -> "点一下可以删掉，随时能重下（会先问一句）"
             busy -> hint
             else -> hint
         },
+        // 下载与删除是**两种**动作，不能都挂在「点一下」上：
+        // 已下载时点一下应该是「我想看看/我想换」，直接删掉 74MB 太容易误触。
         onClick = when {
             busy -> null
-            ready -> ({
-                downloader.remove()
-                ready = false
-                bytes = 0
-                error = null
-                onChanged()
-            })
+            ready -> ({ confirmDelete = true })
             else -> ({
                 busy = true
                 error = null
@@ -94,4 +94,28 @@ fun ModelRow(
             })
         },
     )
+
+    // 误删的代价是几十上百 MB 流量，且重下要等。所以删之前问一句。
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除「$title」？") },
+            text = {
+                Text("会删掉已下载的 ${max(1L, bytes / 1048576)}MB 模型。以后要用时再下一次就行。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    downloader.remove()
+                    ready = false
+                    bytes = 0
+                    error = null
+                    onChanged()
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("留着") }
+            },
+        )
+    }
 }

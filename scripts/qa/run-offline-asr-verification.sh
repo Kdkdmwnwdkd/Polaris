@@ -12,10 +12,10 @@ ROOT=$(pwd)
 ASR_DIR=app/src/main/java/com/beichen/polaris/audio/asr
 ENGINE=$ASR_DIR/StreamingAsr.kt
 INPUT=$ASR_DIR/LocalSpeechInput.kt
-INSTALLER=$ASR_DIR/AsrModelInstaller.kt
 MODEL_DIR=app/src/main/java/com/beichen/polaris/model
 DOWNLOADER=$MODEL_DIR/ModelDownloader.kt
 SPEC=$MODEL_DIR/ModelSpec.kt
+SCREEN=app/src/main/java/com/beichen/polaris/ui/VoiceEngineScreen.kt
 ACCURATE=$ASR_DIR/OfflineAsrEngine.kt
 ROUTER=$ASR_DIR/AsrRouter.kt
 PET=app/src/main/java/com/beichen/polaris/pet/PetVoice.kt
@@ -30,7 +30,7 @@ fail() { echo "  FAIL  $*"; f=$((f + 1)); }
 
 echo "[A] 模型：不进包、可删、下完要校验"
 
-for f1 in "$ENGINE" "$INPUT" "$INSTALLER" "$SHEET"; do
+for f1 in "$ENGINE" "$INPUT" "$DOWNLOADER" "$SPEC" "$SHEET"; do
   [ -f "$f1" ] || { fail "A0 缺文件 $f1"; }
 done
 
@@ -51,8 +51,10 @@ else
 fi
 
 # 删目录前必须释放原生句柄，否则那份模型在内存里继续占着，用户会以为「删了没效果」。
-if grep -qF 'onBeforeRemove = { router.releaseAll() }' "$INSTALLER"; then
-  pass "A3 删除先释放两套识别器，再删目录"
+# 删目录前必须释放原生句柄，否则那份模型在内存里继续占着，用户会以为「删了没效果」。
+# 释放挂在界面的删除回调上（模型行是通用的，识别页自己知道该放哪两套）。
+if grep -qF 'AsrDirectory.of(context).releaseAll()' "$SCREEN"; then
+  pass "A3 删除识别模型前先释放两套识别器"
 else
   fail "A3 删除没先 release —— 原生层仍持有已删文件"
 fi
