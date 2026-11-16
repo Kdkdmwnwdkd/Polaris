@@ -92,22 +92,18 @@ jobs:
       - name: Fetch llama.cpp v0.7.0 (构建时拉取，不进仓库)
         run: ./scripts/fetch-llama.sh git
 
-      - name: Fetch Shizuku APK (内置一键安装用，构建时拉取，不进仓库)
-        # 不阻断构建：共享 runner IP 匿名调用 GitHub API 极易 429/403（限流）。
-        # 拿不到就跳过内置包——应用会退到官方发布页，功能不缺失，只是少一步便利。
-        #
-        # 2026-10-22 修：匿名调 API 被限流 → 包内没有 assets/shizuku.apk →
-        # apk 反验判 FAIL → QA 门禁把整次构建打红（fbd4c0d / 6196648 两连红）。
-        # 两处一起改：① 带 token 调 API（配额从 60/h 提到 5000/h）；
-        #              ② 下载没成功时导出标记，让反验把这一项判为 SKIP 而不是 FAIL
-        #                 （「CI 没拉到」和「代码把资产弄丢了」是两件事，不能同一个判定）。
+      # Shizuku 安装包：2026-11-16 起不再进 APK，改成「发布成可选组件，用户点一下再下」。
+      # 只有用 Shizuku 提权做自动化的人才需要它（2.5MB），其余人不该替它付包体。
+      #
+      # 仍然不阻断构建：共享 runner 的 IP 匿名调 GitHub API 极易 429/403。
+      # 拿不到就少一件资产，App 点安装时会退到官方发布页——功能不缺，只多一步。
+      - name: Fetch Shizuku APK (供可选组件打包，不进 APK)
         continue-on-error: true
         run: |
-          mkdir -p app/src/main/assets
+          mkdir -p /tmp/optional
           # 同时取 browser_download_url 与 asset id：前者走 github.com，后者走
           # api.github.com → release-assets.githubusercontent.com，是两条不同的链路。
-          # 2026-11-08 起 github.com 的 releases 下载持续 504（Gradle 分发包同一根因），
-          # 只剩 API 这条能用，所以必须留兜底。
+          # github.com 的 releases 下载曾长期 504，所以必须留兜底。
           META=$(curl -sSL --max-time 60 \
                   -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                   -H "Accept: application/vnd.github+json" \
@@ -117,21 +113,21 @@ jobs:
           AID=${META##* }
           if [ -n "$URL" ]; then
             echo "downloading $URL"
-            if ! curl -fL --retry 3 --retry-delay 5 --max-time 180 "$URL" -o app/src/main/assets/shizuku.apk; then
+            if ! curl -fL --retry 3 --retry-delay 5 --max-time 180 "$URL" -o /tmp/optional/shizuku.apk; then
               echo "WARN: 直链失败（github.com 504），改走 API asset 接口"
-              rm -f app/src/main/assets/shizuku.apk
+              rm -f /tmp/optional/shizuku.apk
               curl -fL --retry 3 --retry-delay 5 --max-time 180 \
                 -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                 -H "Accept: application/octet-stream" \
                 "https://api.github.com/repos/RikkaApps/Shizuku/releases/assets/$AID" \
-                -o app/src/main/assets/shizuku.apk \
-                || { rm -f app/src/main/assets/shizuku.apk; echo "WARN: 下载失败，跳过内置安装包"; }
+                -o /tmp/optional/shizuku.apk \
+                || { rm -f /tmp/optional/shizuku.apk; echo "WARN: 下载失败，跳过 Shizuku 组件"; }
             fi
           else
-            echo "WARN: 未找到 Shizuku APK（API 限流或发布变更），跳过内置安装包（应用会退到官方发布页）"
+            echo "WARN: 未找到 Shizuku APK（API 限流或发布变更），跳过该组件（App 会退到官方发布页）"
           fi
           # 给下游反验一个明确信号：没拉到 ≠ 代码有问题
-          if [ ! -s app/src/main/assets/shizuku.apk ]; then
+          if [ ! -s /tmp/optional/shizuku.apk ]; then
             echo "POLARIS_SHIZUKU_ASSET=absent" >> "$GITHUB_ENV"
           fi
 
@@ -157,6 +153,13 @@ jobs:
           # 所以必须在构建阶段红。
           if [ -d app/src/main/assets/tts ] && [ -n "$(ls -A app/src/main/assets/tts)" ]; then
             echo "::error::assets/tts 非空（$(du -sh app/src/main/assets/tts | cut -f1)）——模型应改成应用内下载"
+            exit 1
+          fi
+
+          # 同理：容器归档与 Shizuku 安装包也不该在包里。它们在磁盘上「看起来还在」
+          # 的时候最容易悄悄被打进去（比如本地放过一份忘了删），所以同样在构建阶段红。
+          if [ -e app/src/main/assets/shizuku.apk ] || [ -d app/src/main/assets/containers ]; then
+            echo "::error::可选组件又回到 APK 里了（shizuku.apk / assets/containers）——应走应用内下载"
             exit 1
           fi
 
@@ -523,7 +526,7 @@ jobs:
           # 四件资产 + 清单全在才跳过。只看清单会漏掉「上次传到一半崩了」——
           # 那种情况下清单在、zip 少一个，App 会一直报「服务端还没上传」。
           complete=1
-          for a in asr-fast.zip asr-accurate.zip tts-matcha.zip tts-zipvoice.zip model-manifest.txt; do
+          for a in asr-fast.zip asr-accurate.zip tts-matcha.zip tts-zipvoice.zip rootfs-alpine.zip shizuku.zip model-manifest.txt; do
             grep -qx "$a" <<<"$HAVE" || complete=0
           done
           if [ "$complete" = "1" ]; then
@@ -588,6 +591,24 @@ jobs:
 
           # —— 打包 ——
           # -q 安静、-r 递归、-y 保留符号链接本身（espeak-ng-data 里没有，但别哪天中招）。
+          # —— 两个可选组件：容器 rootfs（8.2MB）与 Shizuku（2.5MB）——
+          # 它们以前随包。用户的原话是「你要什么就自己下，而不是全部下好再给你」。
+          # rootfs 顺手 gzip（8.2MB → 约 3MB）：RootfsManager 按魔数识别 gzip，
+          # 落地后直接解，不需要额外一步。
+          mkdir -p "$OUT/rootfs-alpine"
+          gzip -9 -c scripts/assets/containers/alpine.tar > "$OUT/rootfs-alpine/alpine.tar.gz"
+          (cd "$OUT/rootfs-alpine" && zip -qry "$OUT/rootfs-alpine.zip" .)
+
+          # Shizuku 拿不到就不发这件资产：清单里也不写，App 点安装会直接退官方页，
+          # 而不是对着一个 404 猜「是不是网络问题」。
+          if [ -s /tmp/optional/shizuku.apk ]; then
+            mkdir -p "$OUT/shizuku"
+            cp /tmp/optional/shizuku.apk "$OUT/shizuku/shizuku.apk"
+            (cd "$OUT/shizuku" && zip -qry "$OUT/shizuku.zip" .)
+          else
+            echo "::warning::没有 Shizuku 安装包，本轮不发该组件"
+          fi
+
           (cd "$OUT/asr-fast" && zip -qry "$OUT/asr-fast.zip" .)
           (cd "$OUT/asr-accurate" && zip -qry "$OUT/asr-accurate.zip" .)
           (cd "$OUT/matcha" && zip -qry "$OUT/tts-matcha.zip" .)
@@ -597,7 +618,8 @@ jobs:
           # 也用它核对字节数——下了一半的 zip 解出来只会是「模型文件缺失」，
           # 而那句话对用户毫无意义。
           : > "$OUT/model-manifest.txt"
-          for f in asr-fast.zip asr-accurate.zip tts-matcha.zip tts-zipvoice.zip; do
+          for f in asr-fast.zip asr-accurate.zip tts-matcha.zip tts-zipvoice.zip rootfs-alpine.zip shizuku.zip; do
+            [ -f "$OUT/$f" ] || continue
             printf '%s %s %s\n' "$f" "$(stat -c%s "$OUT/$f")" \
               "$(sha256sum "$OUT/$f" | cut -d' ' -f1)" >> "$OUT/model-manifest.txt"
           done

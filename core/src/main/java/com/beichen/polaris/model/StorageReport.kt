@@ -44,6 +44,18 @@ data class StorageReport(
     /** 已装的模型（只留真正占了字节的）。 */
     val installedModels: List<Pair<ModelSpec, Long>> get() = models.filter { it.second > 0 }
 
+    /**
+     * 按用途筛（语音页只算 ASR/TTS，容器页只算 CONTAINER）。
+     *
+     * 分用途是必要的：语音页把「Alpine 容器 3MB」算进「语音模型」，
+     * 用户会以为语音又偷偷多下了东西。
+     */
+    fun ofKind(kind: ModelSpec.Kind): List<Pair<ModelSpec, Long>> =
+        models.filter { it.first.kind == kind }
+
+    fun bytesOfKind(vararg kinds: ModelSpec.Kind): Long =
+        models.filter { it.first.kind in kinds }.sumOf { it.second }
+
     val modelBytes: Long get() = models.sumOf { it.second }
 
     /** 应用本体：包体 + 解压的运行时库。删模型不会动这一笔。 */

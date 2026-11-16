@@ -1,7 +1,7 @@
 package com.beichen.polaris.model
 
 /**
- * 应用里所有「装得下、删得掉」的模型。
+ * 应用里所有「装得下、删得掉」的可选内容。
  *
  * ## 为什么做成一张表
  *
@@ -10,7 +10,12 @@ package com.beichen.polaris.model
  * 安装包 361MB，其中 335MB 是「只想打字的人永远用不到」的权重。
  *
  * 收在一张表里的好处是界面能一屏列全（体积、状态、下载、删除都一样），
- * 加一套模型不用再写一遍下载器——只需要在这里加一行。
+ * 加一套内容不用再写一遍下载器——只需要在这里加一行。
+ *
+ * 2026-11-16 晚：这张表从「语音模型」扩成「可选内容」。容器根文件系统（8MB）与
+ * Shizuku 安装包（2.5MB）也搬了进来——它们和模型是同一类东西：**一小撮人会用，
+ * 其余人一个字节都不该为此付安装包体积**。用户的原话是「你要什么就自己下，
+ * 而不是全部下好再给你」。
  *
  * ## 为什么 zip 而不是逐文件
  *
@@ -76,6 +81,30 @@ enum class ModelSpec(
         ),
     ),
 
+    /** Alpine 根文件系统：只在使用 Linux 容器时才需要，8MB。 */
+    RootfsAlpine(
+        zipName = "rootfs-alpine.zip",
+        home = "rootfs",
+        dirName = "alpine",
+        label = "Alpine 容器",
+        approxMb = 3,
+        kind = Kind.CONTAINER,
+        // 归档是 tar.gz（3MB）而不是裸 tar（8MB）：gzip 这一层能省 5MB 流量，
+        // 而 RootfsManager 本来就按魔数识别 gzip。
+        required = listOf("alpine.tar.gz"),
+    ),
+
+    /** Shizuku 安装包：只在用「靠 Shizuku 提权」的自动化功能时才需要，2.5MB。 */
+    Shizuku(
+        zipName = "shizuku.zip",
+        home = "tools",
+        dirName = "shizuku",
+        label = "Shizuku",
+        approxMb = 3,
+        kind = Kind.TOOL,
+        required = listOf("shizuku.apk"),
+    ),
+
     /** ZipVoice distill int8 + vocos 24kHz：零样本克隆，必须带参考音频才出声。 */
     TtsZipVoice(
         zipName = "tts-zipvoice.zip",
@@ -96,5 +125,17 @@ enum class ModelSpec(
     ;
 
     /** 界面上按用途分组，也决定「删之前该释放哪边」。 */
-    enum class Kind { ASR, TTS }
+    enum class Kind {
+        /** 语音识别：删前要释放两套识别器。 */
+        ASR,
+
+        /** 语音合成：删前要释放 TTS 引擎。 */
+        TTS,
+
+        /** 容器根文件系统：删前要停掉容器。 */
+        CONTAINER,
+
+        /** 外部工具包（Shizuku）：删了不影响运行中的应用。 */
+        TOOL,
+    }
 }

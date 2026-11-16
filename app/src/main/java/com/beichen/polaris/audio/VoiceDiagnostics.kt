@@ -50,7 +50,7 @@ object VoiceDiagnostics {
         sb.appendLine("麦克风权限：${if (micGranted) "已授予" else "未授予 ← 语音输入与克隆录音都需要它"}")
         sb.appendLine("")
 
-        sb.appendLine("—— 模型（都在应用私有目录，可下可删）——")
+        sb.appendLine("—— 可选内容（都在应用私有目录，可下可删）——")
         ModelSpec.values().forEach { spec ->
             val d = ModelDownloader(app, spec)
             val state = if (d.isInstalled()) "已装 ${d.bytesOnDisk() / 1048576}MB" else "未装"

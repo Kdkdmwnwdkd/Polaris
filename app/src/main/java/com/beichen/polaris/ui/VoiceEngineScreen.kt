@@ -72,16 +72,19 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
 
         // 用户的第一反应是「怎么占这么多」。所以先把账摊开，再谈装哪套——
         // 顺序反过来他会以为整页都在劝他再占地方。
+        // 只算语音那几套：容器 rootfs 与 Shizuku 也在这张表里，但把它们算进
+        // 「语音模型」会让用户以为语音又偷偷多下了东西。
+        val voiceModels = report.ofKind(ModelSpec.Kind.ASR) + report.ofKind(ModelSpec.Kind.TTS)
+        val voiceBytes = report.bytesOfKind(ModelSpec.Kind.ASR, ModelSpec.Kind.TTS)
+        val voiceInstalled = voiceModels.filter { it.second > 0 }
+
         AkGroup(
             title = "占了多大",
-            description = report.let {
-                if (it.installedModels.isEmpty()) {
-                    "现在只占安装包本身（${formatBytes(it.bodyBytes)}），一套模型都没下"
-                } else {
-                    "一共 ${formatBytes(it.totalBytes)}，其中可删的模型 ${
-                        formatBytes(it.modelBytes)
-                    }（${it.installedModels.size} 套）"
-                }
+            description = if (voiceInstalled.isEmpty()) {
+                "现在只占安装包本身（${formatBytes(report.bodyBytes)}），一套语音模型都没下"
+            } else {
+                "语音这一块 ${formatBytes(voiceBytes)}（${voiceInstalled.size} 套）。" +
+                    "容器与 Shizuku 单独算，不在这里"
             },
         ) {
             AkListItem(
@@ -94,11 +97,11 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
             )
             AkListItem(
                 icon = null,
-                title = "语音模型 · ${formatBytes(report.modelBytes)}",
-                description = if (report.installedModels.isEmpty()) {
+                title = "语音模型 · ${formatBytes(voiceBytes)}",
+                description = if (voiceInstalled.isEmpty()) {
                     "还没装。要说话识别或离线播报时才需要下，不下也能用在线音色"
                 } else {
-                    report.installedModels.joinToString("、") {
+                    voiceInstalled.joinToString("、") {
                         "${it.first.label} ${formatBytes(it.second)}"
                     } + "。每一条都可以在下面删掉"
                 },

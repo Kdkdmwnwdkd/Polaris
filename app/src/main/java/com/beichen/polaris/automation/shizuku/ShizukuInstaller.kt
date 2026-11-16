@@ -17,16 +17,22 @@ import java.io.File
  *  - 让用户自己开浏览器找 releases 页，等于把「装一个 App」变成「找安装包」；
  *  - Shizuku 是 Apache-2.0 开源、官方签名发布，内置安装与从官网下载完全等价。
  *
- * APK 来源（**不进仓库**，构建时由 CI 拉取到 `app/src/main/assets/shizuku.apk`）：
- * 见 `.github/workflows/build.yml` 的「Fetch Shizuku APK」步骤；
- * 本地未放置该文件时，[hasBundledApk] 为 false，调用方自动降级到官方发布页。
+ * APK 来源（2026-11-16 改）：**不再随包**，改成应用内按需下载（2.5MB，
+ * `ModelSpec.Shizuku` → `filesDir/tools/shizuku/shizuku.apk`）。理由与四个语音模型一样：
+ * 只有用 Shizuku 提权的人需要它，其余人没必要替这 2.5MB 付安装包体积。
+ *
+ * 没下过时 [install] 返回 [Result.NEED_DOWNLOAD]，调用方先下载再装。
  */
 object ShizukuInstaller {
 
     private const val TAG = "ShizukuInstaller"
 
-    /** assets 中的文件名。 */
-    const val ASSET_NAME = "shizuku.apk"
+    /** 安装包文件名（下载落地后就是这个）。 */
+    const val APK_NAME = "shizuku.apk"
+
+    /** 下载落地目录：`filesDir/tools/shizuku/`，与 `ModelSpec.Shizuku` 的 home/dirName 对齐。 */
+    private fun apkFile(context: Context): File =
+        File(File(context.filesDir, "tools/shizuku"), APK_NAME)
 
     /** 解出到 cacheDir 下的子目录（须与 `res/xml/file_paths.xml` 的 shizuku 路径一致）。 */
     private const val CACHE_DIR = "shizuku"
@@ -39,17 +45,15 @@ object ShizukuInstaller {
         /** 未授予「安装未知应用」：已跳转该设置页，用户回来再点一次。 */
         NEED_UNKNOWN_SOURCES,
 
-        /** 包内没有内置 APK（本地构建常见）：调用方应退到官方发布页。 */
-        NO_BUNDLED_APK,
+        /** 还没下载安装包：调用方应先去下载（[ModelSpec.Shizuku]），下完再点一次。 */
+        NEED_DOWNLOAD,
 
         /** 解包/拉起失败：调用方退到官方发布页。 */
         FAILED
     }
 
-    /** 包内是否带内置 APK（不抛异常，本地无该文件时返回 false）。 */
-    fun hasBundledApk(context: Context): Boolean = runCatching {
-        context.assets.list("")?.contains(ASSET_NAME) == true
-    }.getOrDefault(false)
+    /** 安装包是否已下载。 */
+    fun isDownloaded(context: Context): Boolean = apkFile(context).let { it.isFile && it.length() > 0 }
 
     /**
      * 用内置 APK 拉起系统安装器。
@@ -58,7 +62,7 @@ object ShizukuInstaller {
      * ACTION_VIEW(application/vnd.android.package-archive)。全程不静默安装（系统不允许，也不需要）。
      */
     fun install(context: Context): Result {
-        if (!hasBundledApk(context)) return Result.NO_BUNDLED_APK
+        if (!isDownloaded(context)) return Result.NEED_DOWNLOAD
 
         // Android 8.0+：必须先允许本应用「安装未知应用」
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -76,11 +80,11 @@ object ShizukuInstaller {
         }
 
         return try {
+            // 拷到 cacheDir 再交出去：FileProvider 的路径是按 cacheDir/shizuku 授权的
+            // （见 res/xml/file_paths.xml），filesDir 那份不在授权范围内。
             val dir = File(context.cacheDir, CACHE_DIR).apply { mkdirs() }
-            val apk = File(dir, ASSET_NAME)
-            context.assets.open(ASSET_NAME).use { input ->
-                apk.outputStream().use { output -> input.copyTo(output) }
-            }
+            val apk = File(dir, APK_NAME)
+            apkFile(context).copyTo(apk, overwrite = true)
             val uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
@@ -92,7 +96,7 @@ object ShizukuInstaller {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(intent)
-            AgentLogger.i(TAG, "已拉起内置 Shizuku 安装器（${apk.length()} 字节）")
+            AgentLogger.i(TAG, "已拉起 Shizuku 安装器（${apk.length()} 字节）")
             Result.INSTALLER_LAUNCHED
         } catch (t: Throwable) {
             AgentLogger.w(TAG, "内置 Shizuku 安装失败：${t.message}")

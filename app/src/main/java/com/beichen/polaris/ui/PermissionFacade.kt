@@ -8,11 +8,14 @@ import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.Toast
 import com.beichen.polaris.automation.AgentNotificationListener
 import com.beichen.polaris.automation.DeviceContext
 import com.beichen.polaris.automation.DeviceContextStore
 import com.beichen.polaris.automation.shizuku.ShizukuInstaller
 import com.beichen.polaris.automation.shizuku.ShizukuShell
+import com.beichen.polaris.model.ModelDownloader
+import com.beichen.polaris.model.ModelSpec
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -143,7 +146,8 @@ internal class PermissionFacade(
                 when (ShizukuInstaller.install(context)) {
                     ShizukuInstaller.Result.INSTALLER_LAUNCHED,
                     ShizukuInstaller.Result.NEED_UNKNOWN_SOURCES -> Unit
-                    ShizukuInstaller.Result.NO_BUNDLED_APK,
+                    // 安装包不再随包（2026-11-16）：先下 2.5MB。
+                    ShizukuInstaller.Result.NEED_DOWNLOAD -> downloadShizuku(context, afterProbe)
                     ShizukuInstaller.Result.FAILED -> ShizukuInstaller.openReleasePage(context)
                 }
             }
@@ -164,6 +168,28 @@ internal class PermissionFacade(
         // 拉起的 Shizuku 可能需要一点时间才应答，这次探测是「尽力而为」：
         // 真正的就绪状态由 Binder 回调 / 用户回到 App 后的复检给出。
         refreshShizukuStatus(afterProbe)
+    }
+
+    /**
+     * 没下过 Shizuku 安装包时：先下 2.5MB，再让用户点一次。
+     *
+     * 不做「下完自动拉安装器」：系统安装框本来就多一次确认，再叠上几秒网络等待，
+     * 用户会分不清自己刚才点的是哪个。下完提示一句、让他自己再点，链路更清楚。
+     */
+    private fun downloadShizuku(context: Context, afterProbe: () -> Unit) {
+        Toast.makeText(context, "正在下载 Shizuku 安装包（约 2.5MB）…", Toast.LENGTH_SHORT).show()
+        scope.launch {
+            val r = runCatching { ModelDownloader(app, ModelSpec.Shizuku).download { _, _, _ -> } }
+            withContext(Dispatchers.Main) {
+                r.onSuccess {
+                    Toast.makeText(context, "下好了，再点一次「安装」", Toast.LENGTH_LONG).show()
+                    afterProbe()
+                }.onFailure { e ->
+                    Toast.makeText(context, "下载失败：${e.message}", Toast.LENGTH_LONG).show()
+                    ShizukuInstaller.openReleasePage(context)
+                }
+            }
+        }
     }
 
     /**

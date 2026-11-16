@@ -12,7 +12,10 @@ ROOT=$(pwd)
 ASR_DIR=app/src/main/java/com/beichen/polaris/audio/asr
 ENGINE=$ASR_DIR/StreamingAsr.kt
 INPUT=$ASR_DIR/LocalSpeechInput.kt
-MODEL_DIR=app/src/main/java/com/beichen/polaris/model
+# 模型层 2026-11-16 从 app 移到 core（容器 rootfs 也要用同一套下载器）。
+# 带兜底：路径再变一次也不至于让整段 [E][F][G] 全红。
+MODEL_DIR=core/src/main/java/com/beichen/polaris/model
+[ -d "$MODEL_DIR" ] || MODEL_DIR=app/src/main/java/com/beichen/polaris/model
 DOWNLOADER=$MODEL_DIR/ModelDownloader.kt
 SPEC=$MODEL_DIR/ModelSpec.kt
 SCREEN=app/src/main/java/com/beichen/polaris/ui/VoiceEngineScreen.kt
@@ -181,11 +184,12 @@ echo ""
 echo "[E] 音色模型：同样按需下载，安装包不带 335MB"
 
 # 四套模型必须在同一张表里。散着写会出现「识别能删、音色不能删」这种半套体验。
-for spec in AsrFast AsrAccurate TtsMatcha TtsZipVoice; do
+for spec in AsrFast AsrAccurate TtsMatcha TtsZipVoice RootfsAlpine Shizuku; do
   grep -qF "$spec(" "$SPEC" || fail "E1 ModelSpec 少了 $spec —— 那一套就没法下载/删除"
 done
 grep -qF 'TtsMatcha(' "$SPEC" && grep -qF 'TtsZipVoice(' "$SPEC" \
-  && pass "E1 四套模型统一登记（识别 2 + 音色 2）"
+  && grep -qF 'RootfsAlpine(' "$SPEC" && grep -qF 'Shizuku(' "$SPEC" \
+  && pass "E1 六套可选内容统一登记（识别 2 + 音色 2 + 容器 + Shizuku）"
 
 # 引擎读的必需文件必须与下载器判定的同一份，否则「下载说装好了、引擎说缺文件」。
 if grep -qF 'ModelSpec.TtsMatcha.required' app/src/main/java/com/beichen/polaris/audio/tts/LocalVoiceEngine.kt \
@@ -214,7 +218,7 @@ echo "[F] 存储账：把 300 多 MB 花在哪儿摊开给用户看"
 
 # 用户报「内存都 300 多了，开始才 30 多」。这时最坏的回答是「这些都是必要的」——
 # 他会认定在糊弄。正确做法是分账：包体 / 模型 / 缓存三笔，哪笔能退、退多少。
-STORAGE=app/src/main/java/com/beichen/polaris/model/StorageReport.kt
+STORAGE=$MODEL_DIR/StorageReport.kt
 if [ -f "$STORAGE" ] && grep -qF 'val apkBytes' "$STORAGE" \
    && grep -qF 'val nativeBytes' "$STORAGE" && grep -qF 'val cacheBytes' "$STORAGE"; then
   pass "F1 存储账分三笔（包体 / 运行时库 / 模型 / 缓存）"
@@ -264,6 +268,61 @@ if grep -qF '没在用' "$SCREEN_VOICE" && grep -qF '删掉不影响识别' "$SC
   pass "F6 标明哪套没在用，并说明删掉不影响识别"
 else
   fail "F6 没标「没在用」 —— 那 24MB 会一直躺在那儿"
+fi
+
+echo ""
+echo "[G] 容器与 Shizuku：也不再随包"
+
+# 用户的原话：「你要什么就自己下，而不是全部下好再给你」。
+# 这两份以前在 assets 里（8.2MB + 2.5MB），只有少数人用。
+ROOTFS=core/src/main/java/com/beichen/polaris/core/container/RootfsManager.kt
+SHIZUKU=app/src/main/java/com/beichen/polaris/automation/shizuku/ShizukuInstaller.kt
+
+# 归档路径只能有一处定义：下载器往哪儿放、引擎从哪儿读。
+# 两边各写一遍，改目录时必然漏一处，表现是「下载完成但启动说没下载」。
+if grep -qF 'File(context.filesDir, "rootfs/${distro.id}")' "$ROOTFS" \
+   && grep -qF '"rootfs"' "$SPEC"; then
+  pass "G1 容器归档路径与 ModelSpec.RootfsAlpine 对齐（下载器/管理器同一处）"
+else
+  fail "G1 容器归档路径两边不一致 —— 下完会「找不到」"
+fi
+
+# 下载落地后在 filesDir，assets 只留给调试包；顺序必须「先磁盘、后 assets」，
+# 否则调试包里那份旧的会永远盖住用户下的新版本。
+if grep -qF 'downloaded.isFile' "$ROOTFS" && grep -qF 'assets.open("containers/' "$ROOTFS"; then
+  pass "G2 解压先读磁盘、再回退 assets（调试包不被旧文件盖住）"
+else
+  fail "G2 解压只读 assets —— 下载来的归档永远用不上"
+fi
+
+# 没下载时要能明确拒绝，而不是解压到一半失败。
+if grep -qF 'if (!hasArchive(context, distro))' "$ROOTFS"; then
+  pass "G3 归档未下载时明确返回（调用方据此给下载入口）"
+else
+  fail "G3 没判归档是否已下载 —— 会走进解压并抛一个看不懂的错"
+fi
+
+# Shizuku：安装包不在包里了，必须有「先去下载」这一态。
+if grep -qF 'NEED_DOWNLOAD' "$SHIZUKU" \
+   && ! grep -qF 'context.assets.open(ASSET_NAME)' "$SHIZUKU"; then
+  pass "G4 Shizuku 安装包改为下载落地（不再从 assets 读）"
+else
+  fail "G4 Shizuku 仍在从 assets 读安装包 —— 它会被打进 APK"
+fi
+
+# 源码树里也不该再有这两份：assets 空着，CI 才会把它们发布成可选组件。
+if [ ! -e app/src/main/assets/shizuku.apk ] && [ ! -d app/src/main/assets/containers ]; then
+  pass "G5 源码 assets 里不再有 shizuku.apk / containers（包体再小 10MB）"
+else
+  fail "G5 assets 里还留着可选组件 —— 它们会被打进安装包"
+fi
+
+# 归档本体要有来源：CI 从 scripts/assets 打包成 rootfs-alpine.zip。
+if [ -f scripts/assets/containers/alpine.tar ] \
+   && grep -qF 'rootfs-alpine.zip' "$WORKFLOW"; then
+  pass "G6 归档源在 scripts/assets，CI 打成 rootfs-alpine.zip 发布"
+else
+  fail "G6 归档没有源或 CI 不发布 —— 用户点下载会 404"
 fi
 
 echo "离线识别：$p 通过 / $f 失败"

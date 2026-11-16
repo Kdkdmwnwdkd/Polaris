@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeveloperMode
 import androidx.compose.material.icons.outlined.ViewInAr
 import androidx.compose.material3.Icon
@@ -43,6 +44,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.beichen.polaris.model.ModelDownloader
+import com.beichen.polaris.model.ModelSpec
 import com.beichen.polaris.ui.container.ContainerInstallController
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.container.ContainerCommandRunner
@@ -71,7 +74,12 @@ fun ContainerScreen() {
 
     var distros by remember { mutableStateOf<List<RootfsManager.Distro>>(emptyList()) }
     var extracted by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // 归档是否已下载。与「已解压」分开：下载完还没解压（用户中途退出）也要能显示
+    // 「点击解压」，否则会被当成没下过，重新下一遍 3MB。
+    var downloaded by remember { mutableStateOf<Set<String>>(emptySet()) }
     var busy by remember { mutableStateOf<String?>(null) }
+    // 下载进度（0..1）。一次只有一个发行版在跑，单个变量够用。
+    var downloadProgress by remember { mutableStateOf<Float?>(null) }
     var selected by remember { mutableStateOf<RootfsManager.Distro?>(null) }
     /** B 批：运行时安装后的刷新计数——探测结果按 (id, tick) 重算。 */
     var toolchainTick by remember { mutableStateOf(0) }
@@ -139,6 +147,8 @@ fun ContainerScreen() {
         distros = RootfsManager.listAvailable(context)
         extracted = distros.filter { RootfsManager.isExtracted(context, it.id) }
             .map { it.id }.toSet()
+        downloaded = distros.filter { RootfsManager.isDownloaded(context, it) }
+            .map { it.id }.toSet()
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -188,7 +198,9 @@ fun ContainerScreen() {
                         DistroCard(
                             distro = d,
                             ready = extracted.contains(d.id),
+                            downloaded = downloaded.contains(d.id),
                             isBusy = busy == d.id,
+                            progress = if (busy == d.id) downloadProgress else null,
                             onClick = {
                                 if (extracted.contains(d.id)) {
                                     // 真机 13:56：装 Java 的 proot 在跑，用户进终端起了第二个 proot，
@@ -207,7 +219,41 @@ fun ContainerScreen() {
                                     }
                                 } else {
                                     busy = d.id
+                                    downloadProgress = null
                                     scope.launch(Dispatchers.IO) {
+                                        // 归档不再随包（2026-11-16）：没下过就先下 3MB。
+                                        // 以前点一下只是解压；现在第一步是下载，所以文案与进度
+                                        // 必须分开显示——「正在解压…」卡住 20 秒会让人以为死了。
+                                        val have = RootfsManager.isDownloaded(context, d) || runCatching {
+                                            ModelDownloader(context, ModelSpec.RootfsAlpine)
+                                                .download { done, total, _ ->
+                                                    val ratio = done.toFloat() / maxOf(1L, total)
+                                                    scope.launch(Dispatchers.Main) {
+                                                        downloadProgress = ratio
+                                                    }
+                                                }
+                                        }.onFailure { e ->
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(
+                                                    context,
+                                                    "下载 Alpine 失败：${e.message}",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                        }.isSuccess
+
+                                        if (!have) {
+                                            withContext(Dispatchers.Main) {
+                                                busy = null
+                                                downloadProgress = null
+                                            }
+                                            return@launch
+                                        }
+
+                                        withContext(Dispatchers.Main) {
+                                            downloaded = downloaded + d.id
+                                            downloadProgress = null   // 切到「正在解压…」
+                                        }
                                         val ok = RootfsManager.ensureExtracted(context, d) != null
                                         withContext(Dispatchers.Main) {
                                             if (ok) extracted = extracted + d.id
@@ -220,6 +266,25 @@ fun ContainerScreen() {
                         )
                         Spacer(Modifier.height(AgentSpacing.space3))
                     }
+                }
+
+                // 可下可删是一体的：只能下不能删＝空间被锁死。
+                // 删除同时清归档，否则会留下「界面显示未下载、磁盘上还躺 3MB」的怪状态。
+                extracted.forEach { id ->
+                    val distro = distros.firstOrNull { it.id == id } ?: return@forEach
+                    AkListItem(
+                        icon = Icons.Outlined.Delete,
+                        title = "删除 ${distro.name}",
+                        description = "释放约 8MB（含容器里装过的东西）。聊天、模型、语音都不受影响；" +
+                            "下次要用再点一下就重新下 3MB",
+                        onClick = {
+                            RootfsManager.delete(context, id)
+                            runCatching { RootfsManager.archiveFile(context, distro).delete() }
+                            extracted = extracted - id
+                            downloaded = downloaded - id
+                            if (selected?.id == id) selected = null
+                        },
+                    )
                 }
 
                 Spacer(Modifier.height(AgentSpacing.space4))
@@ -472,7 +537,10 @@ fun ContainerScreen() {
 private fun DistroCard(
     distro: RootfsManager.Distro,
     ready: Boolean,
+    downloaded: Boolean,
     isBusy: Boolean,
+    /** 下载进度（0..1）；非空表示当前这一步是「下载」，不是「解压」。 */
+    progress: Float?,
     onClick: () -> Unit
 ) {
     val ak = LocalAkColors
@@ -511,9 +579,13 @@ private fun DistroCard(
                 )
                 Spacer(Modifier.height(AgentSpacing.space1))
                 Text(
-                    text = if (isBusy) "正在解压…"
-                    else if (ready) "已就绪 · 点击进入"
-                    else "点击解压 rootfs",
+                    text = when {
+                        isBusy && progress != null -> "正在下载 ${(progress * 100).toInt()}%…"
+                        isBusy -> "正在解压…"
+                        ready -> "已就绪 · 点击进入"
+                        downloaded -> "点击解压 rootfs"
+                        else -> "点击下载（约 3MB）"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

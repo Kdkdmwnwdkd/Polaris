@@ -11,8 +11,16 @@ import java.util.Locale
 import java.util.zip.GZIPInputStream
 
 /**
- * rootfs 管理：从 assets 解压发行版 rootfs（tar.gz）到 `<filesDir>/containers/<id>/rootfs`，
+ * rootfs 管理：把发行版 rootfs（tar.gz）解压到 `<filesDir>/containers/<id>/rootfs`，
  * 并提供幂等校验、列举、删除。
+ *
+ * ## 归档从哪来（2026-11-16 改）
+ *
+ * 以前**只有** assets：8MB 的 alpine.tar 随包，所有装了这个应用的人都替「可能用容器」
+ * 付了这 8MB。现在改成按需下载（`filesDir/rootfs/alpine/alpine.tar.gz`，3MB），
+ * assets 那条路只留给本地调试包。
+ *
+ * 判定顺序因此变成「先看磁盘、再看 assets」——反过来会让调试包永远用旧的那份。
  *
  * tar.gz 解压在 Kotlin 侧用最小 tar 解析器完成（Android 没有 `tar` 命令）：支持
  * ustar + GNU 长文件名（`L`），symlink 用 [Os.symlink]，权限用 [Os.chmod] 还原。
@@ -32,6 +40,17 @@ object RootfsManager {
         "alpine-x86_64" to "Alpine Linux（x86_64 调试）"
     )
 
+    /**
+     * 正式包里可下载的发行版。
+     *
+     * 为什么不再靠 `assets.list("containers")` 枚举：归档已经不在包里了，
+     * assets 是空的——照旧枚举会让「Alpine」从界面上消失，用户连下载入口都找不到。
+     * 清单写死在这里，与 `ModelSpec.RootfsAlpine` 的 `dirName` 对齐。
+     */
+    private val DOWNLOADABLE = listOf(
+        Distro(id = "alpine", name = "Alpine Linux", assetName = "alpine.tar.gz")
+    )
+
     /** 一种可启动的发行版（由 `assets/containers/<name>.tar.gz` 描述）。 */
     data class Distro(
         val id: String,       // 目录名，如 "alpine"
@@ -46,7 +65,9 @@ object RootfsManager {
      * 看到的通常是 `alpine.tar` 而非 `alpine.tar.gz`。这里按 `.tar` 匹配即可兼容两种写法。
      */
     fun listAvailable(context: Context): List<Distro> {
-        return runCatching {
+        // assets 里还有就直接用（本地调试包会放 alpine.tar，模拟器还有 alpine-x86_64）。
+        // AAPT 会把 .gz 解成裸 tar 并去掉后缀，所以这里按 .tar 匹配。
+        val fromAssets = runCatching {
             (context.assets.list("containers") ?: emptyArray())
                 .filter { it.endsWith(".tar") }
                 .map { asset ->
@@ -56,14 +77,29 @@ object RootfsManager {
                         name = DISPLAY_NAMES[id] ?: id.replaceFirstChar {
                             if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString()
                         },
+                        // assets 里是裸 tar（AGP 已解压），磁盘上是 .tar.gz；两者都支持。
                         assetName = asset
                     )
                 }
         }.getOrDefault(emptyList())
+
+        val ids = fromAssets.map { it.id }.toSet()
+        return fromAssets + DOWNLOADABLE.filter { it.id !in ids }
     }
 
     fun rootfsDir(context: Context, id: String): File =
         File(context.filesDir, "containers/$id/rootfs")
+
+    /**
+     * 下载落地的归档路径（与 `ModelSpec.RootfsAlpine` 的 home/dirName 同一个答案）。
+     * 下载器往这儿放，这里从这儿读——只有一处定义，改路径不会两边不一致。
+     */
+    fun archiveFile(context: Context, distro: Distro): File =
+        File(File(context.filesDir, "rootfs/${distro.id}"), distro.assetName)
+
+    /** 归档是否已下载（决定界面显示「下载」还是「启动」）。 */
+    fun isDownloaded(context: Context, distro: Distro): Boolean =
+        archiveFile(context, distro).let { it.isFile && it.length() > 0 }
 
     /**
      * 已解压判据：**关键文件齐备**，而不是只看 `bin/` `etc/` 两个目录。
@@ -158,6 +194,12 @@ object RootfsManager {
     fun ensureExtracted(context: Context, distro: Distro): File? {
         val d = rootfsDir(context, distro.id)
         if (isExtracted(context, distro.id)) return d
+        // 归档还没下载：解压无从谈起。返回 null，调用方据此给「先下载」的入口——
+        // 以前这里是「assets 里一定有」，所以不存在这个分支。
+        if (!hasArchive(context, distro)) {
+            AgentLogger.w(TAG, "rootfs(${distro.id}) 归档未下载：${archiveFile(context, distro).absolutePath}")
+            return null
+        }
         // 目录在但校验不过 = 上次解压中断 / 旧版残留。必须先清空，
         // 否则残留文件会让本次解压「看起来成功」但内容仍然不全。
         if (d.exists()) {
@@ -165,7 +207,7 @@ object RootfsManager {
             runCatching { d.deleteRecursively() }
         }
         runCatching {
-            openRootfs(context, "containers/${distro.assetName}").use { stream ->
+            openRootfs(context, distro).use { stream ->
                 extractTar(stream, d)
             }
         }.onFailure { e ->
@@ -189,8 +231,27 @@ object RootfsManager {
      * [GZIPInputStream]，否则原样返回（AGP 已解压的裸 tar）。用 [java.io.PushbackInputStream]
      * 回退探测字节，不消费数据。
      */
-    private fun openRootfs(context: Context, assetPath: String): InputStream {
-        val pb = java.io.PushbackInputStream(context.assets.open(assetPath), 2)
+    /** 有归档可用：磁盘上的下载件，或调试包里 assets 自带的那份。 */
+    private fun hasArchive(context: Context, distro: Distro): Boolean {
+        if (isDownloaded(context, distro)) return true
+        return runCatching {
+            context.assets.list("containers")?.contains(distro.assetName) == true
+        }.getOrDefault(false)
+    }
+
+    /**
+     * 打开归档：先磁盘、后 assets。
+     *
+     * 顺序不能反：调试包里 assets 有一份旧的，若优先读 assets，下载来的新版永远用不上。
+     */
+    private fun openRootfs(context: Context, distro: Distro): InputStream {
+        val downloaded = archiveFile(context, distro)
+        val raw: InputStream = if (downloaded.isFile) {
+            downloaded.inputStream()
+        } else {
+            context.assets.open("containers/${distro.assetName}")
+        }
+        val pb = java.io.PushbackInputStream(raw, 2)
         val b1 = pb.read()
         val b2 = pb.read()
         if (b1 == 0x1f && b2 == 0x8b) {
