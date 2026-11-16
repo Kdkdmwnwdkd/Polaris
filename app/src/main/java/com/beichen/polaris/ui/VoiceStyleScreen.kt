@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -31,6 +32,8 @@ import com.beichen.polaris.core.voice.VoiceKind
 import com.beichen.polaris.core.voice.VoiceProfile
 import com.beichen.polaris.model.ModelDownloader
 import com.beichen.polaris.model.ModelSpec
+import com.beichen.polaris.model.formatBytes
+import com.beichen.polaris.model.readStorage
 import kotlinx.coroutines.launch
 
 /**
@@ -82,6 +85,13 @@ fun VoiceStyleScreen(onOpenClone: (() -> Unit)? = null) {
     // 否则「点本地音色 → 没声音」看起来像坏了。
     var matchaReady by remember { mutableStateOf(ModelDownloader(context, ModelSpec.TtsMatcha).isInstalled()) }
     var zipReady by remember { mutableStateOf(ModelDownloader(context, ModelSpec.TtsZipVoice).isInstalled()) }
+    // 两套权重合计。与语音页读同一份 [readStorage]，避免两页报出两个数。
+    var version by remember { mutableIntStateOf(0) }
+    val ttsModelBytes = remember(version) {
+        readStorage(context).models
+            .filter { it.first.kind == ModelSpec.Kind.TTS }
+            .sumOf { it.second }
+    }
 
     fun audition(profile: VoiceProfile) {
         if (auditioning != null) return
@@ -200,23 +210,31 @@ fun VoiceStyleScreen(onOpenClone: (() -> Unit)? = null) {
         // 第一反应是「为什么没声音」，答案与修法都必须在同一屏。
         AkGroup(
             title = "音色模型（可下可删）",
-            description = "安装包不再带这两套权重；不想要的时候删掉，随时能重下",
+            description = if (ttsModelBytes > 0) {
+                "两套合计 ${formatBytes(ttsModelBytes)}。不想要就删，随时能重下"
+            } else {
+                "安装包不再带这两套权重；不想要的时候删掉，随时能重下"
+            },
         ) {
             ModelRow(
                 spec = ModelSpec.TtsMatcha,
                 title = "内置音色",
                 hint = "22kHz 女声：断网时也能出声，比系统语音包清楚",
+                badge = if (matchaReady && selected.id == VoiceCatalog.local.id) "正在用" else null,
                 onChanged = {
                     matchaReady = ModelDownloader(context, ModelSpec.TtsMatcha).isInstalled()
+                    version++
                 },
             )
             ModelRow(
                 spec = ModelSpec.TtsZipVoice,
                 title = "声音克隆",
                 hint = "用自己的声音说话：录十秒参考音频即可，全程离线",
+                badge = if (zipReady && selected.kind == VoiceKind.CLONE) "正在用" else null,
                 onChanged = {
                     zipReady = ModelDownloader(context, ModelSpec.TtsZipVoice).isInstalled()
                     clones = CloneVoiceStore.list(context)
+                    version++
                 },
             )
         }

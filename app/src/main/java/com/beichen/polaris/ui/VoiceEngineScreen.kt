@@ -9,10 +9,18 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.beichen.polaris.audio.asr.AsrDirectory
 import com.beichen.polaris.model.ModelSpec
+import com.beichen.polaris.model.clearDownloadCache
+import com.beichen.polaris.model.formatBytes
+import com.beichen.polaris.model.readStorage
 
 /**
  * 语音识别页：只剩「下载哪套离线模型」。
@@ -37,6 +45,14 @@ import com.beichen.polaris.model.ModelSpec
 fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
     val context = LocalContext.current
 
+    // 下载/删除完要重算账。用一个版本号驱动：读磁盘是 IO，不能每帧都做，
+    // 而「什么时候该重读」只有这几个动作知道（下完、删完、清完）。
+    var version by remember { mutableIntStateOf(0) }
+    var lastFreed by remember { mutableStateOf(0L) }
+    val report = remember(version) { readStorage(context) }
+    val fastReady = report.models.first { it.first == ModelSpec.AsrFast }.second > 0
+    val accReady = report.models.first { it.first == ModelSpec.AsrAccurate }.second > 0
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -53,6 +69,57 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
             title = "语音识别",
             subtitle = "装一套离线模型：录音和识别都在手机里算，不依赖系统引擎，也不联网",
         )
+
+        // 用户的第一反应是「怎么占这么多」。所以先把账摊开，再谈装哪套——
+        // 顺序反过来他会以为整页都在劝他再占地方。
+        AkGroup(
+            title = "占了多大",
+            description = report.let {
+                if (it.installedModels.isEmpty()) {
+                    "现在只占安装包本身（${formatBytes(it.bodyBytes)}），一套模型都没下"
+                } else {
+                    "一共 ${formatBytes(it.totalBytes)}，其中可删的模型 ${
+                        formatBytes(it.modelBytes)
+                    }（${it.installedModels.size} 套）"
+                }
+            },
+        ) {
+            AkListItem(
+                icon = null,
+                title = "应用本体 · ${formatBytes(report.bodyBytes)}",
+                description = "安装包 ${formatBytes(report.apkBytes)} + 解压出来的运行时库 " +
+                    "${formatBytes(report.nativeBytes)}。这部分删模型不会变小：" +
+                    "应用里带了一个能在手机上跑 Linux 的容器，它的库必须落盘才能执行",
+                onClick = null,
+            )
+            AkListItem(
+                icon = null,
+                title = "语音模型 · ${formatBytes(report.modelBytes)}",
+                description = if (report.installedModels.isEmpty()) {
+                    "还没装。要说话识别或离线播报时才需要下，不下也能用在线音色"
+                } else {
+                    report.installedModels.joinToString("、") {
+                        "${it.first.label} ${formatBytes(it.second)}"
+                    } + "。每一条都可以在下面删掉"
+                },
+                onClick = null,
+            )
+            AkListItem(
+                icon = null,
+                title = "临时缓存 · ${formatBytes(report.cacheBytes)}",
+                description = when {
+                    lastFreed > 0 -> "刚清掉 ${formatBytes(lastFreed)}"
+                    report.cacheBytes >= 1048576 ->
+                        "下载留下的临时文件，以及装完之后没用了的更新包，点一下清掉"
+                    else -> "没有需要清的"
+                },
+                // 只有真的有一坨才给点击：点一个「0MB」的按钮只会让人怀疑按钮坏了。
+                onClick = if (report.cacheBytes >= 1048576) ({
+                    lastFreed = clearDownloadCache(context)
+                    version++
+                }) else null,
+            )
+        }
 
         if (onOpenStyle != null) {
             AkGroup(title = "相关", description = "识别是「听谁的」，音色是「说成谁的声」") {
@@ -72,16 +139,24 @@ fun VoiceEngineScreen(onOpenStyle: (() -> Unit)? = null) {
             ModelRow(
                 spec = ModelSpec.AsrFast,
                 title = "快速识别",
-                hint = "边说边出字，随口问一句最顺手；错字相对多",
+                hint = if (fastReady && accReady) {
+                    "两套都装时不会用到它——「更准」优先。删掉不影响识别，还能省 ${ModelSpec.AsrFast.approxMb}MB"
+                } else {
+                    "边说边出字，随口问一句最顺手；错字相对多"
+                },
+                badge = if (fastReady && accReady) "没在用" else null,
                 // 删之前先放掉原生识别器：文件删了但内存里还拿着句柄，
                 // 表现是「删了还占着空间」，下次识别也未必能立刻重建。
                 onBeforeRemove = { AsrDirectory.of(context).releaseAll() },
+                onChanged = { version++ },
             )
             ModelRow(
                 spec = ModelSpec.AsrAccurate,
                 title = "更准识别",
                 hint = "松手后约一秒出字，中文短句基本不用改；占地方多一点",
+                badge = if (accReady) "正在用" else null,
                 onBeforeRemove = { AsrDirectory.of(context).releaseAll() },
+                onChanged = { version++ },
             )
         }
 

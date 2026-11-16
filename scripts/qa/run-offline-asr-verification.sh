@@ -209,5 +209,62 @@ else
   fail "E4 CI 没拦「模型又被打进包」 —— 包体会悄悄涨回去"
 fi
 
+echo ""
+echo "[F] 存储账：把 300 多 MB 花在哪儿摊开给用户看"
+
+# 用户报「内存都 300 多了，开始才 30 多」。这时最坏的回答是「这些都是必要的」——
+# 他会认定在糊弄。正确做法是分账：包体 / 模型 / 缓存三笔，哪笔能退、退多少。
+STORAGE=app/src/main/java/com/beichen/polaris/model/StorageReport.kt
+if [ -f "$STORAGE" ] && grep -qF 'val apkBytes' "$STORAGE" \
+   && grep -qF 'val nativeBytes' "$STORAGE" && grep -qF 'val cacheBytes' "$STORAGE"; then
+  pass "F1 存储账分三笔（包体 / 运行时库 / 模型 / 缓存）"
+else
+  fail "F1 只有一个「总占用」数字 —— 用户没法知道哪笔能退"
+fi
+
+# 应用本体必须能单独算：它包含解压的 .so（容器要 exec，删不掉），
+# 和模型混在一起报会让「删了模型还是 300 多」变成新的困惑。
+if grep -qF 'nativeLibraryDir' "$STORAGE" && grep -qF 'sourceDir' "$STORAGE"; then
+  pass "F2 应用本体按「包体 + 解压的运行时库」单算，与模型分开"
+else
+  fail "F2 没拆开包体与运行时库 —— 删模型后数字对不上，会被当成没删干净"
+fi
+
+# 清缓存只清我们自己的临时目录。整个 cacheDir 里还可能有别的模块要用的东西，
+# 一个叫「清缓存」的按钮不该替所有人做决定。
+if grep -qF 'File(context.cacheDir, "models")' "$STORAGE" \
+   && grep -qF '"updates"' "$STORAGE" \
+   && ! grep -qF 'cacheDir.deleteRecursively()' "$STORAGE"; then
+  pass "F3 清缓存只清 models 与已装完的更新包，不误删别的模块的缓存"
+else
+  fail "F3 清缓存会整目录删，或漏了 updates 里那份已装完的 APK"
+fi
+
+# 更新包落地之后没有任何地方删它（ApkDownloader 只保证「不累积」），
+# 于是 cacheDir 里常驻一个等于包体大小的 .apk。清理时必须跳过 .part，
+# 否则会把用户正在下的那一份删掉。
+if grep -qF 'endsWith(".apk")' "$STORAGE" && grep -qF '.part' "$STORAGE"; then
+  pass "F4 更新包只删已下完的 .apk，跳过正在下载的 .part"
+else
+  fail "F4 清更新包没跳过 .part —— 会把正在下的包删掉"
+fi
+
+# 界面上必须真的显示这笔账，否则代码写好了也没人看到。
+SCREEN_VOICE=app/src/main/java/com/beichen/polaris/ui/VoiceEngineScreen.kt
+if grep -qF '占了多大' "$SCREEN_VOICE" && grep -qF '应用本体' "$SCREEN_VOICE" \
+   && grep -qF 'readStorage(context)' "$SCREEN_VOICE"; then
+  pass "F5 语音页顶部摊开三笔账（含「应用本体」单独一行）"
+else
+  fail "F5 语音页没有存储明细 —— 用户只能看着系统设置里的数字猜"
+fi
+
+# 两套识别都装时只有一套在用。另一套的 24MB 是纯占位，必须在行首说出来，
+# 否则用户看到「已下载 24MB」不会想到「这套其实没用上」。
+if grep -qF '没在用' "$SCREEN_VOICE" && grep -qF '删掉不影响识别' "$SCREEN_VOICE"; then
+  pass "F6 标明哪套没在用，并说明删掉不影响识别"
+else
+  fail "F6 没标「没在用」 —— 那 24MB 会一直躺在那儿"
+fi
+
 echo "离线识别：$p 通过 / $f 失败"
 [ "$f" -eq 0 ]

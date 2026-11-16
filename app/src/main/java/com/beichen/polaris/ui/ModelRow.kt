@@ -43,6 +43,14 @@ fun ModelRow(
     onBeforeRemove: () -> Unit = {},
     /** 下载完成后回调（音色页据此刷新「能不能用」）。 */
     onChanged: () -> Unit = {},
+    /**
+     * 状态前缀：「正在用」「没在用」。
+     *
+     * 两套识别都装着时，只有一套真的参与识别（更准优先）。另一套的 24MB 是纯占位——
+     * 但界面原本只写「已下载 24MB」，用户不知道它其实没被用过，也就不会想到删。
+     * 把这件事写在行首，比在别处加一段说明有用得多。
+     */
+    badge: String? = null,
 ) {
     val context = LocalContext.current
     val downloader = remember(spec) { ModelDownloader(context, spec, onBeforeRemove) }
@@ -63,10 +71,15 @@ fun ModelRow(
             ready -> "$title · 已下载 ${max(1L, bytes / 1048576)}MB"
             else -> "$title（约 ${spec.approxMb}MB）"
         },
-        description = error ?: when {
-            ready -> "点一下可以删掉，随时能重下（会先问一句）"
-            busy -> hint
-            else -> hint
+        description = error ?: buildString {
+            // 状态只在「已下载」时才有意义：没装的套不用告诉用户它在不在用。
+            if (ready && badge != null) append(badge).append(" · ")
+            append(
+                when {
+                    ready -> "点一下可以删掉，随时能重下（会先问一句）"
+                    else -> hint
+                }
+            )
         },
         // 下载与删除是**两种**动作，不能都挂在「点一下」上：
         // 已下载时点一下应该是「我想看看/我想换」，直接删掉 74MB 太容易误触。
