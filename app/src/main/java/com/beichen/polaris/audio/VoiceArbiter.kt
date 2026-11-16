@@ -6,6 +6,7 @@ import android.media.AudioRecordingConfiguration
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import com.beichen.polaris.core.voice.AudioHolder
 import com.beichen.polaris.core.voice.AudioLease
 import com.beichen.polaris.core.voice.ClaimResult
@@ -51,6 +52,15 @@ class VoiceArbiter(
     private var speakLease: AudioLease? = null
     private val leaseLock = Any()
 
+    /**
+     * 扬声器出口「预计静下来」的时刻（elapsedRealtime）。0 = 无需等待。
+     *
+     * 用时刻而不是布尔：录音线程可能在抢占之后才被调度起来，它需要知道**还剩多久**，
+     * 而不是"要不要等"——等到一个已经过去的点，等于没等。
+     */
+    @Volatile
+    private var quietUntilMs = 0L
+
     private var recordingCallback: Any? = null
 
     init {
@@ -94,8 +104,44 @@ class VoiceArbiter(
     }
 
     /** 请求麦克风（语音输入）。成功 = 播报已被自动停掉。 */
-    fun beginCapture(reason: String = "用户语音输入"): ClaimResult =
-        claim.request(AudioHolder.Capture, reason)
+    fun beginCapture(reason: String = "用户语音输入"): ClaimResult {
+        val r = claim.request(AudioHolder.Capture, reason)
+        if (r is ClaimResult.Granted && claim.consumeQuietPending()) {
+            // 同步再停一次，不等 collector。
+            //
+            // `revoked` 的收集器跑在协程里，从别的线程（桌宠的 Service、工具协程）发起抢占时，
+            // 它要等到主线程的下一个消息才执行——几十毫秒起，主线程忙时更久。而本方法的
+            // 调用方下一步就是 `AudioRecord.startRecording()`，中间没有任何等待。
+            // 于是「已经要求停」和「真的不响了」之间留了一道缝，缝里录到的是我们自己。
+            // 这里同步停一次把缝关掉；collector 那条路仍然保留，幂等，不会重复出声。
+            speaker.stop()
+            releaseSpeakLease("被抢占（同步静音）")
+            quietUntilMs = SystemClock.elapsedRealtime() + QUIET_AFTER_SPEECH_MS
+            log("抢占播报：已同步静音，开麦延后 ${QUIET_AFTER_SPEECH_MS}ms（等出口排空）")
+        }
+        return r
+    }
+
+    /**
+     * 开麦前调用：等扬声器出口真的静下来。**只能在工作线程调**（会阻塞）。
+     *
+     * @return 实际等待的毫秒数；0 表示这次没有余音风险，直接开麦。
+     *
+     * 为什么不在 [beginCapture] 里直接睡：它常被主线程调用（点麦克风、长按），
+     * 在主线程睡 150ms 就是一次掉帧。录音本来就要起一个独立线程，让它等最合适。
+     */
+    fun awaitQuietForCapture(): Long {
+        val wait = quietUntilMs - SystemClock.elapsedRealtime()
+        if (wait > 0) runCatching { Thread.sleep(wait) }
+        // 兜底：等完之后如果仍在播报，说明 stop 没生效（引擎不响应 / 又有新的一句排上）。
+        // 再停一次并留日志——下次真机日志里能直接看到这条，而不用猜。
+        if (speaker.speaking.value) {
+            speaker.stop()
+            releaseSpeakLease("开麦前兜底")
+            log("开麦前仍在播报，已再次停止（说明上一次 stop 未生效）")
+        }
+        return wait.coerceAtLeast(0)
+    }
 
     fun endCapture(lease: AudioLease) {
         claim.release(lease, "语音输入结束")
@@ -111,6 +157,21 @@ class VoiceArbiter(
         unregisterRecordingProbe()
         stopSpeech()
         claim.reset()
+    }
+
+    private companion object {
+        /**
+         * 抢占播报后，麦克风要等多久才开。
+         *
+         * 150ms 的来历：`AudioTrack.stop()` 返回后，混音器里已排队的数据被丢弃，
+         * 但功放与扬声器的物理衰减、房间一次反射还要一段时间。实测「一句话戛然而止」
+         * 的尾巴在 100ms 量级；取 150ms 是留一半余量。
+         *
+         * 为什么不取更大（比如 500ms）：这段延迟直接加在「按下麦克风」到「开始收音」
+         * 之间，用户能感觉到迟钝。而不等的话，录进去的是机器音——这是用户真机上
+         * 一眼就能看出的错误，比迟钝严重得多。
+         */
+        const val QUIET_AFTER_SPEECH_MS = 150L
     }
 
     // —— 内部 ——

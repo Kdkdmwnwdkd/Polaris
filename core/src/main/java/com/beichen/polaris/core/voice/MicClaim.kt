@@ -118,6 +118,23 @@ class MicClaim(
 
     private var nextId = 1L
 
+    /**
+     * 上一次授予是否**抢占了正在出声的播报**。
+     *
+     * 抢占只读麦克风的 [AudioHolder.Wake] 不需要它；抢占 [AudioHolder.Speak] 需要，
+     * 因为「已经调了 stop」和「扬声器出口已经没声音」之间还有一段时间：
+     * `AudioTrack.pause/flush/stop` 是命令，硬件缓冲、功放与房间反射还要几十毫秒才散尽。
+     * 这段时间开的麦克风，录到的是**我们自己**刚才那句话的尾巴——而离线识别是整段认，
+     * 那一小段会被拼进用户的句子里，表现为「我说话它却把上一条回答识别出来了」。
+     *
+     * 所以这不是"锦上添花的延迟"，而是抢占这个动作的前置条件：
+     * 谁抢占了出声的那个，谁就要负责等它静下来。判定放在这里（状态迁移处），
+     * 计时与阻塞放在 `VoiceArbiter`（那里才知道 Android 的时钟与线程）。
+     *
+     * 一次性：取过即清，避免每句话都白等。
+     */
+    private var quietPending = false
+
     @Volatile
     private var external: ExternalBusy? = null
 
@@ -138,6 +155,19 @@ class MicClaim(
 
     /** 当前外部占用（供 UI 提示）。 */
     fun externalBusy(): ExternalBusy? = external
+
+    /**
+     * 取出「是否需要等扬声器静下来」这个事实，**取一次即清**。
+     *
+     * 调用方拿到 true 才去计时并推迟开麦；false 表示这次开麦没有任何余音风险。
+     * 一次性是为了不把「上一句的余音」拖成「每次开麦都慢半拍」——
+     * 用户对「按下后要等」的容忍度远低于对「偶尔录进自己声音」的容忍度。
+     */
+    fun consumeQuietPending(): Boolean = synchronized(lock) {
+        val v = quietPending
+        quietPending = false
+        v
+    }
 
     /**
      * 请求占用。
@@ -175,6 +205,9 @@ class MicClaim(
                     else -> {
                         granted = AudioLease(holder, nextId++, reason)
                         preempted = cur
+                        // 抢走的是正在出声的播报 → 开麦前必须先等出口静下来。
+                        // 抢走唤醒监听不置位：它不出声，没有余音。
+                        quietPending = cur.holder == AudioHolder.Speak
                     }
                 }
                 if (granted != null) _current.value = granted

@@ -253,6 +253,36 @@ fun main() {
         expect(!Activity(true, true).idle, "两个都成立当然不空闲")
     }
 
+    case("B23 抢占正在出声的播报 → 要求等待静音，且只要求一次") {
+        // 真机回归（2026-11-16，MEIZU 20 / Android 16）：
+        // 朗读过程中按麦克风，识别结果里混进了 AI 自己念的内容。
+        // 根因是「stop 已下发」与「出口已静音」之间的缝里开了麦。
+        val mic = MicClaim()
+        granted(mic.request(AudioHolder.Speak, "朗读"))
+        granted(mic.request(AudioHolder.Capture, "用户插话"))
+        expect(mic.consumeQuietPending(), "抢占了正在出声的播报却没要求等静音——麦克风会录到自己的尾巴")
+        expect(!mic.consumeQuietPending(), "静默等待是一次性的；每次开麦都等会让按下麦克风变迟钝")
+    }
+
+    case("B24 空闲起麦 / 抢占唤醒监听 不要求等待") {
+        val mic = MicClaim()
+        granted(mic.request(AudioHolder.Capture, "直接说"))
+        expect(!mic.consumeQuietPending(), "没在播报却要求等待：每次开麦都白慢 150ms")
+
+        val mic2 = MicClaim()
+        granted(mic2.request(AudioHolder.Wake, "常驻监听"))
+        granted(mic2.request(AudioHolder.Capture, "用户插话"))
+        expect(!mic2.consumeQuietPending(), "唤醒监听不出声，没有余音可等")
+    }
+
+    case("B25 被拒的请求不会留下静默等待（否则下次开麦莫名变慢）") {
+        val mic = MicClaim()
+        granted(mic.request(AudioHolder.Capture, "用户说话"))
+        denied(mic.request(AudioHolder.Speak, "朗读"), "audio_busy")
+        denied(mic.request(AudioHolder.Capture, "重复触发"), "audio_busy")
+        expect(!mic.consumeQuietPending(), "被拒绝的请求不该产生静默等待")
+    }
+
     println("")
     println("$pass 通过 / $fail 失败")
     if (fail != 0) kotlin.system.exitProcess(1)

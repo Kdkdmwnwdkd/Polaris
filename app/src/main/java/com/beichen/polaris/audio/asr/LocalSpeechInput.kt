@@ -112,6 +112,19 @@ class LocalSpeechInput(
     private fun loop(session: AsrSession, onEvent: (Event) -> Unit) {
         var recorder: AudioRecord? = null
         try {
+            // 先等扬声器出口静下来再开麦。
+            //
+            // 为什么必需：用户常常在 AI 还在念的时候按麦克风。仲裁器那一刻会
+            // `speaker.stop()`，但「命令已下发」不等于「已经没声音」——AudioTrack 的
+            // 硬件缓冲、功放与房间反射还要一段时间。少于这段就直接 startRecording，
+            // 录到的是我们刚才那句话的尾巴；而离线识别是整段认，这段会被拼进用户句子里，
+            // 表现为「我说了一句，它却把上一条回答也识别进去了」。
+            //
+            // 只在这次抢占过播报时才等（仲裁器返回 0 表示没在播报），
+            // 所以平常开麦没有任何额外延迟。
+            val settled = arbiter.awaitQuietForCapture()
+            if (settled > 0) AgentLogger.i(tag, "开麦前等待扬声器静音 ${settled}ms")
+
             val minBuf = AudioRecord.getMinBufferSize(
                 SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
