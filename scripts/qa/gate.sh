@@ -139,7 +139,20 @@ else
   if [ ! -f "$BASELINE" ]; then
     fail "基线文件缺失（$BASELINE）——门禁 5 无法判定"
   else
-    base=$(awk '!/^[[:space:]]*(#|$)/ {print $1; exit}' "$BASELINE")
+    # 取**最后**一个非注释行：这份文件是追加式账本，每次调整都在末尾写新数字，
+    # 中间那些历史值留着是为了能读懂「为什么从 87 涨到 147」。
+    #
+    # 修前这里写的是 `{print $1; exit}`——取第一个，于是读到的永远是 2026-11-04
+    # 那个 142，之后每一次「往上调一个」都是空写。后果不是红，是**悄悄变松**：
+    # 新增了 5 个 harness、其中 5 个被改成 SKIP，PASS 仍 ≥142，门禁照过。
+    # 边界比「漏报」更糟的那类错误——它让门禁看起来在工作。
+    base=$(awk '!/^[[:space:]]*(#|$)/ {v=$1} END{print v}' "$BASELINE")
+    if [ -z "$base" ]; then
+      # 不 return：门禁 5 判不了，但后面几条还要跑（它们的结论仍然有用）。
+      # fail 已经记账，最终 BLOCKED。
+      fail "基线文件里没有数字（$BASELINE）——门禁 5 判不了"
+      base=0
+    fi
     sk=$(printf '%s' "$summary" | sed -n 's/.*SKIP=\([0-9]\+\).*/\1/p')
     if [ -z "$p" ]; then
       fail "无法从汇总行解析 PASS 数，门禁 5 判不了"
