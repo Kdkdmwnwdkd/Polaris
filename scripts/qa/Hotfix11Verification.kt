@@ -208,7 +208,16 @@ private fun testImageAttachment() {
     }
     check("I5 发送时带走附件并清空输入区") {
         val body = vm.substringAfter("fun send()")
-        assertAllIn("I5", body, "val images = _pendingImages.value", "_pendingImages.value = emptyList()")
+        // D-5：待发附件从两个进程级 StateFlow 改成按会话分桶（ConversationBuckets），
+        // 取附件必须是一次原子 take——`of()` 再 `set(empty)` 是「读—写」两步，两条发送
+        // 路径交错时会一边发出重复附件、一边发出空。断言跟着语义走，不跟着字段名走：
+        // 守的是「按归属会话原子取走」，不是「必须叫 _pendingImages」。
+        assertAllIn(
+            "I5", body,
+            "val owner = _activeConversationId.value",
+            "pendingImageBuckets.take(owner)",
+            "pendingFileBuckets.take(owner)",
+        )
         // W-46 起 send 把历史摊平后作为第三参传入（多轮对话），断言随之更新
         assertContains("I5", body, "loop.send(fullInput, images, priorMessages)")
     }
@@ -387,7 +396,11 @@ private fun testFileAttachment() {
     val chat = readSource("ui/ChatScreen.kt")
 
     check("N1 文件附件类型与结果类型齐备（三成功路径 + 一失败路径）") {
-        assertAllIn("N1", vm, "data class PendingFile(val name: String, val text: String)", "sealed interface FileAttachResult", "data class Text(val name: String, val chars: Int)", "data class Images(val name: String, val pages: Int)", "data class Failed(val reason: String)")
+        // 这四个类型 D-4/D-5 时搬到了 ui/ChatUiContracts.kt（ChatViewModel 行数已顶格）。
+        // 与 N2 的注释同一条理由：断言要守「类型在不在」，不是「在哪个文件」。
+        // 搬家不改包名，调用方一行 import 都不用动——这正是把它们放同包的原因。
+        val contracts = readSource("ui/ChatUiContracts.kt")
+        assertAllIn("N1", contracts, "data class PendingFile(val name: String, val text: String)", "sealed interface FileAttachResult", "data class Text(val name: String, val chars: Int)", "data class Images(val name: String, val pages: Int)", "data class Failed(val reason: String)")
     }
     // F23–F27：附件的 URI→对象 逻辑已抽到 ui/AttachmentIo.kt（架构守卫的行数冻结所迫），
     // 结构断言跟着搬到新文件读，否则守的是「代码在哪个文件」而不是「行为在不在」。
