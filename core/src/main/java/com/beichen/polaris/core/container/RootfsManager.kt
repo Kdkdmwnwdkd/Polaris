@@ -231,8 +231,17 @@ object RootfsManager {
      * [GZIPInputStream]，否则原样返回（AGP 已解压的裸 tar）。用 [java.io.PushbackInputStream]
      * 回退探测字节，不消费数据。
      */
-    /** 有归档可用：磁盘上的下载件，或调试包里 assets 自带的那份。 */
-    private fun hasArchive(context: Context, distro: Distro): Boolean {
+    /**
+     * 有归档可用：磁盘上的下载件，或**包内自带**的那份。
+     *
+     * 2026-11-16 晚改回内置：容器 rootfs 只有 8.7MB，压进 APK 约 3MB，而它是
+     * 「想用容器的人一定会用、不想用的人一辈子不碰」的东西。让人先点一次下载、
+     * 赌一次网络，换来的 3MB 并没有省在刀刃上；语音那 433MB 才是大头。
+     * 内置之后 `ensureExtracted` 直接从 assets 解压，**不联网也能起容器**。
+     *
+     * 界面用这个判断要不要显示「下载」——不看 [isDownloaded]，后者只认磁盘。
+     */
+    fun hasArchive(context: Context, distro: Distro): Boolean {
         if (isDownloaded(context, distro)) return true
         return runCatching {
             context.assets.list("containers")?.contains(distro.assetName) == true

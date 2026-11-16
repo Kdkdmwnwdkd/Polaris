@@ -156,10 +156,19 @@ jobs:
             exit 1
           fi
 
-          # 同理：容器归档与 Shizuku 安装包也不该在包里。它们在磁盘上「看起来还在」
-          # 的时候最容易悄悄被打进去（比如本地放过一份忘了删），所以同样在构建阶段红。
-          if [ -e app/src/main/assets/shizuku.apk ] || [ -d app/src/main/assets/containers ]; then
-            echo "::error::可选组件又回到 APK 里了（shizuku.apk / assets/containers）——应走应用内下载"
+          # Shizuku 安装包不该在包里：它是独立应用，装完还要用户手动确认安装，
+          # 塞进 APK 只是让所有人都为 2.5MB 付体积。磁盘上「看起来还在」的时候最
+          # 容易悄悄被打进去（比如本地放过一份忘了删），所以同样在构建阶段红。
+          if [ -e app/src/main/assets/shizuku.apk ]; then
+            echo "::error::Shizuku 安装包又回到 APK 里了（assets/shizuku.apk）——应走应用内下载"
+            exit 1
+          fi
+
+          # 容器 rootfs 反过来：2026-11-16 晚改回**内置**（压进包约 3MB，换开箱即用、
+          # 不联网也能起容器）。所以这条从「不许有」翻成「必须有」——缺了它，
+          # 容器页会退回「先下载 3MB」，那是老版本与变体包才该发生的事。
+          if [ ! -s app/src/main/assets/containers/alpine.tar ]; then
+            echo "::error::内置容器 rootfs 缺失（assets/containers/alpine.tar）——容器页会退回下载模式"
             exit 1
           fi
 
@@ -592,11 +601,13 @@ jobs:
           # —— 打包 ——
           # -q 安静、-r 递归、-y 保留符号链接本身（espeak-ng-data 里没有，但别哪天中招）。
           # —— 两个可选组件：容器 rootfs（8.2MB）与 Shizuku（2.5MB）——
-          # 它们以前随包。用户的原话是「你要什么就自己下，而不是全部下好再给你」。
+          # 容器 rootfs 从 1.763 起**随包内置**（见上文那条 build-time 断言），
+          # 这里仍然发布一份 gzip 资产，是给 1.762 及更早版本用的：它们只会走下载。
+          # 老版本要能继续用，资产就不能撤。
           # rootfs 顺手 gzip（8.2MB → 约 3MB）：RootfsManager 按魔数识别 gzip，
           # 落地后直接解，不需要额外一步。
           mkdir -p "$OUT/rootfs-alpine"
-          gzip -9 -c scripts/assets/containers/alpine.tar > "$OUT/rootfs-alpine/alpine.tar.gz"
+          gzip -9 -c app/src/main/assets/containers/alpine.tar > "$OUT/rootfs-alpine/alpine.tar.gz"
           (cd "$OUT/rootfs-alpine" && zip -qry "$OUT/rootfs-alpine.zip" .)
 
           # Shizuku 拿不到就不发这件资产：清单里也不写，App 点安装会直接退官方页，

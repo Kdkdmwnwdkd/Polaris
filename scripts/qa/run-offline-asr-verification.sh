@@ -310,19 +310,22 @@ else
   fail "G4 Shizuku 仍在从 assets 读安装包 —— 它会被打进 APK"
 fi
 
-# 源码树里也不该再有这两份：assets 空着，CI 才会把它们发布成可选组件。
-if [ ! -e app/src/main/assets/shizuku.apk ] && [ ! -d app/src/main/assets/containers ]; then
-  pass "G5 源码 assets 里不再有 shizuku.apk / containers（包体再小 10MB）"
+# 源码树里：Shizuku 安装包不该有（会被打进 APK）；容器 rootfs 反过来**必须内置**。
+# 2026-11-16 晚改的向：8.7MB 的 tar 换「装完即可用、离线也能起容器」，值。
+if [ ! -e app/src/main/assets/shizuku.apk ] \
+   && [ -s app/src/main/assets/containers/alpine.tar ]; then
+  pass "G5 assets 里无 Shizuku 安装包，容器 rootfs 已内置"
 else
-  fail "G5 assets 里还留着可选组件 —— 它们会被打进安装包"
+  fail "G5 assets 可选组件状态不对（Shizuku 不该在，containers/alpine.tar 该在）"
 fi
 
-# 归档本体要有来源：CI 从 scripts/assets 打包成 rootfs-alpine.zip。
-if [ -f scripts/assets/containers/alpine.tar ] \
+# 同一份 tar 既当内置资源，也供 CI 打成 rootfs-alpine.zip —— 那是给 1.762 及更早
+# 版本用的，它们只认下载。撤了资产，老版本的容器页就会 404。
+if [ -s app/src/main/assets/containers/alpine.tar ] \
    && grep -qF 'rootfs-alpine.zip' "$WORKFLOW"; then
-  pass "G6 归档源在 scripts/assets，CI 打成 rootfs-alpine.zip 发布"
+  pass "G6 内置 tar 与 CI 发布的 rootfs-alpine.zip 同源（老版本仍可下载）"
 else
-  fail "G6 归档没有源或 CI 不发布 —— 用户点下载会 404"
+  fail "G6 归档没有源或 CI 不发布 —— 老版本点下载会 404"
 fi
 
 echo "离线识别：$p 通过 / $f 失败"

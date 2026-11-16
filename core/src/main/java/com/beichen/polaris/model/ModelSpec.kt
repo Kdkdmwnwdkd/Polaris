@@ -81,7 +81,13 @@ enum class ModelSpec(
         ),
     ),
 
-    /** Alpine 根文件系统：只在使用 Linux 容器时才需要，8MB。 */
+    /**
+     * Alpine 根文件系统。
+     *
+     * 2026-11-16 晚从「每次都要下载」退回「**随包内置**」：8.7MB 的 tar 压进 APK 约 3MB，
+     * 换的是「装完就能起容器、飞行模式也行」。它留在这张表里是为了裁剪包与老版本——
+     * `RootfsManager.hasArchive` 先看磁盘、再看 assets，两条来源都能起容器。
+     */
     RootfsAlpine(
         zipName = "rootfs-alpine.zip",
         home = "rootfs",
@@ -89,8 +95,9 @@ enum class ModelSpec(
         label = "Alpine 容器",
         approxMb = 3,
         kind = Kind.CONTAINER,
-        // 归档是 tar.gz（3MB）而不是裸 tar（8MB）：gzip 这一层能省 5MB 流量，
-        // 而 RootfsManager 本来就按魔数识别 gzip。
+        // 归档是 tar.gz（3MB）而不是裸 tar（8.7MB）：gzip 这一层能省 5MB 流量，
+        // 而 RootfsManager 本来就按魔数识别 gzip。这条只影响「下载兜底」那条路，
+        // 内置走的是 assets 里的裸 tar。
         required = listOf("alpine.tar.gz"),
     ),
 

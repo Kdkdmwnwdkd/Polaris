@@ -147,7 +147,9 @@ fun ContainerScreen() {
         distros = RootfsManager.listAvailable(context)
         extracted = distros.filter { RootfsManager.isExtracted(context, it.id) }
             .map { it.id }.toSet()
-        downloaded = distros.filter { RootfsManager.isDownloaded(context, it) }
+        // 用 hasArchive 而不是 isDownloaded：内置包（rootfs 随 APK）磁盘上没有归档文件，
+        // 只看 isDownloaded 会让卡片永远显示「下载」，用户以为还要联网。
+        downloaded = distros.filter { RootfsManager.hasArchive(context, it) }
             .map { it.id }.toSet()
     }
 
@@ -224,7 +226,10 @@ fun ContainerScreen() {
                                         // 归档不再随包（2026-11-16）：没下过就先下 3MB。
                                         // 以前点一下只是解压；现在第一步是下载，所以文案与进度
                                         // 必须分开显示——「正在解压…」卡住 20 秒会让人以为死了。
-                                        val have = RootfsManager.isDownloaded(context, d) || runCatching {
+                                        // 归档随包内置（2026-11-16 晚改回）：正常情况下这里
+                                        // 直接为 true，只剩解压一步。保留下载分支是为了
+                                        // 变体包 / 将来把某个发行版单独发的情形。
+                                        val have = RootfsManager.hasArchive(context, d) || runCatching {
                                             ModelDownloader(context, ModelSpec.RootfsAlpine)
                                                 .download { done, total, _ ->
                                                     val ratio = done.toFloat() / maxOf(1L, total)

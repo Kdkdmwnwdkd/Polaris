@@ -628,20 +628,23 @@ def main():
     if not gone:
         total_fail += 1
 
-    # —— 可选组件：不该在包里（2026-11-16 改成应用内按需下载）——
+    # —— 可选组件（2026-11-16 晚定稿的边界）——
     #
-    # 用户的原话：「你要什么就自己下，而不是全部下好再给你」。
-    # 这两份东西以前随包（8.2MB + 2.5MB），只有少数人会用。判据从「在不在包内」
-    # 反转成「不许在包内」——因为现在「在包内」才是缺陷。
-    print("== 可选组件（按需下载，不许在包内） ==")
-    for label, prefix in (
-        ("Shizuku 安装包", "assets/shizuku.apk"),
-        ("容器 rootfs", "assets/containers/"),
-    ):
-        present = any(n == prefix or n.startswith(prefix) for n in zf.namelist())
-        print(f"  {'PASS' if not present else 'FAIL'}  [反证] {label} 不在 APK 内")
-        if present:
-            total_fail += 1
+    # Shizuku：**不许在包内**。它是独立应用，装完还要用户手动确认安装，
+    # 塞进 APK 只让所有人白付 2.5MB。
+    # 容器 rootfs：**必须在包内**。只有 8.7MB（压后约 3MB），却是「想用的人一定用、
+    # 不用的人一辈子不碰」；为这 3MB 让用户赌一次网络与一次下载失败，不划算。
+    # 判据方向相反，别照抄。
+    print("== 可选组件：Shizuku 不内置 / 容器 rootfs 内置 ==")
+    shizuku = any(n == "assets/shizuku.apk" for n in zf.namelist())
+    print(f"  {'PASS' if not shizuku else 'FAIL'}  [反证] Shizuku 安装包不在 APK 内")
+    if shizuku:
+        total_fail += 1
+
+    rootfs = any(n.startswith("assets/containers/") and n.endswith(".tar") for n in zf.namelist())
+    print(f"  {'PASS' if rootfs else 'FAIL'}  容器 rootfs 随包内置（装完即可用，不需联网）")
+    if not rootfs:
+        total_fail += 1
 
     # 但「资产搬出去了」不等于「功能没了」：下载器与安装器本身必须还在。
     for label, desc in (
