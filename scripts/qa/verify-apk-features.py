@@ -379,12 +379,16 @@ ABSENT_POOL = [
     # 2026-11-14 第四轮：真机截图证明「默认应用」里没有「语音识别」这一项。
     # 这句指路文案必须从包里彻底消失，否则我们还在把用户送进死路。
     ("旧的「去系统设置换识别服务」文案已移除", "到系统设置 → 默认应用 → 语音识别"),
-    # 2026-11-16：系统识别整条路删除。这几条是「真的删干净了」的证据——
-    # 留着任意一条，用户就还能走到一条注定出不了中文的路上。
-    ("系统识别页 Intent 已移除", "android.speech.action.RECOGNIZE_SPEECH"),
-    ("系统识别器创建已移除", "createSpeechRecognizer"),
-    ("逐引擎语言探测已移除", "checkRecognitionSupport"),
-    ("系统默认识别引擎读取已移除", "voice_recognition_service"),
+    # 2026-11-16：系统识别整条路删除。断言的是**我们自己的类**不在包里了。
+    #
+    # 不按 `android.speech.action.RECOGNIZE_SPEECH` 这种常量断言：AppCompat 的
+    # SearchView 内部就带着它（语音搜索按钮），那是第三方库的固有实现，删不掉。
+    # 用类描述符才是「我们的代码真的没了」——而这个包名只有我们会写。
+    ("语音能力判定表已移除", "Lcom/beichen/polaris/core/voice/SpeechCapabilityPolicy;"),
+    ("环境探测层已移除", "Lcom/beichen/polaris/audio/SpeechProbe;"),
+    ("聊天页语音纯逻辑已移除", "Lcom/beichen/polaris/ui/VoiceInputLogic;"),
+    ("引擎选择逻辑已移除", "Lcom/beichen/polaris/core/voice/EngineSelector;"),
+    ("识别引擎持久化已移除", "Lcom/beichen/polaris/audio/VoiceEngineStore;"),
 ]
 
 BYTES_GROUPS = {
