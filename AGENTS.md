@@ -9,6 +9,14 @@
 2. `scripts/qa/arch-baseline.txt` 与 `scripts/qa/harness-baseline.txt` **只减不增**。
 3. 工具守卫的裁决只有 `Abstain` / `Deny`，**不许加 `Allow`**——只能拦不能放行，是这套设计的安全性质。
 
+## 当前阶段：P1 冻结（2026-11-17 起）
+
+到 `AgentRuntime` 落地为止，**只修不加**：允许修 bug、加验证、改文档、优化性能；
+不允许新增工具 / 设置项 / 桌面入口 / `Capability` 枚举值。
+判定表与例外流程见 [`docs/architecture/P1-冻结令-2026-11-17.md`](docs/architecture/P1-冻结令-2026-11-17.md)。
+
+提交前自查一句：**这次改动会不会让 `AgentRuntime` 多一个要迁移的调用点？** 会，就等。
+
 ## 改动前先确认基线是绿的
 
 ```bash

