@@ -1723,7 +1723,23 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      */
     private suspend fun requestApproval(toolName: String, args: JsonObject): Boolean = approvalMutex.withLock {
         // W-36/R-08：按「同类操作」放行而非工具名；shell 再看命令内容——不可逆命令永不记忆。
-        val grant = ApprovalScope.of(toolName, args)
+        val scope = ApprovalScope.of(toolName, args)
+        val group = ApprovalGrouping.groupOf(toolName)
+        // P1-②：本回合读过私有内容之后，外发就不再是「同类操作」。
+        // `http_request` 按**域名**记忆——用户上周给 example.com 点过「始终允许」，
+        // 这次同域 POST 就被静默放行，而它发的正是刚用 read_file 读完的那份东西。
+        // 守卫链不敢再拦一次（会连弹两个框），所以把事实交给审批层：三档一律回到
+        // 「每次问」且不可记忆，连 AUTO 档的会话白名单也不放行。
+        val egressNow = egressGuard.taintedNow && group == ApprovalGrouping.GROUP_NETWORK
+        val grant = if (egressNow) {
+            scope.copy(
+                memorizable = false,
+                // 文案必须说明「为什么这次又要问」——否则用户会觉得刚点过的允许丢了
+                label = scope.label + " · 本回合读过私有内容"
+            )
+        } else {
+            scope
+        }
         // W-RT3：档位判定统一走 ApprovalTier——「逐步确认」连会话白名单也失效；
         // 「全自动」对低风险组（界面操作 / 截图 / 朗读通知 / 文件写入）免弹窗，
         // 高风险组（应用装卸 / GitHub 提交 / shell）维持原判。
@@ -1731,14 +1747,17 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // 拿 key 去比集合永远不等，看着「更安全」，实际是让 AUTO 档对 shell 完全失效、
         // 而对其它组又碰巧对——那种「碰巧对」最难查。
         val mode = settingsFacade.approvalTier.value
-        val group = ApprovalGrouping.groupOf(toolName)
-        if (ApprovalTier.shouldSkipDialog(mode, group, ApprovalScope.allows(grant, sessionAllowed))) {
+        // egressNow 时绕过全部免打扰通道：档位、会话白名单、截图回合缓存都不算数。
+        if (!egressNow &&
+            ApprovalTier.shouldSkipDialog(mode, group, ApprovalScope.allows(grant, sessionAllowed))
+        ) {
             return@withLock true
         }
         // W-8 P1-C：截图按回合缓存批准（真机日志里「看一眼点一下」被对话框反复打断）；
         // 回合边界在 send() 入口重置 screenshotApprovedThisTurn。
         // 逐步确认档下不用这个缓存：用户点名要「每次都问」，回合缓存会让第二次静默放行。
-        if (mode != ApprovalTier.STRICT &&
+        if (!egressNow &&
+            mode != ApprovalTier.STRICT &&
             grant.key == ApprovalGrouping.GROUP_UI_SCREENSHOT && screenshotApprovedThisTurn
         ) return@withLock true
         val deferred = CompletableDeferred<Boolean>()
@@ -2295,17 +2314,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 「测试连接」：用配置页当前输入框的值（先实时清洗）发起一次最小请求，
      * 把连通性结果写入 [_testResult] 供卡片渲染。网络 IO 全部走 Dispatchers.IO，不阻塞主线程。
      *
-     * 最小请求体：`messages=[{role:user,content:"ping"}]`、`max_tokens=1`、不带 tools，
-     * 既不污染对话历史，也几乎不产生 token 消耗。
-     *
-     * @param baseUrl 输入框当前的 Base URL（原始值）。
-     * @param apiKey 输入框当前的 API Key（原始值）。
-     * @param model 输入框当前的模型名（原始值）。
-     */
-    /**
-     * 「测试连接」：用配置页当前输入框的值（先实时清洗）发起一次最小请求，
-     * 把连通性结果写入 [_testResult] 供卡片渲染。网络 IO 全部走 Dispatchers.IO，不阻塞主线程。
-     *
      * 最小请求体按供应商各自协议构造（Provider 实现内聚），
      * 既不污染对话历史，也几乎不产生 token 消耗。
      *
@@ -2503,7 +2511,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         }.getOrDefault(false)
     }
 
-
     /** 功能四（P0-2）：附件图片长边上限——兼顾视觉模型识别效果与请求体积。 */
     private companion object {
         const val MAX_EDGE = 1024
@@ -2557,7 +2564,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             "rb", "php", "bat"
         )
     }
-
 
     /** 功能四（P0-2）：移除待发图片。 */
     override fun removePendingImage(url: String) {
@@ -2644,10 +2650,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
         }
     }.getOrNull()
-
-
-
-
 
     /**
      * W-46：把已发生的轮次摊平成「本回合之前的历史」，交给 AgentLoop 一起发。

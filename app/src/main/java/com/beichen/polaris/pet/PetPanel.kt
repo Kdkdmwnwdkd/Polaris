@@ -86,7 +86,7 @@ import kotlinx.coroutines.launch
  *
  * **长按原来是菜单，二期让给了语音。** 这不是随意挪动：桌宠的主路径是语音，
  * 「长按说话」在用户心智里就是最自然的那个动作；把它放进二级菜单（点开气泡→找麦克风）
- * 会让最常见的动作变成三步。菜单本身只有两项，挪进气泡反而更容易被发现。
+ * 会让最常见的动作变成三步。菜单本身只有三项（清空对话 / 打开主应用 / 关闭），挪进气泡反而更容易被发现。
  *
  * 收起气泡时故意不销毁输入框所在的 composition 之外的协程作用域——
  * [rememberCoroutineScope] 挂在 [PetPanel] 上，用户收起气泡不影响正在跑的那一轮。
@@ -132,7 +132,16 @@ fun PetPanel(
     /** 是否正在朗读。朗读走进程级仲裁器，宿主从 `TextSpeaker.speaking` 观察后传进来。 */
     speaking: Boolean,
     /** 停止朗读。桌宠的「停」要能止住声音，而不是只把气泡收起来。 */
-    onStopSpeaking: () -> Unit
+    onStopSpeaking: () -> Unit,
+    /**
+     * 回放上次的对话（首次展开时调用一次）。
+     *
+     * 做成 suspend 而不是「构造时塞一个 List」：读盘是 IO，宿主在 `Service.onCreate`
+     * 里建窗口，那一帧不能等磁盘。真正展开时再读，用户感知不到。
+     */
+    loadHistory: suspend () -> List<PetTurn>,
+    /** 清空历史（内存 + 磁盘）。宿主负责落盘那半，界面负责清气泡。 */
+    onClearHistory: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var messages by remember { mutableStateOf<List<PetBubble>>(emptyList()) }
@@ -177,6 +186,18 @@ fun PetPanel(
         }
     }
 
+    /**
+     * 首次展开时回放上次的对话。
+     *
+     * 条件里带 `messages.isEmpty()`：用户在读盘完成前已经打字发出去了，回放结果
+     * 不能把这条刚发的消息顶掉（`send` 是先往 `messages` 追加、再进协程的）。
+     */
+    LaunchedEffect(expanded) {
+        if (expanded && messages.isEmpty()) {
+            messages = loadHistory().map { PetBubble(it.text, mine = it.mine) }
+        }
+    }
+
     Column(
         modifier = Modifier.width(if (expanded) bubbleWidth.dp else petSize.dp),
         horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start
@@ -218,6 +239,13 @@ fun PetPanel(
 
         if (menuOpen) {
             MenuCard(
+                onClear = {
+                    menuOpen = false
+                    // 先掐在途回合与朗读：清空后模型还跑着，下一句回答会落在空气泡里
+                    stopAll()
+                    messages = emptyList()
+                    onClearHistory()
+                },
                 onOpenApp = {
                     menuOpen = false
                     onOpenApp()
@@ -599,7 +627,7 @@ private fun BubbleRow(bubble: PetBubble) {
 private fun Modifier.bubbleMaxWidth(): Modifier = this.fillMaxWidth(0.86f)
 
 @Composable
-private fun MenuCard(onOpenApp: () -> Unit, onClose: () -> Unit) {
+private fun MenuCard(onClear: () -> Unit, onOpenApp: () -> Unit, onClose: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     Surface(
         shape = RoundedCornerShape(14.dp),
@@ -609,6 +637,9 @@ private fun MenuCard(onOpenApp: () -> Unit, onClose: () -> Unit) {
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(vertical = 4.dp)) {
+            // 历史落盘之后必须有「清空」：没有它，用户唯一的删除手段是去系统设置里
+            // 清应用数据，那会把主界面的会话、配置、工作区一起清掉
+            MenuRow("清空对话", scheme.onSurface, onClear)
             MenuRow("打开主应用", scheme.onSurface, onOpenApp)
             MenuRow("关闭桌面助手", scheme.error, onClose)
         }

@@ -10,6 +10,7 @@ import com.beichen.polaris.core.LLMConfig
 import com.beichen.polaris.core.ProviderManager
 import com.beichen.polaris.core.SystemMessage
 import com.beichen.polaris.core.ToolRegistry
+import com.beichen.polaris.core.UserMessage
 import com.beichen.polaris.core.agent.EgressGuard
 import com.beichen.polaris.core.agent.RealAgentLoop
 import com.beichen.polaris.core.agent.productionSeams
@@ -21,8 +22,10 @@ import com.beichen.polaris.tools.CalculatorTool
 import com.beichen.polaris.tools.ReadFileTool
 import com.beichen.polaris.tools.WebSearchTool
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import java.io.File
@@ -54,17 +57,24 @@ import java.util.Locale
  * 执行命令这类工具，「无审批 + 有副作用」就是数据损坏与误操作的入口。
  * 将来要加写工具，**必须先给桌宠做一套审批通道**，不能只往 registry 里补一行。
  *
- * ## 历史为什么不落盘
+ * ## 历史为什么要落盘
  *
  * 定位是「随手问一句」的独立通道：主界面与桌宠各是各的会话，默认不同步
- * （见 `docs/specs/desktop-pet-spec-v1.md` §2.3）。落盘会引出「两份历史谁是真」
- * 的问题，而那个问题在当前阶段没有收益——用户真正需要长期保留的对话在主应用里。
- * 进程被杀，这段历史就没了，这是**刻意的**。
+ * （见 `docs/specs/desktop-pet-spec-v1.md` §2.3）。这里**不**和主应用合并历史，
+ * 但桌宠自己那点上下文必须活过进程死亡。
+ *
+ * 一期判断是「关掉即焚」，真机跑完站不住：用户问一句、收起气泡回微信、再点开追问
+ * 「那第二条呢」，桌宠一脸茫然。`PetConversation` 只挡住了 Service 重建，挡不住
+ * 「进程被杀 / 手动清后台 / 隔天再用」——而这三件事每天都会发生。
+ *
+ * 落盘只存 user/assistant 的文本（[PetHistoryStore]），工具轨迹不入档：那对「接着聊」
+ * 没有价值，而残缺的 tool 配对会让下一轮请求直接 400。
  *
  * ## 并发
  *
  * 同一时刻只跑一轮（[lock]）。桌宠的输入框在等待期间是禁用的，但通知栏入口、
  * 语音入口将来可能重入——串行化比「两个回合同时往同一个 history 里写」便宜得多。
+ * 落盘加载也在这把锁里：它要改 [history]，与 ask 是同一份可变状态。
  */
 class PetAgentSession(context: Context) {
 
@@ -72,8 +82,30 @@ class PetAgentSession(context: Context) {
 
     private val lock = Mutex()
 
-    /** 仅内存的往返历史；[MAX_HISTORY] 条封顶。 */
+    /** 内存里的往返历史；[MAX_HISTORY] 条封顶。首次提问时用磁盘内容填充。 */
     private val history = mutableListOf<ChatMessage>()
+
+    /**
+     * 落盘（见 [PetHistoryStore]）。
+     *
+     * 放 `filesDir` 不放 `cacheDir`：后者会被系统在空间不足时清掉，而「隔天打开
+     * 历史没了」正是这次要修的那件事。文件是 App 私有的，不额外加密——与主界面的
+     * 会话落盘同一档，`docs/specs/desktop-pet-spec-v1.md` §2.3 记了这个取舍。
+     */
+    private val store = PetHistoryStore(File(appContext.filesDir, "pet/history.json"))
+
+    /**
+     * 是否已经尝试过从磁盘恢复。
+     *
+     * 只试一次：文件坏了就按新会话跑，不要每轮都去读一遍坏文件。`true` 在真正
+     * 读完之前就置位是刻意的——读取过程中并发进来的另一个 ask 会等 [lock]，
+     * 而不是也去读一遍磁盘。
+     */
+    private var restored = false
+
+    /** 用户点过「清空对话」但内存还没清（真正清空在 [lock] 内做，见 [clearHistory]）。 */
+    @Volatile
+    private var clearRequested = false
 
     /**
      * 独立于 ViewModel 的 provider 工厂。
@@ -138,6 +170,8 @@ class PetAgentSession(context: Context) {
     suspend fun ask(input: String): PetReply = lock.withLock {
         val text = input.trim()
         if (text.isEmpty()) return@withLock PetReply("", failed = false, silent = true)
+        // 第一次提问才读盘：构造发生在 `Service.onCreate`（主线程），不该在那里做文件 IO
+        ensureRestored()
         val started = System.currentTimeMillis()
         try {
             val prior = history.toList()
@@ -157,6 +191,10 @@ class PetAgentSession(context: Context) {
             // （实测第三轮「看起来好了」，只是 takeLast 恰好把旧 system 挤出去了。）
             history.addAll(messages.filterNot { it is SystemMessage }.takeLast(MAX_HISTORY))
 
+            // 每轮结束落一次盘。失败不抛也不重试：历史丢了只是「不记得刚才」，
+            // 而把一次成功的回答变成一条错误气泡，代价完全不成比例。
+            store.save(history.toList())
+
             AgentLogger.i(TAG, "桌宠回合完成：${System.currentTimeMillis() - started}ms，${answer.length} 字")
             if (answer.isBlank()) {
                 PetReply("我没想出该说什么，再问一次？", failed = true)
@@ -171,10 +209,65 @@ class PetAgentSession(context: Context) {
         }
     }
 
-    /** 清空上下文（用户点「新对话」）。 */
-    fun clearHistory() {
-        history.clear()
+    /**
+     * 供界面回放的气泡（打开气泡时调用）。
+     *
+     * 与 [ask] 共用 [lock]：恢复要写 [history]，不能与一轮正在跑的 ask 交错。
+     *
+     * 气泡只显示对话本身。`[2026-11-13 22:50 周四] ` 那个前缀是贴给模型看的时间戳
+     * （见 [stampNow]），给人看时剥掉——用户不关心自己那句话是几点打的，而且
+     * 十几行 `[日期 时间 周几]` 会让小气泡变成日志。
+     */
+    suspend fun replay(): List<PetTurn> = lock.withLock {
+        ensureRestored()
+        history.mapNotNull { msg ->
+            when (msg) {
+                is UserMessage -> PetTurn(stripStamp(msg.content), mine = true)
+                is AssistantMessage -> PetTurn(msg.content, mine = false)
+                else -> null
+            }
+        }
     }
+
+    /**
+     * 清空上下文（用户点「清空对话」）。
+     *
+     * 这里**只**打标记 + 删磁盘：内存 `history` 由 [lock] 保护，而这个方法是给 UI
+     * 直接调的（非 suspend、不能等锁）。真去 `clear()` 会和一轮正在跑的 ask 抢写，
+     * 结果是「清空后刚问的那句话又出现在历史里」。真正的清空交给下一次
+     * [ensureRestored] 在锁内做。
+     *
+     * `restored = true` 也要一起置位：删磁盘是异步的，若此刻立刻重新加载，
+     * 很可能读到还没删掉的旧文件，等于没清。
+     */
+    fun clearHistory() {
+        clearRequested = true
+        store.clear()
+    }
+
+    /**
+     * 从磁盘恢复（只做一次）。必须在 [lock] 内调用。
+     *
+     * `history.isNotEmpty()` 的守卫是给「已经聊过一轮、`restored` 还没置位」这种
+     * 异常顺序兜底的：宁可丢掉磁盘里的旧内容，也不要把它拼到一段活对话前面。
+     */
+    private suspend fun ensureRestored() {
+        if (clearRequested) {
+            clearRequested = false
+            history.clear()
+            restored = true
+        }
+        if (restored) return
+        restored = true
+        val loaded = withContext(Dispatchers.IO) { store.load() }
+        if (loaded.isEmpty() || history.isNotEmpty()) return
+        history.addAll(loaded.takeLast(MAX_HISTORY))
+        AgentLogger.i(TAG, "恢复桌宠历史 ${loaded.size} 条")
+    }
+
+    /** 剥掉 [stampNow] 贴的时间前缀；格式严格（日期+时间），不会误伤用户自己写的方括号。 */
+    private fun stripStamp(text: String): String =
+        text.replaceFirst(Regex("^\\[\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}[^\\]]*\\]\\s*"), "")
 
     private fun createClient(): LLMClient {
         val cfg = currentConfig()
@@ -262,10 +355,26 @@ class PetAgentSession(context: Context) {
     companion object {
         private const val TAG = "PetSession"
         private const val MAX_STEPS = 6
-        private const val MAX_HISTORY = 20
+
+        /**
+         * 上下文上限。**与落盘上限同源**（[PetHistoryStore.MAX_MESSAGES]）：
+         * 磁盘里留得比模型记得多，重启后用户会看到一段模型「不认」的对话。
+         */
+        private const val MAX_HISTORY = PetHistoryStore.MAX_MESSAGES
         private const val LOCAL_PROVIDER = "local-llama"
     }
 }
+
+/**
+ * 回放给气泡的一条消息。
+ *
+ * 刻意不带 `failed`：失败回复从来没进过 history，也就不在磁盘上。回放出现的每一条
+ * 都是当时的真实对话，不会出现「昨天那条网络错误」。
+ *
+ * 必须是 public（不能用 internal）：[PetAgentSession.replay] 与 `PetPanel` 的
+ * `loadHistory` 参数都是 public 签名，kt 会拒绝「public API 暴露 internal 类型」。
+ */
+data class PetTurn(val text: String, val mine: Boolean)
 
 /**
  * 一回合的结果。

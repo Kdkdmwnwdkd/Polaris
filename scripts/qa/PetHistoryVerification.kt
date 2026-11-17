@@ -89,6 +89,73 @@ fun main() {
     val h3 = mutableListOf<M>()
     check(h3.isEmpty(), "新会话 history 为空")
 
+    // ---------------------------------------------------------------- C 段
+    //
+    // 落盘往返。真类 PetHistoryStore 依赖 AgentLogger（Android），JVM 编不动，
+    // 所以这里复刻它的映射规则——验的是「档案里只有对话、上限同源」这两条。
+    // 两条错了都不会崩：多存 system 是每轮多付 prompt，存进 tool 轨迹是下一轮 400。
+    println("")
+    println("[C] 行为：落盘往返只带对话")
+
+    val h4 = mutableListOf<M>()
+    for (i in 1..5) {
+        val sent = simulateSend(h4.toList(), "问题" + i)
+        putNew(h4, sent)
+    }
+    val roundTrip = fromRecords(toRecords(h4))
+    check(roundTrip == h4, "C1 往返后与内存逐条相等（" + roundTrip.size + " 条）")
+    check(roundTrip.none { it is M.Sys }, "C2 档案里没有 system（否则重启后每轮多付一段 prompt）")
+
+    val h5 = mutableListOf<M>()
+    for (i in 1..30) {
+        val sent = simulateSend(h5.toList(), "问题" + i)
+        putNew(h5, sent)
+    }
+    val capped = toRecords(h5)
+    check(capped.size == STORE_MAX, "C3 落盘也封顶 " + STORE_MAX + " 条（实际 " + capped.size + "）")
+    check(fromRecords(capped).last() == h5.last(), "C4 封顶留下的是最近一轮（不是最早那批）")
+
+    // 对照：把 system 也塞进档案的写法，必须能被上面的断言抓到
+    val dirty = toRecordsOld(listOf(M.Sys(SYSTEM_PROMPT), M.User("问"), M.Asst("答")))
+    check(dirty.size == 3, "C5 旧写法会把 system 也存下来 —— 缺陷可复现（" + dirty.size + " 条）")
+    check(toRecords(listOf(M.Sys(SYSTEM_PROMPT), M.User("问"), M.Asst("答"))).size == 2,
+        "C5b 新写法丢掉 system（2 条）")
+
+    check(toRecords(emptyList()).isEmpty(), "C6 空历史存出来是空（不写一个空壳）")
+
     println("")
     println(p.toString() + " 通过 / " + f + " 失败")
+}
+
+/** 落盘上限，与 PetHistoryStore.MAX_MESSAGES 同值。 */
+const val STORE_MAX = 20
+
+/** 一条落盘记录。 */
+data class R(val role: String, val text: String)
+
+/** 复刻 PetHistoryStore.toRecord：只留 user / assistant，超限留最近的。 */
+fun toRecords(h: List<M>): List<R> = h.mapNotNull {
+    when (it) {
+        is M.User -> R("user", it.c)
+        is M.Asst -> R("assistant", it.c)
+        else -> null
+    }
+}.takeLast(STORE_MAX)
+
+/** 对照写法：不过滤，把 system 也当成一条对话存下来。 */
+fun toRecordsOld(h: List<M>): List<R> = h.map {
+    when (it) {
+        is M.User -> R("user", it.c)
+        is M.Sys -> R("assistant", it.c)
+        is M.Asst -> R("assistant", it.c)
+    }
+}.takeLast(STORE_MAX)
+
+/** 复刻 PetHistoryStore.load：role 不认识的记录安静丢弃。 */
+fun fromRecords(rs: List<R>): List<M> = rs.mapNotNull {
+    when (it.role) {
+        "user" -> M.User(it.text)
+        "assistant" -> M.Asst(it.text)
+        else -> null
+    }
 }

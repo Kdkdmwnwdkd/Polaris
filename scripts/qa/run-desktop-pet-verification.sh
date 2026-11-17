@@ -595,6 +595,115 @@ else
 fi
 
 say ""
+# ---------------------------------------------------------------- L 段：历史落盘
+#
+# 这一段的每一条都对应一种「历史看着存了、实际没用」的写法：
+#   - 存到 cacheDir（系统清缓存时连历史一起清，用户以为丢了）
+#   - 恢复放在 send 之后（第一轮还是失忆，且写回的内容盖住恢复结果）
+#   - 只清内存不清盘（重启全回来）
+#   - 把 tool 轨迹也存进去（下一次请求 tool 配对不全 → 400）
+say "[L] 历史落盘（跨进程不失忆）"
+
+STORE=app/src/main/java/com/beichen/polaris/pet/PetHistoryStore.kt
+if [ -f "$STORE" ]; then
+  good "L0 存在专用落盘实现 PetHistoryStore"
+else
+  bad "L0 缺少 PetHistoryStore.kt —— 桌宠历史仍然只在内存里"
+fi
+
+# L1 filesDir 而不是 cacheDir：后者是系统回收空间时的第一批牺牲品
+if grep -q 'PetHistoryStore(File(appContext.filesDir' "$SESSION"; then
+  good "L1 历史落在 filesDir（cacheDir 会被系统清掉）"
+else
+  bad "L1 历史落盘目录不是 appContext.filesDir"
+fi
+
+ask_block=$(awk '/suspend fun ask\(/,/^    }/' "$SESSION")
+restore_line=$(printf '%s\n' "$ask_block" | grep -n 'ensureRestored()' | head -1 | cut -d: -f1)
+# 比的是 `val prior = history.toList()` 而不是 loop.send：只要恢复晚于取快照，
+# 这一轮发给模型的 prior 仍是空的——把 restore 摆在 send 前一行也能骗过只比 send 的写法。
+snapshot_line=$(printf '%s\n' "$ask_block" | grep -n 'val prior = history.toList()' | head -1 | cut -d: -f1)
+if [ -n "$restore_line" ] && [ -n "$snapshot_line" ] && [ "$restore_line" -lt "$snapshot_line" ]; then
+  good "L2 先恢复再取历史快照（第一轮就带着上次的上下文）"
+else
+  bad "L2 ensureRestored 晚于 val prior —— 第一轮仍然失忆"
+fi
+
+save_line=$(printf '%s\n' "$ask_block" | grep -n 'store.save(' | head -1 | cut -d: -f1)
+add_line=$(printf '%s\n' "$ask_block" | grep -n 'history.addAll(' | head -1 | cut -d: -f1)
+if [ -n "$save_line" ] && [ -n "$add_line" ] && [ "$save_line" -gt "$add_line" ]; then
+  good "L3 每轮结束把新历史写盘（且写的是本轮更新后的那份）"
+else
+  bad "L3 store.save 缺失或早于 history.addAll —— 存下去的是上一轮"
+fi
+
+# L4 清空必须同时清盘。只清内存的话，「清空对话」在重启后原样复活。
+if awk '/fun clearHistory\(/,/^    }/' "$SESSION" | grep -q 'store.clear()'; then
+  good "L4 清空对话同时清磁盘"
+else
+  bad "L4 clearHistory 只清了内存 —— 重启后对话会回来"
+fi
+
+# L5 回放只给对话，且剥掉给模型看的时间戳前缀（否则小气泡变成日志）
+if awk '/suspend fun replay\(/,/^    }/' "$SESSION" | grep -q 'stripStamp'; then
+  good "L5 回放剥掉 [日期 时间] 前缀"
+else
+  bad "L5 回放把给模型的时间戳也显示给用户了"
+fi
+if grep -qF '\d{4}' "$SESSION"; then
+  good "L5b 剥前缀用严格格式（不误伤用户自己写的方括号）"
+else
+  bad "L5b 时间前缀的匹配太宽，会把用户输入开头的 [..] 吃掉"
+fi
+
+# L6 落盘里不能有 tool 轨迹：残缺的 tool 配对会让下一轮请求直接 400
+rec_block=$(awk '/private fun toRecord/,/^    }/' "$STORE")
+if printf '%s' "$rec_block" | grep -q 'is UserMessage' &&
+   printf '%s' "$rec_block" | grep -q 'is AssistantMessage' &&
+   ! printf '%s' "$rec_block" | grep -q 'toolCalls'; then
+  good "L6 只落 user/assistant 文本，不带 toolCalls"
+else
+  bad "L6 落盘映射把 tool 轨迹也带上了（下一次请求会因配对不全失败）"
+fi
+
+# L7 落盘上限必须与内存上限同源。两个 20 各写各的，早晚漂移成
+# 「看到 30 条、模型只记得 20 条」——那种不一致比少显示更让人困惑。
+if grep -q 'MAX_HISTORY = PetHistoryStore.MAX_MESSAGES' "$SESSION"; then
+  good "L7 内存上限与落盘上限同源"
+else
+  bad "L7 两个上限各写各的常数 —— 迟早漂移"
+fi
+
+# L8 版本号：未来格式写的文件不该被当前版本硬读
+if grep -q 'version <= SCHEMA_VERSION' "$STORE"; then
+  good "L8 读盘校验版本号（不认识的格式宁可当没有）"
+else
+  bad "L8 读盘不校验版本号 —— 未来改格式会读出半截语义"
+fi
+
+# L9 接线：Service → host → panel，任一环断开都是「代码在、功能没生效」
+if awk '/PetOverlayHost\(/,/onOpenApp/' "$SERVICE" | grep -q 'loadHistory = { s.replay() }'; then
+  good "L9a Service 把回放接到宿主"
+else
+  bad "L9a Service 没接 loadHistory —— 展开气泡仍然是空的"
+fi
+if awk '/PetOverlayHost\(/,/onOpenApp/' "$SERVICE" | grep -q 'onClearHistory = { s.clearHistory() }'; then
+  good "L9b Service 把清空接到宿主"
+else
+  bad "L9b Service 没接 onClearHistory —— 菜单里的清空点了没反应"
+fi
+if grep -q 'if (expanded && messages.isEmpty())' "$PANEL"; then
+  good "L9c 首次展开才读盘（且不顶掉刚发出去的那条）"
+else
+  bad "L9c 读盘时机不对：要么收起态就做 IO，要么会覆盖用户刚发的消息"
+fi
+if grep -q '"清空对话"' "$PANEL"; then
+  good "L9d 菜单里有「清空对话」（否则用户只能清应用数据）"
+else
+  bad "L9d 没有清空入口 —— 历史落盘之后这是必须的出口"
+fi
+
+say ""
 if [ "$fail" -eq 0 ]; then
   echo "结果：$npass 通过 / 0 失败"
   exit 0

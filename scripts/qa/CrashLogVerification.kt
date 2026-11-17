@@ -276,12 +276,16 @@ private fun testRedaction() {
     }
 
     check("D4 GitHub / Google 自带前缀的 token 被遮") {
-        val raw = "a ghp_1234567890abcdefghijABCDEFGHIJ b AIzaSyD-1234567890abcdefghijklmnopqrstu"
+        // 这里刻意拼字符串而不是整串写死：完整形态会被 GitHub secret scanning 当成
+        // 真的 Google API Key，每推一次就在告警列表里多一条（2026-11-17 实际误报过
+        // 一次，要人工 resolve）。拼接后源码文本不匹配模式，喂给脱敏器的仍是完整形态。
+        val google = "AIza" + "SyD-1234567890abcdefghijklmnopqrstu"
+        val raw = "a ghp_1234567890abcdefghijABCDEFGHIJ b $google"
         val out = SecretRedactor.redact(raw)
         assertHides(
             "D4 两种前缀都不含原文", out,
             "ghp_1234567890abcdefghijABCDEFGHIJ",
-            "AIzaSyD-1234567890abcdefghijklmnopqrstu"
+            google
         )
     }
 

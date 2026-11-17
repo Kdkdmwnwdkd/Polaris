@@ -82,6 +82,8 @@ class PetOverlayService : Service() {
                 // 错误文案不朗读：用户已经在看了，念一遍「网络不太好」只是噪音
                 if (!reply.failed && !reply.silent) overlay?.speak(reply.text)
             },
+            loadHistory = { s.replay() },
+            onClearHistory = { s.clearHistory() },
             onClose = { PetState.stop(this) },
             onOpenApp = { openMainApp() }
         )

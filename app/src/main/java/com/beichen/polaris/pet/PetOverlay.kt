@@ -69,6 +69,10 @@ class PetOverlayHost(
     private val ask: suspend (String) -> PetReply,
     /** 一轮回答出结果后的副作用（朗读）。失败与空输入不朗读，由调用方判断。 */
     private val onReply: (PetReply) -> Unit,
+    /** 回放上次对话（首次展开气泡时读一次盘）。 */
+    private val loadHistory: suspend () -> List<PetTurn>,
+    /** 清空历史。 */
+    private val onClearHistory: () -> Unit,
     private val onClose: () -> Unit,
     private val onOpenApp: () -> Unit
 ) {
@@ -238,7 +242,9 @@ class PetOverlayHost(
                         onVoiceStart = { voice?.start() },
                         onVoiceStop = { voice?.stop() },
                         speaking = speaking,
-                        onStopSpeaking = ::stopSpeaking
+                        onStopSpeaking = ::stopSpeaking,
+                        loadHistory = loadHistory,
+                        onClearHistory = onClearHistory
                     )
                 }
             }
