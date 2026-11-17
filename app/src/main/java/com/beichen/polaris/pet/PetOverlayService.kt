@@ -284,7 +284,7 @@ class PetOverlayService : Service() {
                 AgentLogger.w(TAG, "没有悬浮窗权限，无法开始聆听")
                 return false
             }
-            return PetState.start(app, ACTION_LISTEN)
+            return PetState.start(app, ACTION_LISTEN, background = true)
         }
     }
 }

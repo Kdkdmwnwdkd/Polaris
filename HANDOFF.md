@@ -31,6 +31,11 @@ P11（悬浮窗 10 条）+ P12（语音 9 条）+ P13（一键唤起 9 条）+ P
 代码层面已闭环；**唤醒词仍然建议不做**（spec §12.1 的账：1–3% 电量/小时 ×
 未知用量），磁贴是它的替代入口。
 
+2026-11-17 深夜在一台云 Linux（x86_64 模拟器，API 30）上补跑了一轮端到端：
+构建、146 个 runner、桌宠服务 + 悬浮窗 + 通知、对话 → 落盘 → 杀进程 → 回放 → 清空，
+全部跑通；并抓到「冷启动必闪退」——`startForegroundService` 的 5 秒窗口撞上首帧渲染，
+详见 §3.12。模拟器给不出的仍是省电策略、键盘高度、磁贴添加、ASR 时延。
+
 ---
 
 ## 1. 上手三条命令
@@ -320,6 +325,56 @@ NDK 编译会让 24 分钟的 CI 翻倍，APK 从 35 MB 涨到 110 MB，而收�
 - 上限与内存同源（`MAX_HISTORY = PetHistoryStore.MAX_MESSAGES`）：存得比模型记得多，用户会看到
   一段模型「不认」的对话。
 
+### 3.12 云机实测：抓到冷启动闪退（2026-11-17 深夜）
+
+在一台 4 vCPU / 8 GB 的云 Linux（Debian 13、JDK 21、Android SDK 34、system-image
+android-30）上把整条链路跑了一遍。该机没有嵌套虚拟化（`/dev/kvm` 节点在、打不开），
+模拟器用 `-accel off` 纯软件跑，慢但可用。
+
+**抓到的真 bug：冷启动必闪退。**
+
+```
+android.app.RemoteServiceException: Context.startForegroundService()
+  did not then call Service.startForeground()
+```
+
+`PetOverlayService.onCreate` 第一句就是 `startForeground`，所以「漏调」是误读。真因是
+**服务没被创建**：`MainActivity.onResume → ensureRunning → startForegroundService`，
+而主线程接下来要跑 Compose 首帧的测量/布局/绘制，`handleCreateService` 排在队列后面。
+那 5 秒窗口由系统从调用瞬间计时，超时在 `ActivityThread` 里抛——**在我们的调用栈之外**，
+`runCatching` 抓不住，整个进程被判死。用户看到的是「一进 App 就闪退」。
+
+修法（`PetState`）：
+- `ensureRunning`（只在前台 `onResume` 调用）改用 `startService`，不参与 5 秒窗口；
+  服务照样在 `onCreate` 里 `startForeground`，仍是前台服务。
+- `start(background = true)`（磁贴 / 通知按钮，可能在后台）保留 `startForegroundService`。
+- 守卫 `B3` / `B4` 把这层区分钉住：谁把它改回一条路径，哪一半就会坏。
+
+这段为什么 CI 抓不到：146 个 runner 全是静态断言与 JVM 逻辑，没有一个能制造「主线程忙
+5 秒」这个条件。
+
+**`matrix.sh` 自己也修了 7 处**（第一次在真设备上跑就现原形）：
+
+| 缺陷 | 表现 | 修法 |
+|---|---|---|
+| `adb -s X getprop` 少了 `shell` | 报告标题变成 `adb: unknown command getprop` | 补 `shell` |
+| install 走 20 秒超时 | 26 MB 包没装完就被掐，判「安装失败」 | 单独 300 秒 + 认 `Success` |
+| A3/A8/C4 空转判 PASS | 服务没起时也报 4 个 PASS | 前提不成立一律 SKIP |
+| 「已装版本」写在表头之后 | Markdown 表格被劈开 | 移到表头之前 |
+| release 包 `run-as` 失败判 FAIL | 只跟打包类型有关，被记成产品缺陷 | 认 `not debuggable` 等文本 → SKIP |
+| A8 数 channel 名 | channel 在 dumpsys 里天然出现 3 次，正常服务被判「重复通知」 | 改数 `NotificationRecord` |
+| 依赖 `awk` | 在没 awk 的机器上表现成「永远没有设备」 | 改 `sed` |
+
+还有一条：一轮全是 SKIP 时脚本原本 exit 0，会被下游读成「AUTO 全过」。现在 exit 2 并在
+报告里写 `INCOMPLETE`。
+
+**跑通的端到端**（全部有 `adb` 证据）：设置页开开关 → 前台服务 + 通知 + 悬浮窗 →
+气泡输入 → mock LLM（`10.0.2.2:8200`）回一句 → `files/pet/history.json` 落盘 →
+`am force-stop` 重开 → 气泡回放上一轮（时间戳前缀已剥）→ 菜单「清空对话」→ 文件被删。
+
+**仍然是 INCOMPLETE 的部分**：省电策略、键盘高度、磁贴添加、ASR 真机时延、拖动吸附手感。
+模拟器给不出这些，也不会因为它们没验就变成「通过」。
+
 ---
 
 ## 4. 代码红线（碰了会立刻红）
@@ -448,9 +503,9 @@ done
 
 | 事项 | 状态 | 怎么办 |
 |---|---|---|
-| CI 最后一次构建结果 | **未确认**（沙箱到 `api.github.com` 时通时断） | 打开仓库 Actions 页看最新一次构建（应覆盖 `66dd431` 之后的提交） |
+| CI 最后一次构建结果 | **未确认**（沙箱到 `api.github.com` 时通时断） | 打开仓库 Actions 页看最新一次构建（应覆盖本轮提交） |
 | 之前用过的 PAT（两个） | 待用户撤销 | 仓库与 869 个提交全扫过：**0 条真 token**，历史干净；但会话里明文出现过，仍需在 GitHub 设置里 revoke |
-| 桌宠真机验证 | 未做（本机无设备） | 按 `docs/qa/真机矩阵-v1.md` 跑 `scripts/qa/device/matrix.sh`；机型建议 S1(API 31) + S2(国产 ROM) |
+| 桌宠真机验证 | **模拟器已过，真机未做** | 模拟器（API 30，`-accel off`）跑通 AUTO 5 项 + 端到端链路，见 §3.12；剩下的省电策略 / 键盘 / 磁贴 / ASR 时延仍需一台 API 31 真机 + 一台国产 ROM |
 
 **已定，不再挂在这里**（2026-11-17）：桌宠历史落盘（做了）、外发审批档位（每次问）、
 P1 期间暂停新功能（冻结令）、真机机型（矩阵文档给了建议）。

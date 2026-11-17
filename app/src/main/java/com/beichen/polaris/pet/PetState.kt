@@ -105,7 +105,7 @@ object PetState {
      * @return false = 没有悬浮窗权限，什么都没做（调用方应引导授权）。
      *         返回 true 只代表**已请求启动**，服务是否起来看 [running]。
      */
-    fun start(context: Context, action: String? = null): Boolean {
+    fun start(context: Context, action: String? = null, background: Boolean = false): Boolean {
         val app = context.applicationContext
         if (!canDrawOverlays(app)) {
             AgentLogger.w(TAG, "未授予悬浮窗权限，不启动桌面助手")
@@ -113,7 +113,10 @@ object PetState {
         }
         _enabled.value = true
         persist(app, true)
-        launchService(app, action)
+        // 设置页点开关（前台）走 startService；磁贴 / 通知按钮可能在后台，
+        // 只有 startForegroundService 才在后台合法。见 [ensureRunning] 的注释：
+        // 前台这条路径用 startForegroundService 反而会被 5 秒窗口打死。
+        launchService(app, action, ensureForeground = background)
         return true
     }
 
@@ -137,7 +140,26 @@ object PetState {
         sync(context)
         if (!_enabled.value || _running.value) return
         if (!canDrawOverlays(context)) return
-        launchService(context.applicationContext)
+        // 这里必须用 startService，**不能**用 startForegroundService。
+        //
+        // 2026-11-17 在 Android 11 模拟器上冷启动必崩，真机同样会踩：
+        //   RemoteServiceException: Context.startForegroundService() did not then
+        //   call Service.startForeground()
+        //   （系统日志：Bringing down service while still waiting for start foreground）
+        //
+        // 原因不是服务里漏了 startForeground——`PetOverlayService.onCreate` 第一句就是它。
+        // 而是**服务根本没被创建**：启动请求在主线程排队，而主线程正忙着首帧的
+        // 测量/布局/绘制，handlerCreateService 排在后面超过 5 秒。那个 5 秒窗口是
+        // 系统从调用瞬间开始计时的，超时由 ActivityThread 在我们的调用栈之外抛异常，
+        // 直接杀进程——`runCatching` 抓不住，用户看到的是「一进 App 就闪退」。
+        //
+        // 换成 startService 就没有这个计时：服务什么时候被调度，就什么时候
+        // startForeground，慢一点但不会崩。此处只在前台（Activity.onResume）调用，
+        // 后台 startService 的限制碰不到。
+        //
+        // 用户主动点开关、点磁贴仍走 startForegroundService（`start` / `listen`）：
+        // 那两条路径可能发生在后台，必须靠前台服务声明来换取执行资格。
+        launchService(context.applicationContext, ensureForeground = false)
     }
 
     /** 由 [PetOverlayService] 上报（只在 onCreate/onDestroy 各调一次）。 */
@@ -164,18 +186,25 @@ object PetState {
         }.onFailure { AgentLogger.w(TAG, "开关落盘失败：${it.message}") }
     }
 
-    private fun launchService(context: Context, action: String? = null) {
+    private fun launchService(
+        context: Context,
+        action: String? = null,
+        ensureForeground: Boolean = true
+    ) {
         val intent = Intent(context, PetOverlayService::class.java)
         if (action != null) intent.action = action
         runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (ensureForeground && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ContextCompat.startForegroundService(context, intent)
             } else {
+                // startService：没有「5 秒内必须 startForeground」的计时。
+                // 服务在 onCreate 第一句就 startForeground，照样是前台服务。
                 context.startService(intent)
             }
         }.onFailure {
-            // Android 12+ 后台启动前台服务会抛 ForegroundServiceStartNotAllowedException。
-            // 这里不崩：用户下次回到 App 时 ensureRunning 会再试一次。
+            // Android 12+ 后台启动前台服务会抛 ForegroundServiceStartNotAllowedException；
+            // 后台 startService 会抛 IllegalStateException。
+            // 这里都不崩：用户下次回到 App 时 ensureRunning 会再试一次。
             AgentLogger.w(TAG, "启动悬浮窗服务失败：${it.message}")
         }
     }

@@ -110,6 +110,28 @@ else
   bad "B2 onStartCommand 没检查 overlay 是否为空 —— 服务会空转"
 fi
 
+# B3：冷启动补启动这条路必须用 startService。
+#
+# 2026-11-17 在 Android 11 模拟器上冷启动必崩：
+#   RemoteServiceException: Context.startForegroundService() did not then
+#   call Service.startForeground()
+# 不是服务里漏了 startForeground（onCreate 第一句就是），而是**服务根本没被创建**：
+# 启动请求排在主线程消息队列里，而主线程正忙首帧渲染，超过 5 秒。那个窗口由系统
+# 计时，超时在 ActivityThread 里抛，进程直接死，runCatching 抓不住。
+# 换 startService 就没有这个计时（服务照样在 onCreate 里 startForeground）。
+if awk '/fun ensureRunning/,/^    }/' "$STATE" | grep -q 'ensureForeground = false'; then
+  good "B3 ensureRunning 用 startService（不参与 5 秒窗口，冷启动不闪退）"
+else
+  bad "B3 ensureRunning 仍走 startForegroundService —— 主线程一忙就闪退（真机复现过）"
+fi
+
+# B4：磁贴 / 通知按钮可能发生在应用完全后台时，只有 startForegroundService 合法。
+if grep -q 'PetState.start(app, ACTION_LISTEN, background = true)' "$SERVICE"; then
+  good "B4 磁贴/通知入口仍走 startForegroundService（后台启动才合法）"
+else
+  bad "B4 listen 退化成前台路径 —— 后台点磁贴会被系统拒绝"
+fi
+
 say ""
 
 # ---------------------------------------------------------------- C 状态回路

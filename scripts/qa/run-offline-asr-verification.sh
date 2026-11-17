@@ -27,9 +27,10 @@ SHEET=app/src/main/java/com/beichen/polaris/ui/LocalVoiceSheet.kt
 JNI=app/src/main/jniLibs/arm64-v8a/libsherpa-onnx-jni.so
 WORKFLOW=.github/workflows/build.yml
 
-p=0; f=0
+p=0; f=0; s=0
 pass() { echo "  PASS  $*"; p=$((p + 1)); }
 fail() { echo "  FAIL  $*"; f=$((f + 1)); }
+skip() { echo "  SKIP  $*"; s=$((s + 1)); }
 
 echo "[A] 模型：不进包、可删、下完要校验"
 
@@ -145,13 +146,21 @@ fi
 # 模型装好但 .so 里没有对应符号，会在用户点第一次语音时才崩；这里提前拦。
 # 先把符号表落到变量里再匹配：`strings | grep -q` 会让 strings 吃到 SIGPIPE，
 # 本脚本开了 pipefail，整条管道于是非零——断言会因为「查得太快」而红。
-SYMS=$(strings -a "$JNI" 2>/dev/null || true)
-# 用 herestring 而不是 `printf | grep -q`：后者匹配到就退出，printf 吃 SIGPIPE，
-# 本脚本开着 pipefail，整条管道于是变成非零——「查得太快」会让断言假红（本轮踩了两次）。
-if grep -q 'Java_com_k2fsa_sherpa_onnx_OnlineRecognizer_newFromFile' <<<"$SYMS"; then
-  pass "C3 JNI 里带 OnlineRecognizer（不用另编 NDK）"
+if [ ! -f "$JNI" ]; then
+  # .so 是 .gitignore 的第三方运行时，靠 fetch-tts-assets.py 落地。
+  # 文件不在时判 FAIL 会把人引向「符号丢了」（其实是没拉）；判 PASS 更糟（什么也没验）。
+  # 判 SKIP 并给出补救命令：这是「环境没准备」，不是「代码坏了」。
+  # 注意 CI 里这个文件一定存在（workflow 有 Fetch native runtime 步骤），所以不会漏检。
+  skip "C3 缺 $JNI —— 先跑 POLARIS_MODELS=0 python3 scripts/qa/fetch-tts-assets.py"
 else
-  fail "C3 打包的 .so 不含流式识别符号 —— 运行到第一次识别才会炸"
+  SYMS=$(strings -a "$JNI" 2>/dev/null || true)
+  # 用 herestring 而不是 `printf | grep -q`：后者匹配到就退出，printf 吃 SIGPIPE，
+  # 本脚本开着 pipefail，整条管道于是变成非零——「查得太快」会让断言假红（本轮踩了两次）。
+  if grep -q 'Java_com_k2fsa_sherpa_onnx_OnlineRecognizer_newFromFile' <<<"$SYMS"; then
+    pass "C3 JNI 里带 OnlineRecognizer（不用另编 NDK）"
+  else
+    fail "C3 打包的 .so 不含流式识别符号 —— 运行到第一次识别才会炸"
+  fi
 fi
 
 echo ""
@@ -328,5 +337,5 @@ else
   fail "G6 归档没有源或 CI 不发布 —— 老版本点下载会 404"
 fi
 
-echo "离线识别：$p 通过 / $f 失败"
+echo "离线识别：$p 通过 / $f 失败${s:+（$s 项因环境缺件跳过）}"
 [ "$f" -eq 0 ]
