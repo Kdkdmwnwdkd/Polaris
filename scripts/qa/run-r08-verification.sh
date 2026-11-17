@@ -97,7 +97,12 @@ VM=app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt
 SCREEN=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
 
 # G1：授权键必须来自 ApprovalScope（它才知道命令内容）。仍用 groupOf(tool.name) 就是没修。
-if grep -q 'val grant = ApprovalScope.of(toolName, args)' "$VM"; then
+#
+# 2026-11-17：断言从 `val grant = ApprovalScope.of(...)` 放宽成调用本身。
+# 出站守卫落地后这里多了一步「读过私有内容时降级为不可记忆」，变量名从 grant 变成了
+# scope → grant 两步；绑定变量名的断言会把一次纯语义增强判成回归。判据要看的是
+# 「键是不是 ApprovalScope 算的」，不是「它叫不叫 grant」。
+if grep -q 'ApprovalScope.of(toolName, args)' "$VM"; then
   g_good "G1 审批键由 ApprovalScope 按入参计算"
 else
   g_bad "G1 ChatViewModel 没走 ApprovalScope.of —— 还在按工具名分组"
