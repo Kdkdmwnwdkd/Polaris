@@ -68,7 +68,7 @@ has "视图模型有状态" "$VM" "approvalTier: StateFlow<String>"
 has "视图模型有 setter" "$VM" "fun setApprovalTier"
 # 传的是归组键而不是 grant.key：shell 的 key 带命令前缀，拿 key 比集合永远不等。
 has "审批入口走档位判定" "$VM" "ApprovalTier.shouldSkipDialog(mode, group, ApprovalScope.allows(grant, sessionAllowed))"
-has "审批入口取归组键" "$VM" "val group = ApprovalGrouping.groupOf(tool.name)"
+has "审批入口取归组键" "$VM" "val group = ApprovalGrouping.groupOf(toolName)"
 # 逐步确认档下截图回合缓存要失效，否则「每次都问」名不副实。
 has "逐步确认不用截图回合缓存" "$VM" "mode != ApprovalTier.STRICT &&"
 has "设置页有档位单选" "$SCREEN" "setApprovalTier"

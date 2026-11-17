@@ -253,6 +253,45 @@ NDK 编译会让 24 分钟的 CI 翻倍，APK 从 35 MB 涨到 110 MB，而收�
 三条都不改分层边界（`arch-baseline` 未动）。第三条只在旋转 / 折叠场景出现，但出现就等于
 丢功能——服务还在跑、通知还在，磁贴再点也只是「服务已经在跑」。
 
+### 3.10 架构方案 P0 落地（2026-11-17）
+
+`docs/architecture/AICoding-架构方案-v3-2026-11-17.md` 的 P0「止血」五项全部落地。
+共同点：**都落在既有文件内，不新增模块，`arch-baseline` 不动**。
+
+| # | 动作 | 落点 | 守卫 |
+|---|---|---|---|
+| 1 | 接缝真接上：`productionSeams` 从零调用变成主界面 + 桌宠各一处 | `ChatViewModel`（loop 的 `seams=`）、`PetAgentSession` | `run-agent-seams-verification.sh` A8–A10 |
+| 2 | 审批预览与判定同源（`take(500)` → 保头保尾 2000 字符） | `core/agent/ApprovalPreview.kt`、`ChatViewModel.requestApproval` | E1–E3（行为） |
+| 3 | 出站守卫 `EgressGuard`：本回合读过文件/屏幕/shell 后，`web_search` 必须人确认 | `core/agent/EgressGuard.kt` | D1–D7（行为） |
+| 4 | 主界面朗读并入 `AudioGraph.arbiter`（原来自建第二个 `TextToSpeech`） | `ChatScreen.TtsController` | `run-voice-arbiter-verification.sh` A17–A18 |
+| 5 | 桌宠「停」+ 关闭保留会话 | `PetPanel`、`PetOverlayHost`、`PetConversation.kt` | `run-desktop-pet-verification.sh` K1–K5 |
+
+**三个取舍，写清楚免得后人重踩：**
+
+1. **`http_request` 不进出站守卫。** 它自己 `needsApproval = true` 且按域名记忆；再加一道
+   只会让同一个动作连弹两个一模一样的「网络请求」窗。重复确认训练用户无脑点允许，比不确认更危险。
+   真正的盲区（已允许域名 + 本回合读过私有内容）留给 P1 的 `Consent`——让审批弹窗带上下文，
+   而不是加第二道同样的门。
+2. **`web_search` 归到 `Approval.NETWORK`。** 它原来没标归组，弹窗文案会回落成
+   「本次会话不再询问web_search」（`ApprovalGrouping.labelOf` 的保守回退）。EgressGuard 的
+   确认框正好走这条归组，不修的话用户看不懂自己在同意什么。
+3. **守卫自己声明超时。** 链默认 3 秒，而「问用户」的守卫必须等得比弹窗久（`EgressGuard` 60 秒）。
+   为此给 `ToolGuard` 加了 `timeoutMs` 与 `onTurnStart`（回合边界清账），链按每个守卫自己的
+   值计时。`onTurnStart` 由 `RealAgentLoop` 在回合入口统一调——用时间窗口或调用序号猜边界，
+   在长回合 / 并行工具下都会错。
+
+**本机验证账**（`QA_GRADLE_CACHE` 里备了 2.2.21 的编译器构件）：
+
+- 全绿：`run-agent-seams`（40）、`run-desktop-pet`（61）、`run-voice-arbiter`（43）、
+  `run-pet-history`（17）、`run-approval-tier`（22）、`run-private-read-approval`（30）、
+  `run-shell-read-boundary`（31）
+- 反向变异：删 `tainted.set(true)` → D2/D3/D4 红；删 `job?.cancel()` → K2 红；
+  会话改回 `new` → K4 红；TtsController 改回自建引擎 → A17/A18 红；
+  预览改回 `take(limit)` → E2/E3 红；全部恢复后回绿
+- 断言普查：1729 条，未超基线（新断言全是行为断言，`AgentSeamsVerification.kt` 的文本断言 2 → 0）
+- 本机仍跑不动的：用 `kotlinc` CLI 的那批（`run-r13-catalog`、`run-approval-grouping` 等），
+  机器上没有 `/tmp/kotlinc`——与改动无关，交 CI
+
 ---
 
 ## 4. 代码红线（碰了会立刻红）

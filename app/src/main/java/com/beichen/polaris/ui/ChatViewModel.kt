@@ -66,7 +66,6 @@ import com.beichen.polaris.core.BookmarkStore
 import com.beichen.polaris.core.ConversationStore
 import com.beichen.polaris.core.ConversationSummary
 import com.beichen.polaris.core.ModelProfile
-import com.beichen.polaris.core.AgentTool
 import com.beichen.polaris.core.AssistantMessage
 import com.beichen.polaris.core.ChatMessage
 import com.beichen.polaris.core.LlmHttpException
@@ -161,6 +160,9 @@ import com.beichen.polaris.core.agent.ApprovalGrant
 import com.beichen.polaris.core.agent.ApprovalGrouping
 import com.beichen.polaris.core.agent.ApprovalTier
 import com.beichen.polaris.core.agent.ApprovalScope
+import com.beichen.polaris.core.agent.ApprovalPreview
+import com.beichen.polaris.core.agent.EgressGuard
+import com.beichen.polaris.core.agent.productionSeams
 import com.beichen.polaris.core.agent.awaitApprovalDecision
 import com.beichen.polaris.core.agent.PlanBroker
 import com.beichen.polaris.tools.SubAgentTool
@@ -1719,9 +1721,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 向用户征求一次危险操作授权，挂起直到用户决策。
      * 已在本次会话「始终允许」过的工具直接放行，不再打扰用户。
      */
-    private suspend fun requestApproval(tool: AgentTool, args: JsonObject): Boolean = approvalMutex.withLock {
+    private suspend fun requestApproval(toolName: String, args: JsonObject): Boolean = approvalMutex.withLock {
         // W-36/R-08：按「同类操作」放行而非工具名；shell 再看命令内容——不可逆命令永不记忆。
-        val grant = ApprovalScope.of(tool.name, args)
+        val grant = ApprovalScope.of(toolName, args)
         // W-RT3：档位判定统一走 ApprovalTier——「逐步确认」连会话白名单也失效；
         // 「全自动」对低风险组（界面操作 / 截图 / 朗读通知 / 文件写入）免弹窗，
         // 高风险组（应用装卸 / GitHub 提交 / shell）维持原判。
@@ -1729,7 +1731,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // 拿 key 去比集合永远不等，看着「更安全」，实际是让 AUTO 档对 shell 完全失效、
         // 而对其它组又碰巧对——那种「碰巧对」最难查。
         val mode = settingsFacade.approvalTier.value
-        val group = ApprovalGrouping.groupOf(tool.name)
+        val group = ApprovalGrouping.groupOf(toolName)
         if (ApprovalTier.shouldSkipDialog(mode, group, ApprovalScope.allows(grant, sessionAllowed))) {
             return@withLock true
         }
@@ -1741,8 +1743,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         ) return@withLock true
         val deferred = CompletableDeferred<Boolean>()
         _pendingApproval.value = ApprovalRequest(
-            toolName = tool.name,
-            argsPreview = args.toString().take(500),
+            toolName = toolName,
+            // P0-2：预览与判定同源。原来 take(500) 会砍掉命令尾部，
+            // 用户看到「构建一下」、实际执行「构建 + rm -rf」，而审批判定用的是全量参数。
+            argsPreview = ApprovalPreview.of(args.toString()),
             deferred = deferred,
             grant = grant
         )
@@ -1750,7 +1754,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // finally 保证无论用户怎么关掉弹窗，pending 都会清空，不会残留卡住下一个工具。
         val ok = try { awaitApprovalDecision(deferred) } finally { _pendingApproval.value = null }
         if (ok && grant.key == ApprovalGrouping.GROUP_UI_SCREENSHOT) screenshotApprovedThisTurn = true
-        AgentLogger.w("Approval", "${tool.name} ${if (ok) "允许" else "拒绝"}")
+        AgentLogger.w("Approval", "$toolName ${if (ok) "允许" else "拒绝"}")
         ok
     }
 
@@ -1773,7 +1777,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     // llmProvider 每次都按最新配置构造，支持运行时切换模型/Key/供应商
     // L10：ui_tap / ui_input / ui_swipe / ui_key / ui_click / ui_screenshot 等危险工具执行前先问用户
-    private val approvalHandler: ToolApproval = { tool, args -> requestApproval(tool, args) }
+    private val approvalHandler: ToolApproval = { tool, args -> requestApproval(tool.name, args) }
 
     /**
      * 供应商工厂：openai / claude / gemini 由 ProviderManager 内置注册；
@@ -1997,10 +2001,25 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         persistToolGroups()
     }
 
+    /**
+     * 出站守卫（P0-1 / P0-3）：本回合读过文件、屏幕、剪贴板、shell 输出之后，
+     * `web_search` 必须先问用户。判据与取舍见 [EgressGuard] 的类注释——特别地，
+     * `http_request` 不在这里（它自己就逐域名审批，重复确认只会训练用户无脑点允许）。
+     * 只挂这一个：守卫链单调，多一条就多一次误拒，除非能说出「用户吃过哪次亏」。
+     */
+    private val egressGuard = EgressGuard(
+        // 走既有审批通道：同一个弹窗、同一套档位，不另做「外部发送」专用弹窗。
+        consent = { name, args -> requestApproval(name, args) },
+    )
+
     private val loop = RealAgentLoop(
         llmProvider = { buildMainClient() },
         registry = registry,
         approval = approvalHandler,
+        // 接缝③：第一个真实守卫（此前 `productionSeams` 全仓零调用，机制在、没人接）。
+        // 走 productionSeams 而不是 AgentSeams(...)：守卫与中间件的日志口子只在那里接回
+        // AgentLogger，直接构造会让拒绝记录静默丢失。
+        seams = productionSeams(toolGuards = listOf(egressGuard)),
         // R1：回合日志——崩溃恢复的唯一依据。原来 checkpoint 恒为 null（四个断点全是空调用），
         // 进程在「工具已执行、结果未落盘」时被杀，重进会重放写操作。
         journal = turnJournal,

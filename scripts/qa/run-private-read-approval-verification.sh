@@ -46,7 +46,11 @@ need "kotlinx-serialization-json-jvm" "$SER_JSON"
 
 OUT=/tmp/qa-private-read
 RUNTIME="$STDLIB:$SER_JSON:$SER_CORE"
-COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS"
+# 编译器进程自身要能看见 reflect 与 coroutines（embeddable 2.x 在 JVM 上初始化时直接用到），
+# 只放进 -classpath 不够。CI 的 1.9.x 不需要，多给无害。
+KREFLECT=$(qa_find_jar "$CACHE/org.jetbrains.kotlin/kotlin-reflect" "kotlin-reflect-*.jar")
+COROUTINES=$(qa_find_jar "$CACHE/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm" "kotlinx-coroutines-core-jvm-*.jar")
+COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS${KREFLECT:+:$KREFLECT}${COROUTINES:+:$COROUTINES}"
 
 # 这几个文件里没有 @Serializable，序列化插件不是必需——有就带上，没有也能编。
 PLUGIN_ARGS=()

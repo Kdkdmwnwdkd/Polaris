@@ -19,10 +19,31 @@ LOOP="$CORE/agent/RealAgentLoop.kt"
 SEAMS="$CORE/agent/AgentSeams.kt"
 GUARD="$CORE/agent/ToolGuard.kt"
 DENY="$CORE/agent/SeamDeny.kt"
+EGRESS="$CORE/agent/EgressGuard.kt"
+APP=app/src/main/java/com/beichen/polaris
+CHAT_VM="$APP/ui/ChatViewModel.kt"
+PET_SESSION="$APP/pet/PetAgentSession.kt"
 
 p=0; f=0
 pass() { echo "  PASS  $*"; p=$((p + 1)); }
 fail() { echo "  FAIL  $*"; f=$((f + 1)); }
+
+# 只匹配**代码行**里的字面量：跳过以 // /* * 开头的行，并剥掉行尾注释。
+# 为什么必须有它：本项目 499 处 grep 里只有 2 处剥注释，于是「把实现删掉、注释留着」
+# 依然能绿——今天在 run-desktop-pet-verification.sh 里刚踩过一次（KDoc 里写着
+# `arbiter.stopSpeech()`，断言 grep 词根就命中了注释）。
+code_has() { # $1=文件 $2=字面量
+  awk -v pat="$2" '
+    {
+      line=$0
+      sub(/^[ \t]+/, "", line)
+      if (line ~ /^(\/\/|\*|\/\*)/) next
+      sub(/\/\/.*/, "", line)
+      if (index(line, pat) > 0) { found=1; exit }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$1"
+}
 
 echo "[A] 接线：loop 真的调用了三个接缝"
 
@@ -74,12 +95,46 @@ else
 fi
 
 echo ""
-echo "[B] 行为：真编真跑（9 个纯 Kotlin 源文件）"
+echo "[A2] 生产装配：接缝有没有真的接上"
+
+# 机制写好了没人接，等于没有机制。这三条守的就是「有人把 seams 参数删掉」——
+# 删掉之后所有行为测试照样全绿（它们直接构造 AgentSeams），线上却回到零守卫。
+if code_has "$CHAT_VM" "seams = productionSeams("; then
+  pass "A8 ChatViewModel 的 loop 传了 productionSeams"
+else
+  fail "A8 ChatViewModel 没有装配 seams —— 守卫链回到「机制在、没人接」"
+fi
+
+if code_has "$CHAT_VM" "EgressGuard("; then
+  pass "A9 主界面挂了出站守卫（读过文件后外发要确认）"
+else
+  fail "A9 主界面没有挂 EgressGuard —— web_search 仍是免审外发通道"
+fi
+
+# 桌宠没有审批界面，它的 consent 必须恒 false（缺审批即拒绝），而不是「忘了接」。
+if code_has "$PET_SESSION" "productionSeams(" && code_has "$PET_SESSION" "EgressGuard(consent = { _, _ -> false })"; then
+  pass "A10 桌宠也接了出站守卫，且无审批时按拒绝处理"
+else
+  fail "A10 桌宠没接守卫，或 consent 不是恒 false —— 无 UI 入口会静默外发"
+fi
+
+if code_has "$GUARD" "val budget = guard.timeoutMs"; then
+  pass "A11 守卫链按每个守卫自己的 timeoutMs 计时"
+else
+  fail "A11 守卫链仍用固定超时 —— 需要问用户的守卫会被 3 秒掐掉"
+fi
+
+echo ""
+echo "[B] 行为：真编真跑（11 个纯 Kotlin 源文件）"
 
 source "$ROOT/scripts/qa/lib/deps.sh"
 CACHE="$QA_GRADLE_CACHE"
 KOTLINC=$(qa_find_jar "$CACHE/org.jetbrains.kotlin/kotlin-compiler-embeddable" "kotlin-compiler-embeddable-*.jar")
 STDLIB=$(qa_find_jar "$CACHE/org.jetbrains.kotlin/kotlin-stdlib" "kotlin-stdlib-*.jar")
+# 编译器的**启动**依赖：kotlin-compiler-embeddable 2.x 在 JVM 上初始化参数解析时会加载
+# kotlin.reflect.jvm.ReflectJvmMapping，缺了它 `java -cp` 直接 NoClassDefFoundError，
+# 看起来像「编译失败」。1.9.x 不需要，加上对旧版无害（-no-reflect 只管编译产物）。
+KREFLECT=$(qa_find_jar "$CACHE/org.jetbrains.kotlin/kotlin-reflect" "kotlin-reflect-*.jar")
 COROUTINES=$(qa_find_jar "$CACHE/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm" "kotlinx-coroutines-core-jvm-*.jar")
 SER_JSON=$(qa_find_jar "$CACHE/org.jetbrains.kotlinx/kotlinx-serialization-json-jvm" "kotlinx-serialization-json-jvm-*.jar")
 SER_CORE=$(qa_find_jar "$CACHE/org.jetbrains.kotlinx/kotlinx-serialization-core-jvm" "kotlinx-serialization-core-jvm-*.jar")
@@ -98,8 +153,10 @@ fi
 
 OUT=/tmp/qa-agent-seams
 rm -rf "$OUT"; mkdir -p "$OUT"
-COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANN"
 DEPS="$STDLIB:$COROUTINES:$SER_JSON:$SER_CORE"
+# 编译器进程自己也要能看见 DEPS：embeddable 2.x 在 JVM 上初始化时直接用到
+# kotlinx.coroutines（CoreApplicationEnvironment），只放进 -classpath 不够。
+COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANN${KREFLECT:+:$KREFLECT}:$DEPS"
 
 java -cp "$COMPILER_CP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -no-reflect -classpath "$DEPS" -d "$OUT" -nowarn \
@@ -109,6 +166,8 @@ java -cp "$COMPILER_CP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   "$CORE/agent/ToolDescriptor.kt" \
   "$GUARD" \
   "$SEAMS" \
+  "$EGRESS" \
+  "$CORE/agent/ApprovalPreview.kt" \
   scripts/qa/AgentSeamsVerification.kt \
   2>&1 | grep -v '^warning:' | head -25
 

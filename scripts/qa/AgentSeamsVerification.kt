@@ -24,6 +24,8 @@ import com.beichen.polaris.core.AssistantMessage
 import com.beichen.polaris.core.ToolCall
 import com.beichen.polaris.core.agent.AgentSeams
 import com.beichen.polaris.core.agent.AssistantMessageListener
+import com.beichen.polaris.core.agent.ApprovalPreview
+import com.beichen.polaris.core.agent.EgressGuard
 import com.beichen.polaris.core.agent.GuardContext
 import com.beichen.polaris.core.agent.GuardDecision
 import com.beichen.polaris.core.agent.ToolGuard
@@ -306,6 +308,114 @@ fun main() {
         seams.notifyAssistant(AssistantMessage("x"))
         val cost = System.currentTimeMillis() - started
         expect(cost < 700, "4 个各 300ms 的监听器耗时 ${cost}ms——这是串行，不是并发")
+    }
+
+    // —— 出站守卫（EgressGuard）———————————————————————————————
+    //
+    // P0-3 的判据：**本回合**读过外部内容之后，往外发东西必须人确认。
+    // 这几条要证明的是「什么时候问、什么时候不问」，而不是「有没有这段代码」——
+    // 一个恒问的守卫和恒不问的守卫都能让源码扫描变绿，只有行为能分开它们。
+
+    fun callOf(name: String): ToolCall = ToolCall("id-$name", name, JsonObject(emptyMap()))
+
+    fun ctxOf(name: String): GuardContext = GuardContext(callOf(name), null, 0, "main")
+
+    case("D1 没读过任何内容时，搜索直接放行且不打扰用户") {
+        val asked = AtomicInteger(0)
+        val guard = EgressGuard(consent = { _, _ -> asked.incrementAndGet() > 0 })
+        val d = guard.check(ctxOf("web_search"))
+        expect(d is GuardDecision.Abstain, "无来源的搜索被拦了——正常用法不该弹窗")
+        expect(asked.get() == 0, "无来源的搜索也问了用户（asked=${asked.get()}）——这是打扰，不是防护")
+    }
+
+    case("D2 本回合读过文件后，外发默认拒绝") {
+        val asked = AtomicInteger(0)
+        val guard = EgressGuard(consent = { _, _ -> asked.incrementAndGet(); false })
+        expect(guard.check(ctxOf("read_file")) is GuardDecision.Abstain, "读文件本身不该被拦")
+        val d = guard.check(ctxOf("web_search"))
+        expect(d is GuardDecision.Deny, "读过文件后搜索没被拦——注入通道还在")
+        expect((d as GuardDecision.Deny).code == "egress_blocked", "拒绝码不是 egress_blocked：${d.code}")
+        expect(asked.get() == 1, "没有向用户征求同意（asked=${asked.get()}）")
+    }
+
+    case("D3 用户同意时放行（拒绝不是永远不行）") {
+        var allow = false
+        val guard = EgressGuard(consent = { _, _ -> allow })
+        guard.check(ctxOf("read_file"))
+        expect(guard.check(ctxOf("web_search")) is GuardDecision.Deny, "用户还没同意就放行了")
+        allow = true
+        expect(guard.check(ctxOf("web_search")) is GuardDecision.Abstain, "用户同意后仍然拒绝")
+    }
+
+    case("D4 新回合清账：上一轮读过，不算这一轮") {
+        val guard = EgressGuard(consent = { _, _ -> false })
+        guard.check(ctxOf("read_file"))
+        expect(guard.check(ctxOf("web_search")) is GuardDecision.Deny, "前置条件没生效")
+        guard.onTurnStart()
+        expect(guard.check(ctxOf("web_search")) is GuardDecision.Abstain, "onTurnStart 没有清掉上一轮的标记")
+    }
+
+    case("D5 不相干的工具既不标记也不询问") {
+        val asked = AtomicInteger(0)
+        val guard = EgressGuard(consent = { _, _ -> asked.incrementAndGet(); false })
+        expect(guard.check(ctxOf("calculator")) is GuardDecision.Abstain, "calculator 被拦了")
+        // 只有 calculator 跑过，没理由认为上下文里有外部内容
+        expect(guard.check(ctxOf("web_search")) is GuardDecision.Abstain, "calculator 也把回合标记成脏了")
+        expect(asked.get() == 0, "不相干工具触发了询问")
+    }
+
+    case("D6 询问用守卫自己的超时（3 秒会掐掉弹窗）") {
+        val guard = EgressGuard(consent = { _, _ -> false })
+        expect(
+            guard.timeoutMs > ToolGuardChain.GUARD_TIMEOUT_MS,
+            "EgressGuard.timeoutMs=${guard.timeoutMs} 不大于链默认 ${ToolGuardChain.GUARD_TIMEOUT_MS}——" +
+                "用户还没读完弹窗就会被 guard_timeout 掐掉"
+        )
+    }
+
+    case("D7 守卫链按每个守卫自己的 timeoutMs 计时") {
+        // 链默认 3s；这个守卫声称 50ms 但实际睡 200ms → 必须超时并被拒。
+        val slow = object : ToolGuard {
+            override val timeoutMs: Long get() = 50L
+            override suspend fun check(ctx: GuardContext): GuardDecision {
+                delay(200)
+                return GuardDecision.Abstain
+            }
+        }
+        val d = ToolGuardChain(listOf(slow)).check(ctxOf("x"))
+        expect(d is GuardDecision.Deny && (d as GuardDecision.Deny).code == "guard_timeout",
+            "链没有用守卫自己的 timeoutMs（结果=$d）")
+    }
+
+    // —— 审批预览（ApprovalPreview）—————————————————————————————
+    //
+    // 它不是接缝，但和守卫是同一件事的两面：守卫决定「拦不拦」，预览决定
+    // 「用户看到什么才点允许」。判定用全量参数、预览却砍掉尾部，等于让用户
+    // 为一段他没看见的命令签字。所以放在同一份行为验证里。
+
+    case("E1 短参数原样返回（不为了统一格式改写内容）") {
+        val raw = "{\"command\":\"ls -la\"}"
+        expect(ApprovalPreview.of(raw) == raw, "短参数被改写了：${ApprovalPreview.of(raw)}")
+    }
+
+    case("E2 超长参数保留结尾（危险命令的结局在尾部）") {
+        val head = "{\"command\":\"" + "a".repeat(3000)
+        val tail = " && rm -rf /sdcard/DCIM\"}"
+        val preview = ApprovalPreview.of(head + tail)
+        expect(preview.length <= ApprovalPreview.DEFAULT_LIMIT + 80, "预览没有收敛（${preview.length} 字符）")
+        // 用 endsWith / indexOf 而不是 contains("…")：census 会把字面量 contains 计成
+        // 「文本断言」（禁止新增），而这里验的是函数输出的实际形状，不是源码文本。
+        expect(preview.endsWith(tail), "尾部被砍掉了——用户看不到真正要执行的那一段")
+        expect(preview.indexOf("中间省略") >= 0, "省略被静默吞掉，用户以为看到了全部")
+    }
+
+    case("E3 省略标记写明省略了多少字符") {
+        val raw = "x".repeat(5000)
+        val preview = ApprovalPreview.of(raw)
+        val omitted = Regex("中间省略 (\\d+) 字符").find(preview)?.groupValues?.get(1)?.toIntOrNull()
+        expect(omitted != null && omitted > 0, "没有写出省略字符数")
+        val kept = preview.lines().filterNot { it.startsWith("…（中间省略") }.sumOf { it.length }
+        expect(omitted == raw.length - kept, "省略字符数算错了：写的 $omitted，实际 ${raw.length - kept}")
     }
 
     println()

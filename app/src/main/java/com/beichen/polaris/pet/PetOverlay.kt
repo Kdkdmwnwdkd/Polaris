@@ -33,6 +33,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -77,7 +78,16 @@ class PetOverlayHost(
 
     private val owner = OverlayOwner()
 
-    private val scope = CoroutineScope(SupervisorJob() + AppScope.io)
+    /**
+     * 宿主自己的协程作用域。
+     *
+     * **可变**：[hide] 会 `cancel()` 它（拆窗时必须把在途的朗读/提示协程一起停掉），
+     * 而 [show] 可以被同一个宿主再次调用（关掉再开、转屏重建）。不可变字段在 cancel 之后
+     * 就永久失效——再 show 出来的窗口没有任何协程可用，表现为「桌宠能弹出来但不会说话」。
+     */
+    private var scope = newScope()
+
+    private fun newScope() = CoroutineScope(SupervisorJob() + AppScope.io)
 
     private var view: ComposeView? = null
     private var params: WindowManager.LayoutParams? = null
@@ -104,6 +114,15 @@ class PetOverlayHost(
      * 一次 `collectAsState` 的生命周期绑定。
      */
     var voiceState: PetVoiceState by mutableStateOf(PetVoiceState.Idle)
+        private set
+
+    /**
+     * 是否正在朗读。
+     *
+     * 从 `TextSpeaker.speaking` 观察，而不是在 [speak] 里自己置位：一句话什么时候念完
+     * 只有引擎知道（还有内置音色的合成时长）。自己置位会导致「早就念完了，气泡上还挂着停」。
+     */
+    var speaking: Boolean by mutableStateOf(false)
         private set
 
     /** 一次性提示（没权限 / 没听清 / 麦克风被占）。[NOTICE_MS] 后自动清空。 */
@@ -217,11 +236,17 @@ class PetOverlayHost(
                         onDrag = ::moveBy,
                         onDragEnd = ::snapToEdge,
                         onVoiceStart = { voice?.start() },
-                        onVoiceStop = { voice?.stop() }
+                        onVoiceStop = { voice?.stop() },
+                        speaking = speaking,
+                        onStopSpeaking = ::stopSpeaking
                     )
                 }
             }
         }
+
+        // 上一次 hide() 已经 cancel 过作用域；这里补一个新的，否则下面的朗读协程
+        // 与提示定时器全都不会跑。
+        if (!scope.isActive) scope = newScope()
 
         val added = runCatching { windowManager.addView(compose, lp) }
         if (added.isFailure) {
@@ -234,6 +259,12 @@ class PetOverlayHost(
 
         // 语音输入与窗口同生同灭。放在 addView 之后：加窗失败就没必要建它。
         // 构造时不加载模型（第一次点麦克风才加载），所以这一步是零成本的。
+        // 朗读状态：主线程收集（TextSpeaker 的 StateFlow 在引擎线程更新，
+        // 但 Compose 快照写入必须在主线程）。
+        scope.launch(Dispatchers.Main.immediate) {
+            AudioGraph.speaker(context).speaking.collect { speaking = it }
+        }
+
         voice = PetVoiceInput(
             context = context,
             onState = { voiceState = it },
@@ -274,6 +305,7 @@ class PetOverlayHost(
         voiceState = PetVoiceState.Idle
         voicePrompt = null
         notice = null
+        speaking = false
         scope.cancel()
         view?.let { v -> runCatching { windowManager.removeView(v) } }
         view = null
@@ -574,6 +606,17 @@ class PetOverlayHost(
             AudioGraph.arbiter(context).speak(text)
                 .onFailure { AgentLogger.w(TAG, "桌宠朗读失败：${it.message}") }
         }
+    }
+
+    /**
+     * 停止朗读（气泡标题栏的「停」）。
+     *
+     * 走仲裁器而不是 `speaker.stop()`：顺带把播报租约还回去，否则下一个想说话的人
+     * （主界面朗读 / 语音提示）会以为通道还被占着。
+     */
+    fun stopSpeaking() {
+        runCatching { AudioGraph.arbiter(context).stopSpeech() }
+            .onFailure { AgentLogger.w(TAG, "停止朗读失败：${it.message}") }
     }
 
     private companion object {

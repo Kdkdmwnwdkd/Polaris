@@ -523,12 +523,12 @@ class RealAgentLoop(
         status: TurnEndStatus
     ): List<ChatMessage> {
         val loopStart = Monotonic.nowMs() // 单调时钟：回合预算不能受校时/改时间影响（4.2 同类）
+        seams.toolGuards.forEach { it.onTurnStart() } // 有状态守卫的回合账本（见 ToolGuard.onTurnStart）
         // 内核暴露（core/KernelExposure）：按能力档位选工具面——W-102 起云端与端侧都只默认
         // 激活 file 组（+ 常驻 misc），其余靠 `__use_tools` 开。开过的组由元工具就地写回
-        // 集合，因此工具面在循环内**每轮重算**（见下方 repeat 块首）。
-        // W-102：优先用外部持有的**粘性**集合——同一会话里第二次「帮我截图」不该再
-        // 开一遍 ui 组（开一次 = 一次完整往返 + 一次前缀失效）。未注入时退回每回合新建，
-        // 行为与改造前逐字节一致（harness 走这条）。
+        // 集合，因此工具面在循环内**每轮重算**（见下方 repeat 块首）。W-102：优先用外部
+        // 持有的**粘性**集合——同一会话里第二次「帮我截图」不该再开一遍 ui 组（开一次 =
+        // 一次完整往返 + 一次前缀失效）。未注入时退回每回合新建，行为与改造前逐字节一致。
         val active = this.activeGroups ?: linkedSetOf()
         val exposure0 = currentExposure(active)
         logExposure(exposure0)

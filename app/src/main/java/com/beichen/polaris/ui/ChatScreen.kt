@@ -12,7 +12,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.speech.tts.TextToSpeech
 import android.util.Base64
 import android.widget.Toast
 import androidx.compose.animation.animateContentSize
@@ -94,6 +93,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import com.beichen.polaris.core.text.ChatTime
 import com.beichen.polaris.core.text.SpeechLogic
+import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.audio.asr.AsrDirectory
 import android.Manifest
 import android.content.pm.PackageManager
@@ -145,7 +145,10 @@ import com.beichen.polaris.core.llm.ProviderCatalog
 import com.beichen.polaris.core.time.Monotonic
 import com.beichen.polaris.ui.contract.*
 import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -1056,42 +1059,58 @@ private fun copyMessage(context: Context, text: String) {
 internal class TtsController(context: Context) {
 
     private val appContext = context.applicationContext
-    private var tts: TextToSpeech? = null
 
-    @Volatile
-    private var ready = false
+    /**
+     * 走进程级仲裁器，而不是自己 new 一个 `TextToSpeech`。
+     *
+     * 修前这里是独立的引擎实例：主界面朗读不登记 `AudioHolder.Speak`，仲裁器
+     * 不知道有声音在响。于是「主界面在念，桌宠同时开麦」两条通道互不可见——
+     * 麦克风把播报声录进去，识别结果是一团乱码。同一个进程里有两份 TTS，
+     * 就等于有两份「谁在说话」的真相，这在音频上必然出错。
+     *
+     * `AudioGraph.arbiter` 内部保证单例，且 [AudioGraph.speaker] 是同一个引擎。
+     */
+    private val arbiter = AudioGraph.arbiter(appContext)
 
-    init {
-        tts = TextToSpeech(appContext) { status ->
-            ready = status == TextToSpeech.SUCCESS
-            if (ready) {
-                // 中文优先（App 面向中文用户）；设备无中文引擎时回落系统默认，不阻断朗读
-                runCatching { tts?.language = Locale.CHINA }
+    /** 播报协程的作用域。`Main.immediate`：TTS 与 AudioManager 都要求带 Looper 的线程。 */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /**
+     * 提交一句朗读。
+     *
+     * 返回值只表示「已提交」——引擎就绪与合成结果都是异步的（内置音色要先加载模型）。
+     * 失败在协程里用 Toast 说明，不再用「未就绪」把用户挡在门外：
+     * 旧实现只看系统引擎的 OnInit，内置音色根本没有那个回调。
+     */
+    fun speak(text: String): Boolean {
+        if (text.isBlank()) return false
+        scope.launch {
+            arbiter.speak(text).onFailure {
+                Toast.makeText(
+                    appContext,
+                    "朗读失败：${it.message ?: "语音引擎未就绪"}",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
-    }
-
-    /** 开始朗读；返回 false = 引擎未就绪或是空文本（调用方据此提示）。 */
-    fun speak(text: String): Boolean {
-        if (!ready || text.isBlank()) return false
-        val id = "msg-${System.currentTimeMillis()}"
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
         return true
     }
 
-    /** 停止当前朗读（再点一次同一按钮走这里）。 */
+    /** 停止当前朗读（再点一次同一按钮走这里）。走仲裁器，顺带释放播报租约。 */
     fun stop() {
-        runCatching { tts?.stop() }
+        arbiter.stopSpeech()
     }
 
-    /** 释放系统绑定（Composable 离开时调用）。 */
+    /**
+     * 离开对话页：停播报 + 取消本页的协程。
+     *
+     * 停的是**共享通道**（桌宠若正好在念也会停）。这与改造前的语义一致——
+     * 「离开对话页，声音不该留」——而同一个进程里同时有两处朗读本来就不该发生：
+     * 仲裁器只会让后一个说话的人等前一个说完。
+     */
     fun shutdown() {
-        runCatching {
-            tts?.stop()
-            tts?.shutdown()
-        }
-        tts = null
-        ready = false
+        runCatching { arbiter.stopSpeech() }
+        scope.cancel()
     }
 }
 

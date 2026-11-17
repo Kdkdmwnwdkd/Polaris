@@ -77,6 +77,24 @@ sealed interface GuardDecision {
 interface ToolGuard {
 
     suspend fun check(ctx: GuardContext): GuardDecision
+
+    /**
+     * 本守卫允许的最大耗时。
+     *
+     * 默认 [ToolGuardChain.GUARD_TIMEOUT_MS]（3 秒）——对所有「看参数做判断」的守卫够用。
+     * 需要**问用户**的守卫必须覆盖它（见 [EgressGuard]）：3 秒不够人读完一行字，
+     * 弹窗还在、守卫先超时，用户点了「允许」却收到 `guard_timeout`。
+     */
+    val timeoutMs: Long get() = ToolGuardChain.GUARD_TIMEOUT_MS
+
+    /**
+     * 新回合开始。默认什么都不做。
+     *
+     * 存在的理由：有状态的守卫需要一个「清账」的时机，而回合是唯一可靠的边界——
+     * 用时间窗口会在长回合里失效，用工具调用序号会在并行工具下错序。
+     * 由 [RealAgentLoop] 在每回合入口统一调用，守卫自己不去猜。
+     */
+    fun onTurnStart() {}
 }
 
 /**
@@ -114,11 +132,13 @@ class ToolGuardChain(
 
     override suspend fun check(ctx: GuardContext): GuardDecision {
         for ((index, guard) in guards.withIndex()) {
+            // 每个守卫自己的上限：默认 3 秒，需要问用户的守卫会显式放大（[ToolGuard.timeoutMs]）。
+            val budget = guard.timeoutMs
             val decision = try {
-                withTimeoutOrNull(GUARD_TIMEOUT_MS) { guard.check(ctx) }
+                withTimeoutOrNull(budget) { guard.check(ctx) }
                     ?: return GuardDecision.Deny(
                         code = "guard_timeout",
-                        message = "工具调用被策略层拦下：第 ${index + 1} 个守卫在 ${GUARD_TIMEOUT_MS}ms 内没有返回。",
+                        message = "工具调用被策略层拦下：第 ${index + 1} 个守卫在 ${budget}ms 内没有返回。",
                         hint = "这不是参数问题，重试同样会失败。请告知用户检查策略设置。",
                     )
             } catch (cancel: CancellationException) {

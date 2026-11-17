@@ -245,7 +245,9 @@ else
   bad "F1 朗读没有走仲裁器 —— 播报不占位，语音输入时会录进自己的声音"
 fi
 
-if grep -qE 'AudioGraph\.speaker\([^)]*\)\.speak' "$OVERLAY" "$SESSION" 2>/dev/null; then
+# 正则必须锚到 `speak(`：`\.speak` 会把 `speaker(context).speaking`（合法地观察播报状态）
+# 也算成「绕过仲裁朗读」——断言过宽会制造「改个正确的代码就变红」的假警报。
+if grep -qE 'AudioGraph\.speaker\([^)]*\)\.speak\(' "$OVERLAY" "$SESSION" 2>/dev/null; then
   bad "F1b 直接调了 speaker.speak —— 必须经 arbiter.speak 才有互斥"
 else
   good "F1b 没有绕过仲裁器直接调引擎"
@@ -549,6 +551,47 @@ if printf '%s' "$osc_block" | grep -q 'screenSize()' && printf '%s' "$osc_block"
   good "J5 重新贴边按新屏幕尺寸算，并夹进可见范围"
 else
   bad "J5 onScreenChanged 没重算坐标 —— 旋转后仍然可能出屏"
+fi
+
+say "[K] 能停 / 能记住：说话中可中止，关掉再开上下文还在"
+
+# K1 气泡里的「停」要真能止住声音。判据是 stopSpeaking 的实现体里调了仲裁器，
+# 而不是只让 UI 把按钮藏起来——「点了没反应」比没有按钮更糟。
+ss_block=$(awk '/fun stopSpeaking\(\)/,/^    }/' "$OVERLAY")
+if printf '%s' "$ss_block" | grep -q 'arbiter(context).stopSpeech()'; then
+  good "K1 「停」走仲裁器停播报（并释放播报租约）"
+else
+  bad "K1 stopSpeaking 没有停掉音频 —— 按钮只是装饰"
+fi
+
+# K2 「停」还要掐掉在途回合。只停声音，模型还在跑，气泡会在几秒后突然冒出新回答。
+if grep -q 'job?.cancel()' "$PANEL"; then
+  good "K2 「停」会取消在途回合，不只是静音"
+else
+  bad "K2 没有持有并取消回合 Job —— 停了声音，回答照样蹦出来"
+fi
+
+# K3 「停」只在有事可停时出现：常驻一个点了没反应的按钮，用户会以为功能坏了。
+if grep -q 'if (speaking || busy)' "$PANEL"; then
+  good "K3 「停」只在朗读中 / 思考中出现"
+else
+  bad "K3 「停」的出现条件不是「真的有事可停」"
+fi
+
+# K4 会话是进程级复用的。服务会因为 stopSelf / START_STICKY 反复重建，
+# 每次 new 一个 PetAgentSession 等于每次都失忆——用户看到的是「桌宠不记事」。
+if grep -q 'PetConversation.of(this)' "$SERVICE"; then
+  good "K4 服务复用进程级会话（关掉再开，上一句还在）"
+else
+  bad "K4 服务仍然每次 new 会话 —— 「关闭即焚」，上下文没了"
+fi
+
+# K5 关闭桌宠**不能**顺手把会话清了。清了 K4 就白做，而且是那种
+# 「代码看着对、体验还是失忆」的错。
+if grep -q 'PetConversation.clear()' "$SERVICE"; then
+  bad "K5 onDestroy 清空了会话 —— 关闭即焚又回来了"
+else
+  good "K5 关闭桌宠不清会话（只有进程死亡才丢）"
 fi
 
 say ""

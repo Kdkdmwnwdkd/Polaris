@@ -10,7 +10,9 @@ import com.beichen.polaris.core.LLMConfig
 import com.beichen.polaris.core.ProviderManager
 import com.beichen.polaris.core.SystemMessage
 import com.beichen.polaris.core.ToolRegistry
+import com.beichen.polaris.core.agent.EgressGuard
 import com.beichen.polaris.core.agent.RealAgentLoop
+import com.beichen.polaris.core.agent.productionSeams
 import com.beichen.polaris.core.workspace.WorkspaceStore
 import com.beichen.polaris.memory.MemorySearchTool
 import com.beichen.polaris.memory.MemoryStore
@@ -112,9 +114,18 @@ class PetAgentSession(context: Context) {
             // 工具表只有五个，不该被「小模型核心集」再裁一遍——裁掉 read_file 它就瞎了
             forceFullTools = true,
             // 瞬时抖动重试一次就够：桌宠是即时交互，等 30 秒重试不如早点说「没连上」
-            providerRetry = 1
+            providerRetry = 1,
             // approval 保持 null：见类注释「工具集为什么这么小」。
             // 加任何有副作用的工具之前，先把审批通道补上。
+            //
+            // 但「没有审批通道」不等于「没有外发出口」：桌宠的工具表里有 web_search（免审），
+            // read_file 也免审。没有这条守卫，一次「读文件 → 照文件里的话搜索」
+            // 就能把工作区内容静默发出去（P0-3）。
+            // consent 恒 false 是**刻意的**：桌宠没有弹窗位置，按「缺审批即拒绝」处理，
+            // 与 approval=null 同一条规矩。用户真要外发，去主界面问。
+            seams = productionSeams(
+                toolGuards = listOf(EgressGuard(consent = { _, _ -> false }))
+            ),
         )
     }
 

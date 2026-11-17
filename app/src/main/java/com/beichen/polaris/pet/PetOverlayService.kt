@@ -71,7 +71,9 @@ class PetOverlayService : Service() {
             return
         }
 
-        val s = PetAgentSession(this)
+        // 会话是进程级复用的：关掉桌宠再打开，上一轮聊过的东西还在（见 [PetConversation]）。
+        // 这里不能 new：`onDestroy` 之后服务对象换了一个，new 出来的会话必然是空的。
+        val s = PetConversation.of(this)
         session = s
         val host = PetOverlayHost(
             context = this,

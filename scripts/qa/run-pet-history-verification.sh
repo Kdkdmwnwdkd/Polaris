@@ -99,8 +99,12 @@ fi
 
 OUT=/tmp/qa-pet-history
 rm -rf "$OUT"; mkdir -p "$OUT"
-COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANN"
 DEPS="$STDLIB"
+# 编译器进程自身要能看见 reflect 与 coroutines（embeddable 2.x 在 JVM 上初始化时
+# 直接用到）。只放进 -classpath 不够，表现为 NoClassDefFoundError。1.9.x 多给无害。
+KREFLECT=$(qa_find_jar "$CACHE/org.jetbrains.kotlin/kotlin-reflect" "kotlin-reflect-*.jar")
+COROUTINES=$(qa_find_jar "$CACHE/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm" "kotlinx-coroutines-core-jvm-*.jar")
+COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANN${KREFLECT:+:$KREFLECT}${COROUTINES:+:$COROUTINES}"
 
 java -cp "$COMPILER_CP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -no-reflect -classpath "$DEPS" -d "$OUT" -nowarn \

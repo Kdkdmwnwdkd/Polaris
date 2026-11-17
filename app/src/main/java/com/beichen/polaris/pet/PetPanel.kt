@@ -61,6 +61,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -127,13 +128,33 @@ fun PetPanel(
     onDrag: (Float, Float) -> Unit,
     onDragEnd: () -> Unit,
     onVoiceStart: () -> Unit,
-    onVoiceStop: () -> Unit
+    onVoiceStop: () -> Unit,
+    /** 是否正在朗读。朗读走进程级仲裁器，宿主从 `TextSpeaker.speaking` 观察后传进来。 */
+    speaking: Boolean,
+    /** 停止朗读。桌宠的「停」要能止住声音，而不是只把气泡收起来。 */
+    onStopSpeaking: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var messages by remember { mutableStateOf<List<PetBubble>>(emptyList()) }
     var input by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+
+    /**
+     * 当前这一轮的协程。
+     *
+     * 存下来是为了「停」：以前 `scope.launch` 的 Job 无人持有，用户想中止只能等模型
+     * 自己说完或关掉整个桌宠。桌宠是即时交互，等到 40 秒才出结果等于没有这个入口。
+     */
+    var job by remember { mutableStateOf<Job?>(null) }
+
+    /** 停：先掐回合，再掐声音。两步都要做——只掐声音，模型还在跑，气泡会突然冒出新回答。 */
+    val stopAll: () -> Unit = {
+        job?.cancel()
+        job = null
+        sending = false
+        onStopSpeaking()
+    }
 
     /**
      * 发一轮。文字输入与语音走同一条路——语音识别成功后直接调这里，
@@ -145,7 +166,7 @@ fun PetPanel(
             input = ""
             messages = messages + PetBubble(text, mine = true)
             sending = true
-            scope.launch {
+            job = scope.launch {
                 val reply = ask(text)
                 sending = false
                 if (!reply.silent) {
@@ -187,7 +208,10 @@ fun PetPanel(
                     menuOpen = !menuOpen
                 },
                 onVoiceStart = onVoiceStart,
-                onVoiceStop = onVoiceStop
+                onVoiceStop = onVoiceStop,
+                speaking = speaking,
+                busy = sending,
+                onStop = stopAll
             )
             Spacer(Modifier.height(6.dp))
         }
@@ -242,7 +266,11 @@ private fun BubbleCard(
     onCollapse: () -> Unit,
     onMenu: () -> Unit,
     onVoiceStart: () -> Unit,
-    onVoiceStop: () -> Unit
+    onVoiceStop: () -> Unit,
+    speaking: Boolean,
+    /** 模型还在跑（`sending`）。与 [speaking] 分开传：两者的「停」是两件事。 */
+    busy: Boolean,
+    onStop: () -> Unit
 ) {
     val listState = rememberLazyListState()
     val focus = remember { FocusRequester() }
@@ -292,6 +320,21 @@ private fun BubbleCard(
                     color = scheme.primary
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 「停」只在真的有事可停时出现：说话中或思考中。
+                    // 常驻一个灰色「停」会让用户以为它坏了（点了没反应）。
+                    if (speaking || busy) {
+                        Text(
+                            text = "停",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = scheme.error,
+                            modifier = Modifier
+                                .pointerInput(Unit) { detectTapGestures { onStop() } }
+                                .padding(horizontal = 8.dp)
+                        )
+                    }
                     Text(
                         text = "⋯",
                         style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp),

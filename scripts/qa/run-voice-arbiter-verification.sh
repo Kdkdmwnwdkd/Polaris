@@ -165,6 +165,21 @@ else
   pass "A16 ChatViewModel 不释放进程级音频层"
 fi
 
+# 主界面朗读曾经自建第二个 TextToSpeech：它不登记播报租约，仲裁器看不见它，
+# 于是「主界面在念 + 桌宠开麦」两条通道互不可见，麦克风把播报录进去（识别成一团乱码）。
+# 断言只看 TtsController 这一段：文件里其它地方出现引擎名（注释解释为什么不再自建）不算。
+tts_block=$(awk '/internal class TtsController/,/^}$/' "$CHAT_SCREEN")
+if printf '%s' "$tts_block" | grep -q 'AudioGraph.arbiter('; then
+  pass "A17 主界面朗读走进程级仲裁器"
+else
+  fail "A17 ChatScreen 的 TtsController 没有走 AudioGraph.arbiter —— 主界面不参与音频仲裁"
+fi
+if printf '%s' "$tts_block" | grep -qE 'TextToSpeech\('; then
+  fail "A18 TtsController 又自建了 TextToSpeech —— 一个进程两份「谁在说话」"
+else
+  pass "A18 主界面不再自建 TTS 引擎"
+fi
+
 echo ""
 echo "[B] 行为：真编真跑（2 个纯 Kotlin 源文件）"
 
@@ -188,8 +203,12 @@ fi
 
 OUT=/tmp/qa-voice-arbiter
 rm -rf "$OUT"; mkdir -p "$OUT"
-COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANN"
 DEPS="$STDLIB:$COROUTINES"
+# 编译器进程自身要能看见 reflect 与 coroutines：embeddable 2.x 在 JVM 上初始化
+# 参数解析 / CoreApplicationEnvironment 时会直接用到它们，只放进 -classpath 不够
+# （表现为 NoClassDefFoundError，看着像编译失败）。1.9.x 不需要，多给无害。
+KREFLECT=$(qa_find_jar "$CACHE/org.jetbrains.kotlin/kotlin-reflect" "kotlin-reflect-*.jar")
+COMPILER_CP="$KOTLINC:$STDLIB:$TROVE:$JB_ANN${KREFLECT:+:$KREFLECT}:$DEPS"
 
 java -cp "$COMPILER_CP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -no-reflect -classpath "$DEPS" -d "$OUT" -nowarn \
