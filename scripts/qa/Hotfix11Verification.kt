@@ -359,21 +359,25 @@ private fun testTtsReading() {
     println("— M 区：TTS 朗读（功能五 P1-2） —")
     val chat = readSource("ui/ChatScreen.kt")
 
-    check("M1 控制器用系统 TextToSpeech（零新增依赖）") {
+    // 2026-11-17 改：控制器不再自建引擎。同一个进程里两份 TTS 等于两份「谁在说话」，
+    // 主界面朗读不登记播报租约，桌宠开麦时会把它录进去。改走进程级 AudioGraph.arbiter
+    // 后，M1 的判据从「用了系统 TTS」变成「没有自己的引擎」，M4 的语言/音色也合并到
+    // TextSpeaker（VoiceSpeech）里——控制器不再各设一份。
+    check("M1 控制器不自建引擎，走进程级仲裁器（一个进程一份「谁在说话」）") {
         assertContains("M1", chat, "internal class TtsController(context: Context)")
-        assertContains("M1", chat, "TextToSpeech(appContext)")
+        assertContains("M1", chat, "AudioGraph.arbiter(appContext)")
     }
-    check("M2 异步初始化有 ready 守卫，speak 返回布尔（未就绪可提示，不静默失败）") {
-        assertContains("M2", chat, "private var ready = false")
+    check("M2 speak 返回布尔（空文本不提交），失败在协程里给可读提示") {
         assertContains("M2", chat, "fun speak(text: String): Boolean")
-        assertContains("M2", chat, "if (!ready || text.isBlank()) return false")
+        assertContains("M2", chat, "if (text.isBlank()) return false")
+        assertContains("M2", chat, "朗读失败")
     }
     check("M3 生命周期纪律：DisposableEffect 离开即 shutdown（防系统绑定泄漏）") {
         assertContains("M3", chat, "DisposableEffect(Unit) { onDispose { tts.shutdown() } }")
         assertContains("M3", chat, "fun shutdown()")
     }
-    check("M4 中文优先且回落不阻断（无中文引擎也不炸）") {
-        assertContains("M4", chat, "runCatching { tts?.language = Locale.CHINA }")
+    check("M4 语言/音色归 TextSpeaker（VoiceSpeech）管，控制器只提交文本") {
+        assertContains("M4", chat, "arbiter.speak(text)")
     }
     check("M5 朗读/停止同按钮切换，文案与颜色随状态反转") {
         assertContains("M5", chat, "if (speaking) \"停止朗读\" else \"朗读\"")

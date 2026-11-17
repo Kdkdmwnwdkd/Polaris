@@ -9,6 +9,7 @@ import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.audio.asr.AsrDirectory
 import com.beichen.polaris.audio.tts.NativeStderr
 import com.beichen.polaris.browser.BrowserHost
+import com.beichen.polaris.pet.PetConversation
 import com.beichen.polaris.pet.PetState
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.CompletionNotifier
@@ -321,6 +322,15 @@ object AppGraph {
                 link = "TTS 引擎与麦克风仲裁器 ↔ 对话页 / 后台回合 / 桌宠。悬浮窗活在 Service 里、" +
                     "没有 Activity，若各自 new 一份就会同时出声、互相看不见对方占着麦克风",
                 reset = { AudioGraph.reset() }
+            )
+        )
+        add(
+            Global(
+                name = "PetConversation",
+                packageName = "com.beichen.polaris.pet",
+                link = "桌宠会话 ↔ 悬浮窗 Service 的多次重建。服务会被 stopSelf / START_STICKY " +
+                    "反复拉起，会话若跟着服务走，用户每次关掉再开都会失忆",
+                reset = { PetConversation.reset() }
             )
         )
         add(

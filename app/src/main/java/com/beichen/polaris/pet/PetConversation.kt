@@ -35,8 +35,13 @@ object PetConversation {
         session ?: PetAgentSession(context.applicationContext).also { session = it }
     }
 
-    /** 仅供测试与「退出登录」类场景；正常关闭桌宠**不要**调它。 */
-    fun clear() {
+    /**
+     * 丢弃当前会话（内存里的历史一起没了）。
+     *
+     * 只有两类调用方：AppGraph 清单的复位路径（harness / 诊断），以及将来的「退出登录」。
+     * 正常关闭桌宠**不要**调它——那正是这个类要解决的问题。
+     */
+    fun reset() {
         synchronized(lock) { session = null }
     }
 }

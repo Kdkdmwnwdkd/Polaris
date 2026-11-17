@@ -264,7 +264,7 @@ data class TranslationUi(val text: String? = null, val error: String? = null)
  * 一次待确认的危险工具调用（L10）：由 AgentLoop 发起、UI 弹窗、用户决策后回填。
  *
  * @param toolName 待执行的工具名（如 ui_tap）。
- * @param argsPreview 入参预览（截断到 500 字符，避免超长参数撑爆 Dialog）。
+ * @param argsPreview 入参预览（[ApprovalPreview] 保头保尾，避免超长参数撑爆 Dialog）。
  * @param deferred UI 用它回复 AgentLoop：complete(true) 放行、complete(false) 拒绝。
  */
 data class ApprovalRequest(
@@ -2001,24 +2001,28 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         persistToolGroups()
     }
 
-    /**
-     * 出站守卫（P0-1 / P0-3）：本回合读过文件、屏幕、剪贴板、shell 输出之后，
-     * `web_search` 必须先问用户。判据与取舍见 [EgressGuard] 的类注释——特别地，
-     * `http_request` 不在这里（它自己就逐域名审批，重复确认只会训练用户无脑点允许）。
-     * 只挂这一个：守卫链单调，多一条就多一次误拒，除非能说出「用户吃过哪次亏」。
-     */
+    /** 出站守卫（P0-1/P0-3）：本回合读过私有内容后，`web_search` 先问用户。判据见 [EgressGuard]。 */
     private val egressGuard = EgressGuard(
-        // 走既有审批通道：同一个弹窗、同一套档位，不另做「外部发送」专用弹窗。
-        consent = { name, args -> requestApproval(name, args) },
+        consent = { name, args -> requestEgressConsent(name, args) },
     )
+
+    /** 出站确认：不复用 [requestApproval]——免审工具没有档位语义，且这件事不可记忆（发一次≠一直发）。 */
+    private suspend fun requestEgressConsent(toolName: String, args: JsonObject): Boolean =
+        approvalMutex.withLock {
+            val d = CompletableDeferred<Boolean>()
+            val grant = ApprovalGrant("egress:$toolName", "对外发送（本回合读过私有内容）", memorizable = false)
+            _pendingApproval.value = ApprovalRequest(toolName, ApprovalPreview.of(args.toString()), d, grant)
+            val ok = try { awaitApprovalDecision(d) } finally { _pendingApproval.value = null }
+            AgentLogger.w("Approval", "egress $toolName ${if (ok) "允许" else "拒绝"}")
+            ok
+        }
 
     private val loop = RealAgentLoop(
         llmProvider = { buildMainClient() },
         registry = registry,
         approval = approvalHandler,
-        // 接缝③：第一个真实守卫（此前 `productionSeams` 全仓零调用，机制在、没人接）。
-        // 走 productionSeams 而不是 AgentSeams(...)：守卫与中间件的日志口子只在那里接回
-        // AgentLogger，直接构造会让拒绝记录静默丢失。
+        // 接缝③：第一个真实守卫（此前 `productionSeams` 全仓零调用）。必须走它而不是
+        // `AgentSeams(...)`：日志口子只在那里接回 AgentLogger，直接构造会让拒绝记录静默丢失。
         seams = productionSeams(toolGuards = listOf(egressGuard)),
         // R1：回合日志——崩溃恢复的唯一依据。原来 checkpoint 恒为 null（四个断点全是空调用），
         // 进程在「工具已执行、结果未落盘」时被杀，重进会重放写操作。

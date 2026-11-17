@@ -97,7 +97,7 @@ VM=app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt
 SCREEN=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
 
 # G1：授权键必须来自 ApprovalScope（它才知道命令内容）。仍用 groupOf(tool.name) 就是没修。
-if grep -q 'val grant = ApprovalScope.of(tool.name, args)' "$VM"; then
+if grep -q 'val grant = ApprovalScope.of(toolName, args)' "$VM"; then
   g_good "G1 审批键由 ApprovalScope 按入参计算"
 else
   g_bad "G1 ChatViewModel 没走 ApprovalScope.of —— 还在按工具名分组"

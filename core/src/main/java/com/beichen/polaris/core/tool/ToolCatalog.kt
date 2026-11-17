@@ -126,10 +126,7 @@ object ToolCatalog {
         CatalogTool("web_click", "web", Capability.DANGEROUS),
         CatalogTool("web_type", "web", Capability.DANGEROUS),
         CatalogTool("web_eval", "web", Capability.DANGEROUS),
-        // 归到网络外发组：它把 query 原样发到搜索引擎，与 http_request 同一类动作。
-        // 不标的后果是弹窗文案回落成「本次会话不再询问web_search」（见 ApprovalGrouping.labelOf），
-        // 而 EgressGuard 的确认框正好走这条归组——用户看不懂自己在同意什么。
-        CatalogTool("web_search", "web", Capability.PRIVILEGED, Approval.NETWORK),
+        CatalogTool("web_search", "web", Capability.PRIVILEGED),
         // ── app：安装卸载启停应用
         CatalogTool("app_install", "app", Capability.DANGEROUS, Approval.APP_MANAGE),
         CatalogTool("app_uninstall", "app", Capability.DANGEROUS, Approval.APP_MANAGE),
