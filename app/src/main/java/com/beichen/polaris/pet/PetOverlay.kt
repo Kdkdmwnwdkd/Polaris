@@ -154,8 +154,16 @@ class PetOverlayHost(
         noticeAction = null
     }
 
-    fun show() {
-        if (view != null) return
+    /**
+     * 把窗口挂到屏幕上。
+     *
+     * @return true = 窗口真的挂上了；false = 加窗被拒（权限被系统回收 / ROM 拦截）。
+     *         调用方**必须**把 false 当成「没起来」——`show()` 曾经没有返回值，
+     *         加窗失败只留一行日志，结果是服务照常前台常驻、通知在、设置页显示
+     *         「运行中」，而屏幕上什么都没有，磁贴点下去也「有反应但没反应」。
+     */
+    fun show(): Boolean {
+        if (view != null) return true
         // 主题是全局单例，Service 里没人替它读过盘。不 load 会拿到默认配色，
         // 用户改了强调色、桌宠却还是旧的。
         runCatching { AppearanceState.load(context) }
@@ -219,7 +227,7 @@ class PetOverlayHost(
         if (added.isFailure) {
             AgentLogger.w(TAG, "悬浮窗添加失败：${added.exceptionOrNull()?.message}")
             owner.detach()
-            return
+            return false
         }
         view = compose
         params = lp
@@ -243,6 +251,7 @@ class PetOverlayHost(
         )
 
         compose.post { snapToEdge() }
+        return true
     }
 
     fun hide() {
@@ -251,6 +260,17 @@ class PetOverlayHost(
         // 而麦克风要等 20 秒硬超时才释放——用户看到的是「桌宠没了，但麦克风还占着」。
         voice?.destroy()
         voice = null
+        // 再停掉正在念的那句。
+        //
+        // TTS 引擎是进程级单例（`AudioGraph.speaker`），把文本交给它之后就不归我们管了：
+        // 拆窗、`scope.cancel()` 都停不下已经在播的音频。用户从「⋯ → 关闭桌面助手」
+        // 关掉桌宠时，屏幕已经空了，声音还在把上一条回答念完——这就是「关不掉」。
+        // 与 `ChatViewModel` 离开对话页就停播报是同一条规矩：入口没了，声音也不该留。
+        //
+        // 用 `arbiter.stopSpeech()` 而不是 `speaker.stop()`：前者顺带释放播报租约，
+        // 否则「唯一持有者」会以为还有人在用音频通道。
+        runCatching { AudioGraph.arbiter(context).stopSpeech() }
+            .onFailure { AgentLogger.w(TAG, "关闭时停止朗读失败：${it.message}") }
         voiceState = PetVoiceState.Idle
         voicePrompt = null
         notice = null
@@ -468,6 +488,39 @@ class PetOverlayHost(
         snappedLeft = lp.x + w / 2 < screen.x / 2
         lp.x = if (snappedLeft) 0 else (screen.x - w).coerceAtLeast(0)
         update(lp)
+    }
+
+    /**
+     * 屏幕尺寸变了（旋转 / 分屏 / 折叠展开）：按新尺寸重新贴边。
+     *
+     * `LayoutParams.x/y` 是**绝对像素**，旋转后屏幕宽高互换，系统只保证「窗口还在」，
+     * 不保证它还落在可见范围内：横屏时贴在右边缘的 x 可能是 1500，转回 1080 宽的
+     * 竖屏后这个点就在屏幕外。用户看到的是「桌宠自己没了」，而 `START_STICKY` 也救不回来
+     * ——服务活得好好的，只是窗口挂在屏幕之外，怎么点都没反应。
+     *
+     * 贴哪边按新宽度重新算，不沿用旧值：旧 x 属于旧坐标系，拿来判断「原来贴左还是右」
+     * 在横竖屏互换时正好会反过来。
+     */
+    fun onScreenChanged() {
+        val lp = params ?: return
+        applyConstraints(lp, screenSize())
+        update(lp)
+        // 展开态高度是 WRAP_CONTENT：这一刻还没按新宽度量完，等量完再夹一次。
+        // 只夹一次、不递归——`applyConstraints` 是幂等的，第二次跑不会改动已经合规的坐标。
+        view?.post {
+            val p = params ?: return@post
+            applyConstraints(p, screenSize())
+            update(p)
+        }
+    }
+
+    /** 把窗口夹回可见范围，并记下这次贴的是哪一边。幂等。 */
+    private fun applyConstraints(lp: WindowManager.LayoutParams, screen: Point) {
+        snappedLeft = lp.x + lp.width / 2 < screen.x / 2
+        lp.x = if (snappedLeft) 0 else (screen.x - lp.width).coerceAtLeast(0)
+        // 高度拿不到（还没量完）时按收起态估，宁可高估——高估只会让 y 偏小，不会偏出屏幕
+        val h = view?.height?.takeIf { it > 0 } ?: px(PET_SIZE_DP)
+        lp.y = lp.y.coerceIn(0, (screen.y - h).coerceAtLeast(0))
     }
 
     private fun clampX(screen: Point, width: Int) {

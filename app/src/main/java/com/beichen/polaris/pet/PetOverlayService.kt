@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -83,9 +84,30 @@ class PetOverlayService : Service() {
             onOpenApp = { openMainApp() }
         )
         overlay = host
-        host.show()
+        if (!host.show()) {
+            // 加窗被拒（权限被系统回收 / ROM 不让挂）：窗口不在，这个服务就没有存在的理由。
+            // 以前 `show()` 没有返回值，失败被静默吞掉，于是「服务在跑、通知在、屏幕空空」，
+            // 设置页还显示「运行中」——用户点什么都不像有反应，也找不到原因。
+            AgentLogger.w(TAG, "悬浮窗没能挂上，桌面助手不启动")
+            overlay = null
+            session = null
+            stopSelf()
+            return
+        }
         PetState.markRunning(true)
         AgentLogger.i(TAG, "桌面助手已启动")
+    }
+
+    /**
+     * 屏幕旋转 / 折叠展开：让窗口按新尺寸重新贴边。
+     *
+     * 悬浮窗坐标是绝对像素，系统不会替我们换算。不处理这一步，横屏时贴在右边缘的
+     * 桌宠转回竖屏就落在屏幕外——服务仍在跑、通知仍在，但用户眼里它「消失了」，
+     * 而且没有任何入口能把它叫回来（磁贴只是再发一次 start，服务已经在跑）。
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        overlay?.onScreenChanged()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

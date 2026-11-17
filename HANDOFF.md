@@ -161,12 +161,14 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
 
 **四个必须知道的约束**（都在 `PetVoice.kt` 的类注释里）：
 
-1. **只能在主线程**。`createSpeechRecognizer` / `startListening` 都要求主线程，
-   否则抛 `RuntimeException: SpeechRecognizer should be used only from the main thread`。
-2. **每次新建、用完 destroy**。复用实例在部分 ROM 上会出现「第二次录音零回调」的静默失败，
-   代价远高于每次多花 300ms。
-3. **必须有超时**。引擎的静音判定厂商各异，`EXTRA_SPEECH_INPUT_*_SILENCE_LENGTH_MILLIS`
-   经常被忽略。现在是 20s 硬上限 + 5s 结果等待。
+1. **状态只在主线程改**。录音线程（`asr-capture`）的回调一律 `handler.post` 回主线程，
+   再动 Compose 状态与 `onText`。
+2. **一次只有一个会话，用完就拆**。`active` 之外再按一次直接忽略；`LocalSpeechInput`
+   每次新建、收尾即 `cancel()`，不复用。
+3. **必须有超时**。20s 硬上限（`HARD_TIMEOUT_MS`），录音层另有 30s 上限
+   （`LocalSpeechInput.MAX_MS`）。`stop()` 之后**没有**另设「等结果」的宽限——收尾只等
+   一次 decode。（原文写的是「20s 硬上限 + 5s 结果等待」，那是 11-14 系统识别器版本的账；
+   11-16 删掉那条路时，宽限也跟着没了。）
 4. **必须走仲裁**。`beginCapture` 成功即意味着播报已停——不要自己先调 `stopSpeech()`，
    互斥是仲裁的结果，不是调用方的义务。
 
@@ -236,6 +238,20 @@ NDK 编译会让 24 分钟的 CI 翻倍，APK 从 35 MB 涨到 110 MB，而收�
 验证：`scripts/qa/run-auto-resume-verification.sh`（11 条结构 + 39 条行为，
 含端到端模拟「续跑→被杀→再续跑」两轮后第三轮必须停手）。
 真机三条见 `docs/ops/DEVICE-VERIFICATION-PENDING.md` 的 P14——它们只验**触发时机**。
+
+### 3.9 收尾三处（2026-11-17 修）
+
+真机验证前先把「不会崩、但用户会觉得功能坏了」的三处收掉。守卫在
+`run-desktop-pet-verification.sh` 的 `[J]` 段（J1–J5，含反向变异验过）：
+
+| 现象 | 根因 | 修法 |
+|---|---|---|
+| 关掉桌宠，回答还在念 | `hide()` 只拆窗、`scope.cancel()`；TTS 是进程级单例，已经交给引擎的音频停不下 | `hide()` 里 `AudioGraph.arbiter(context).stopSpeech()`（顺带释放播报租约） |
+| 设置页说「运行中」，屏幕什么都没有 | `show()` 无返回值，`addView` 失败只打日志；服务照样 `markRunning(true)` | `show(): Boolean`；服务只在 true 时报运行态，失败即 `stopSelf()` |
+| 转个屏桌宠就找不回来 | 窗口坐标是绝对像素，`screenSize()` 只在 show / 拖动时读 | Service 重写 `onConfigurationChanged` → `PetOverlayHost.onScreenChanged()` 按新尺寸重新贴边 |
+
+三条都不改分层边界（`arch-baseline` 未动）。第三条只在旋转 / 折叠场景出现，但出现就等于
+丢功能——服务还在跑、通知还在，磁贴再点也只是「服务已经在跑」。
 
 ---
 

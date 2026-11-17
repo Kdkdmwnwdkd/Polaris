@@ -18,6 +18,7 @@
 #   G  范围控制   出现 AudioRecord 就是手搓录音（识别该交给系统服务）
 #   H  语音闭环   二期：不弹系统页、走仲裁、销毁引擎、有超时、错误可执行
 #   I  一键唤起   三期替代：磁贴/通知按钮直达「在听」，且绝不做常驻监听
+#   J  收尾一致   关掉就静音、加窗失败不许报「运行中」、旋转后要重新贴边
 #
 # 退出码：0 通过 / 1 有违规。
 set -uo pipefail
@@ -496,6 +497,58 @@ if grep -q 'focusInput = false' "$OVERLAY" && grep -q 'LaunchedEffect(autoFocusI
   good "I10 语音唤起 / 瞬时提示的展开不抢输入焦点"
 else
   bad "I10 展开无条件聚焦输入框 —— 磁贴叫它说话时会弹出键盘挡住视线"
+fi
+
+say ""
+# ------------------------------------------------- J 收尾与状态一致性
+#
+# 这一组守的都是「看起来做了、其实没做」的那一类：
+#   关掉之后声音还在念 / 屏幕上什么都没有但状态说在跑 / 转个屏就再也找不回来。
+# 三条都不会崩、不会报错，只会让用户觉得「这功能是坏的」，所以必须静态钉住。
+say "[J] 收尾与状态一致性"
+
+# J1 关闭桌宠要停掉正在播报的那句。TTS 是进程级单例，把文本交出去之后
+# 拆窗、取消协程都停不下已经在响的音频——表现是「桌宠没了，声音还在念」。
+hide_block=$(awk '/fun hide\(\)/,/^    }/' "$OVERLAY")
+# 匹配调用表达式而不是关键词：注释里也写着 `arbiter.stopSpeech()`，
+# 只 grep 词根的话，把代码删掉、注释留着照样能绿——那是假绿。
+if printf '%s' "$hide_block" | grep -q 'AudioGraph.arbiter(context).stopSpeech()'; then
+  good "J1 关闭桌宠会停掉正在播报的那句"
+else
+  bad "J1 hide() 没停播报 —— 关掉桌宠后声音还在念"
+fi
+
+# J2 加窗失败必须能传出去。show() 吞掉结果，服务就只能假定「挂上了」，
+# 于是前台通知、running 状态全都与实际相反。
+if grep -q 'fun show(): Boolean' "$OVERLAY"; then
+  good "J2 show() 把加窗结果交给调用方"
+else
+  bad "J2 show() 没有返回值 —— 加窗失败会被静默吞掉"
+fi
+
+# J3 服务只在窗口真的挂上之后才报 running=true。判据是两次行号：
+# `if (!host.show())` 必须在 `markRunning(true)` 之前，且失败分支要 stopSelf。
+show_pat_line=$(grep -n 'if (!host.show())' "$SERVICE" | head -1 | cut -d: -f1)
+run_pat_line=$(grep -n 'PetState.markRunning(true)' "$SERVICE" | head -1 | cut -d: -f1)
+if [ -n "$show_pat_line" ] && [ -n "$run_pat_line" ] && [ "$show_pat_line" -lt "$run_pat_line" ]; then
+  good "J3 只有加窗成功才报运行中（失败分支 stopSelf）"
+else
+  bad "J3 服务没检查 show() 的返回值 —— 加窗失败也会显示「运行中」"
+fi
+
+# J4 旋转 / 折叠必须重新贴边。坐标是绝对像素，系统只保证窗口还在、不保证在可见范围内。
+if grep -q 'override fun onConfigurationChanged' "$SERVICE" && grep -q 'onScreenChanged()' "$SERVICE"; then
+  good "J4 配置变化时通知悬浮窗重新贴边"
+else
+  bad "J4 没有 onConfigurationChanged —— 横竖屏切换后桌宠可能落在屏幕外"
+fi
+
+# J5 重新贴边要真按「新屏幕宽高」夹一次，而不是把旧 x 原样留住。
+osc_block=$(awk '/fun onScreenChanged/,/^    }/' "$OVERLAY")
+if printf '%s' "$osc_block" | grep -q 'screenSize()' && printf '%s' "$osc_block" | grep -q 'applyConstraints'; then
+  good "J5 重新贴边按新屏幕尺寸算，并夹进可见范围"
+else
+  bad "J5 onScreenChanged 没重算坐标 —— 旋转后仍然可能出屏"
 fi
 
 say ""
