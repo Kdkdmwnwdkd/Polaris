@@ -284,7 +284,9 @@ class McpServerHost(
             if (n < 0) break
             read += n
         }
-        if (read <= 0) return null
+        // 短读 = 连接中断。不能把半截 JSON 当请求——那会让 -32700 掩盖真实的网络问题，
+        // 客户端重试时又看到「parse error」，误以为是自己的格式错了。
+        if (read != len) return null
         return String(buf, 0, read, Charsets.UTF_8)
     }
 
@@ -393,7 +395,19 @@ class McpServerHost(
         }
 
         val started = clock()
-        val message = runBlocking { tools.execute(call) }
+        // 工具抛异常不能直接冒到 handleConnection 的 catch：那里只会回 500，**不记审计**。
+        // 而「它到底调了什么、崩在哪」恰恰是审计存在的唯一理由——异常路径必须留痕，
+        // 否则事后只剩客户端一句 "internal error"。
+        val message = runCatching { runBlocking { tools.execute(call) } }.getOrElse { e ->
+            audit.record(
+                client.name, tier, name, args,
+                decision = "error",
+                approvalKey = null,
+                durationMs = clock() - started,
+                status = "exception:" + (e::class.simpleName ?: "Throwable"),
+            )
+            return rpcError(id, -32603, "tool execution failed: ${e.message ?: "internal error"}")
+        }
         val elapsed = clock() - started
         audit.record(
             client.name, tier, name, args,

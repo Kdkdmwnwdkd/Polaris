@@ -60,6 +60,8 @@ private class FakeTool(
     override val name: String,
     private val counter: AtomicInteger,
     override val needsApproval: Boolean = false,
+    /** 执行时抛异常：验证「工具崩了」也要留审计，而不是只回一个 500。 */
+    private val throwOnExecute: Boolean = false,
 ) : AgentTool {
     override val description = "harness 假工具 $name"
     override val parameters = JsonSchema.objectSchema()
@@ -67,6 +69,7 @@ private class FakeTool(
 
     override suspend fun execute(args: JsonObject): ToolResult {
         counter.incrementAndGet()
+        if (throwOnExecute) throw IllegalStateException("boom:$name")
         return ToolResult.ok(message = "ran:$name")
     }
 }
@@ -130,7 +133,7 @@ fun main() {
     val tools = listOf(
         FakeTool("read_file", calls),
         FakeTool("calculator", calls),
-        FakeTool("app_launch", calls),
+        FakeTool("app_launch", calls, throwOnExecute = true),
         FakeTool("ui_tap", calls, needsApproval = true),
         // PRIVILEGED + 需审批：标准档可见、但必须弹卡。没有审批界面时就得拒。
         FakeTool("write_file", calls, needsApproval = true),
@@ -279,6 +282,23 @@ fun main() {
     ok(
         "B21 审计参数只存摘要与预览，不存全文",
         fields.isNotEmpty() && fields.all { it["argsHash"].primOrNull() != null && it["argsPreview"].primOrNull() != null },
+    )
+
+    // ── 工具抛异常：必须留审计，不能只是一个 500 ──────────────────────
+    val boom = post(
+        port,
+        """{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"app_launch","arguments":{"target":"com.x"}}}""",
+        stdToken,
+    )
+    ok("B26 工具抛异常 → -32603（不是 500）", errorCode(boom.second) == -32603, "体 ${boom.second.take(140)}")
+    val errorAudit = File(dir, "audit").listFiles()?.filter { it.name.endsWith(".jsonl") }
+        .orEmpty().flatMap { it.readLines() }.mapNotNull { line ->
+            runCatching { Json.parseToJsonElement(line).objOrNull() }.getOrNull()
+        }.filter { it["decision"].primOrNull()?.content == "error" }
+    ok(
+        "B27 异常路径也写了审计（decision=error）",
+        errorAudit.any { it["tool"].primOrNull()?.content == "app_launch" },
+        "实际 ${errorAudit.map { it["tool"].primOrNull()?.content }}",
     )
 
     // ── 锁屏：人不在场，只放行 SAFE ──────────────────────────────────

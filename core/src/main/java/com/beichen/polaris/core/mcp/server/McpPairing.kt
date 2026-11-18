@@ -105,7 +105,11 @@ class McpPairing(
             if (hit.failedAttempts >= MAX_FAILED_ATTEMPTS) return null
             val touched = hit.copy(lastUsedAt = now)
             records = records.map { if (it.id == hit.id) touched else it }.toMutableList()
-            persistLocked()
+            // lastUsedAt 只服务两件事：爆破窗口（5 分钟）与 UI 上的「最后使用」。
+            // 两者都不需要秒级精度，但每次调用都落盘会变成每次工具调用一次 fsync——
+            // 一个多步任务几十次调用，就是几十次磁盘同步，全卡在 tool 路径上。
+            // 所以内存里立刻更新，落盘最多一分钟一次。
+            if (now - (hit.lastUsedAt ?: 0L) > LAST_USED_PERSIST_MS) persistLocked()
             return touched
         }
     }
@@ -213,6 +217,8 @@ class McpPairing(
         const val DEFAULT_TTL_MS: Long = 7L * 24 * 60 * 60 * 1000
         const val MAX_FAILED_ATTEMPTS = 10
         private const val FAILURE_WINDOW_MS = 5L * 60 * 1000
+        /** `lastUsedAt` 的落盘节流：一分钟一次，够用且不把 fsync 塞进 tool 路径。 */
+        private const val LAST_USED_PERSIST_MS = 60L * 1000
 
         private val random = SecureRandom()
 
