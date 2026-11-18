@@ -162,6 +162,16 @@
                 android:value="用户主动开启的桌面常驻助手悬浮窗，可随时在设置或桌宠菜单里关闭" />
         </service>
 
+        <!-- MCP 对外提供：把手机工具以 MCP 协议暴露给外部 Agent。
+             必须常驻前台，否则 App 进 cached 后 ServerSocket 被回收，客户端看到的是
+             「连接被拒」而用户以为自己开着。dataSync 是语义最接近的类型
+             （不涉及媒体/定位/麦克风），targetSdk=28 不强制校验但声明了才能升 targetSdk。
+             exported=false：只由设置页的 startService 启动。 -->
+        <service
+            android:name=".mcp.McpHostService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- 快捷设置磁贴：唤醒词的替代入口。
              「不做常驻监听」是有意的（spec §2.1：1–3% 电量/小时，而用量尚无数据），
              但「每次都要回桌面找小球」又太深，所以给一个零成本的一键入口。

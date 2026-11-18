@@ -9,6 +9,7 @@ import com.beichen.polaris.audio.AudioGraph
 import com.beichen.polaris.audio.asr.AsrDirectory
 import com.beichen.polaris.audio.tts.NativeStderr
 import com.beichen.polaris.browser.BrowserHost
+import com.beichen.polaris.mcp.McpHostRuntime
 import com.beichen.polaris.pet.PetConversation
 import com.beichen.polaris.pet.PetState
 import com.beichen.polaris.core.AgentLogger
@@ -331,6 +332,15 @@ object AppGraph {
                 link = "桌宠会话 ↔ 悬浮窗 Service 的多次重建。服务会被 stopSelf / START_STICKY " +
                     "反复拉起，会话若跟着服务走，用户每次关掉再开都会失忆",
                 reset = { PetConversation.reset() }
+            )
+        )
+        add(
+            Global(
+                name = "McpHostRuntime",
+                packageName = "com.beichen.polaris.mcp",
+                link = "MCP 前台服务 ↔ 设置页的开关与客户端列表。服务会被 STOP_STICKY 重建，" +
+                    "监听端口与已配对客户端若跟着服务走，重建一次就要全员重配",
+                reset = { McpHostRuntime.reset() }
             )
         )
         add(

@@ -151,6 +151,10 @@ fun McpScreen(onServersChanged: () -> Unit = {}) {
                 .verticalScroll(rememberPersistentScrollState())
                 .padding(AgentSpacing.space5)
         ) {
+            // ——— 对外提供（M1 只读桥）———
+            McpHostCard()
+            Spacer(Modifier.height(AgentSpacing.space4))
+
             // ——— 服务器卡：URL 输入 + 连接/断开 + 连接态三显 ———
             AkSectionCard(
                 title = "MCP 服务器",
