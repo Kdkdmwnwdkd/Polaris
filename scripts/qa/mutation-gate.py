@@ -93,6 +93,15 @@ GROUPS = {
             "com.beichen.polaris.core.ConversationShardRecoveryTest",
         ],
     },
+    # app 模块里唯一一段「不 import android.*」的逻辑：动作回执的判定。
+    # 单独成组是因为它和审批/存储两条链毫无关系，混编只会让每条变异都慢。
+    "automation": {
+        "sources": [
+            "app/src/main/java/com/beichen/polaris/automation/ScreenChangeReceipt.kt",
+            "app/src/test/java/com/beichen/polaris/automation/ScreenChangeReceiptTest.kt",
+        ],
+        "classes": ["com.beichen.polaris.automation.ScreenChangeReceiptTest"],
+    },
 }
 
 # 被测源文件。刻意只挑这一小片：审批链拿得出 30 秒内跑完的 JVM 断言的只有它，
@@ -299,6 +308,45 @@ MUTATIONS = [
         "old": "                return decision",
         "new": "                // 变异：拒绝被丢弃",
         "expect": ["首个拒绝即终止，后面的守卫不再被询问", "拒绝原样透传，不被改写"],
+    },
+    {
+        # 误报「生效了」：模型以为点到了，实际被弹窗挡住，于是不再重试，
+        # 任务在无人知晓的地方断掉。比不检测更糟。
+        "id": "M24 超时当成「已变化」",
+        "file": "app/src/main/java/com/beichen/polaris/automation/ScreenChangeReceipt.kt",
+        "group": "automation",
+        "old": "    } ?: false",
+        "new": "    } ?: true",
+        "expect": ["界面一直不变时超时返回 false"],
+    },
+    {
+        # 恒轮询到超时：界面明明变了也报 no_effect，模型开始重复点同一位置。
+        "id": "M25 变化了也不退出轮询",
+        "file": "app/src/main/java/com/beichen/polaris/automation/ScreenChangeReceipt.kt",
+        "group": "automation",
+        "old": "        while (sense() == before) delay(pollMs)",
+        "new": "        while (true) delay(pollMs)",
+        "expect": ["界面已变化时立即返回 true", "第 N 次轮询时才变化也算检测到"],
+    },
+    {
+        # 去掉 delay = 忙等。而且忙等循环里没有挂起点，withTimeoutOrNull 检测不到超时，
+        # 函数永远不会返回——比「慢」严重得多。
+        "id": "M26 轮询不退让（忙等）",
+        "file": "app/src/main/java/com/beichen/polaris/automation/ScreenChangeReceipt.kt",
+        "group": "automation",
+        "old": "        while (sense() == before) delay(pollMs)",
+        "new": "        while (sense() == before) Unit",
+        "expect": ["轮询有间隔，不是忙等"],
+    },
+    {
+        # 窗口为 0 时当作「已变化」：调用方用它显式关掉回执（不该等、也不该判没变），
+        # 改成 true 就等于「关掉回执」反而变成「永远报生效」。
+        "id": "M27 零窗口被当成「已变化」",
+        "file": "app/src/main/java/com/beichen/polaris/automation/ScreenChangeReceipt.kt",
+        "group": "automation",
+        "old": "    if (timeoutMs <= 0) return false",
+        "new": "    if (timeoutMs <= 0) return true",
+        "expect": ["超时窗口为零时直接判没变化且不取指纹", "负超时按零处理"],
     },
 ]
 

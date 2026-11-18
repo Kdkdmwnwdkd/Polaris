@@ -8,9 +8,7 @@ import com.beichen.polaris.core.JsonSchema
 import com.beichen.polaris.core.ToolResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -38,21 +36,8 @@ private fun notReady(): ToolResult =
             "三条都不可用时再请用户手动操作，勿重复调用同一工具。"
     )
 
-/**
- * 动作回执的等待上限（毫秒）与轮询间隔。
- *
- * 600ms 是「中端机点击后界面完成一次重绘」的经验值：比它短会误报 no_effect，
- * 比它长会让连续操作（点一下、再点一下）明显变慢。轮询只在**没有变化**时发生，
- * 界面一变就立刻返回，所以正常路径几乎不增加耗时。
- */
-private const val SCREEN_CHANGE_TIMEOUT_MS = 600L
-private const val SCREEN_CHANGE_POLL_MS = 80L
-
-/** 动作已下发但界面没变时给模型的建议——重点是「别重复点同一位置」。 */
-private const val NO_EFFECT_HINT =
-    "动作已执行，但 ${SCREEN_CHANGE_TIMEOUT_MS}ms 内界面结构没有变化。不要重复点同一位置：" +
-        "先 ui_tree 确认目标 clickable 且未被弹窗遮挡；若页面还在加载，稍等后重试；" +
-        "坐标点不准时改用 ui_click 按文本/ID 点击。"
+// 动作回执的常量与轮询逻辑见 ScreenChangeReceipt.kt（纯 Kotlin，JVM 可测）。
+// 这里只留「怎么取指纹」——那部分离不开 AgentAccessibilityService。
 
 /**
  * 界面指纹：无障碍树的 JSON 哈希。
@@ -66,16 +51,6 @@ private const val NO_EFFECT_HINT =
  */
 private fun AgentAccessibilityService.uiFingerprint(): Int =
     getUiTreeSnapshot().json.hashCode()
-
-/** 轮询到指纹变化或超时；返回是否检测到变化。调用方必须在主线程（无障碍 API 要求）。 */
-private suspend fun awaitScreenChange(
-    svc: AgentAccessibilityService,
-    before: Int,
-    timeoutMs: Long = SCREEN_CHANGE_TIMEOUT_MS
-): Boolean = withTimeoutOrNull(timeoutMs) {
-    while (svc.uiFingerprint() == before) delay(SCREEN_CHANGE_POLL_MS)
-    true
-} ?: false
 
 /** 在主线程调用服务方法，并把 Boolean 成败转成 ToolResult（统一契约）。 */
 private suspend fun runOnService(
@@ -114,7 +89,7 @@ private suspend fun runOnService(
             val before = svc.uiFingerprint()
             ok = block(svc)
             if (ok && expectScreenChange) {
-                changed = awaitScreenChange(svc, before)
+                changed = awaitFingerprintChange(before) { svc.uiFingerprint() }
             } else if (ok) {
                 changed = true
             }
