@@ -965,11 +965,18 @@ class ConversationStore(file: File) {
     /** 分片文件名（`<stem>.json`，stem 见 [safeStem]）。 */
     private fun shardFile(id: String): File = File(shardDir, "${safeStem(id)}.json")
 
-    /** 读一个分片：主分片坏了回退该分片的 .bak；两者都不可用返回 null（该会话跳过，不崩）。 */
+    /**
+     * 读一个分片：主分片坏了回退该分片的 .bak；两者都不可用返回 null（该会话跳过，不崩）。
+     *
+     * `healBackup = true`：回退成功后立刻把内容原子写回主文件。不做这一步的后果不是
+     * 「多读一次坏文件」，而是数据会真的丢——下一次写这个分片时，[AtomicJsonFile] 会先把
+     * 当前主文件（坏的）复制成 `.bak`，把唯一的好副本覆盖掉。那一刻再断电，主坏、备份也坏。
+     */
     private fun readShard(id: String): ConversationRecord? {
-        val raw = AtomicJsonFile.readWithBackupOrNull(shardFile(id)) { text ->
-            parseShardOrNull(text) != null
-        } ?: return null
+        val raw = AtomicJsonFile.readWithBackupOrNull(
+            shardFile(id),
+            healBackup = true
+        ) { text -> parseShardOrNull(text) != null } ?: return null
         return parseShardOrNull(raw)?.toRecord()
     }
 
@@ -990,23 +997,32 @@ class ConversationStore(file: File) {
 
     /**
      * 主索引彻底损坏（含 .bak 也坏）时按分片目录重建 index。
-     * 只认 `*.json` 分片，天然排除 `*.json.bak`；文件名是安全编码后的 id stem，
-     * 与 [shardFile] 的映射一一对应，读回的 record 仍用分片内容里的真实 id。
+     * 只认 `*.json` 分片，天然排除 `*.json.bak` 与写入中的 `*.json.tmp`。
+     *
+     * ## 为什么要保留「文件名 stem → 真实 id」这一层
+     * 文件名是 [safeStem] 编码后的结果（脏 id 会变成 `h-<hex>`），而正文里的 `id` 才是真身。
+     * 重建出的 index 若写 stem，内存里的 id 却是真身，两者就永远对不上：
+     * 删除时会按真身去找分片（能删掉），但 index 里残留一个 stem 条目，
+     * 下次加载又把这个 stem 读回来——表现为「删掉的会话过一会儿自己回来了」。
+     * 所以这里以**正文里的 id** 为准；只有读不出正文的分片才退回 stem
+     * （文件还在，值得下次再试一次，而不是直接从索引里消失）。
      */
     private fun recoverFromShards() {
-        val ids = runCatching {
-            shardDir.listFiles()
-                ?.filter { it.isFile && it.name.endsWith(".json") }
-                ?.map { it.name.removeSuffix(".json") }
-                ?.sorted()
-                .orEmpty()
-        }.getOrDefault(emptyList())
-        if (ids.isEmpty()) return
-        val records = ids.mapNotNull { id -> readShard(id) }
+        // listFiles() 返回 null = 目录不存在或不可读，此时没法下任何结论，保持现状
+        val files = runCatching { shardDir.listFiles() }.getOrNull() ?: return
+        val stems = files
+            .filter { it.isFile && it.name.endsWith(".json") }
+            .map { it.name.removeSuffix(".json") }
+            .sorted()
+        val pairs = stems.map { stem -> stem to readShard(stem) }
+        val records = pairs.mapNotNull { it.second }
         synchronized(lock) {
             items.clear()
             items.addAll(records.map { migrate(it) })
         }
+        // 即使一个分片都没有也写一次空 index：否则每次启动都要重读两个坏文件、
+        // 重扫一遍目录，日志里每次都留一条「索引不可用」，看起来像永远没修好。
+        val ids = pairs.map { (stem, rec) -> rec?.id ?: stem }.distinct()
         val payload = runCatching { json.encodeToString(ConversationIndex(ids = ids)) }.getOrNull() ?: return
         runCatching { AtomicJsonFile.write(file, payload) }
     }

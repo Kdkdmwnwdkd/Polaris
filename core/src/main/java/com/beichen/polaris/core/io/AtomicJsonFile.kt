@@ -139,10 +139,22 @@ object AtomicJsonFile {
      * 「坏」的定义交给调用方：JSON 存储传一个 `parseOrNull(it) != null`，
      * 文本存储传 `it.isNotBlank()`。这样本类不需要知道任何序列化格式。
      *
+     * [isValid] 刻意放在**最后**：它是唯一的函数类型参数，调用方一律写成尾 lambda
+     * `readWithBackupOrNull(file) { ... }`；若排在 [healBackup] 前面，尾 lambda 会绑到
+     * 布尔参数上，编译报「no value passed for parameter」。
+     *
      * @param file    主文件
+     * @param healBackup 回退成功后是否把备份内容写回主文件（默认 false，保持既有调用语义）。
+     *   分片这类「一个文件一个会话」的存储应当打开：只回退不自愈的话，下一次写这个文件时
+     *   第 100 行的备份步骤会把**已经损坏的主文件**复制成 `.bak`，覆盖掉唯一的好副本——
+     *   那一刻再断电，主坏、备份也坏，数据就真没了。
      * @param isValid 内容是否可用（注意：只应判断能否**完整使用**，不要判断业务是否最新）
      */
-    fun readWithBackupOrNull(file: File, isValid: (String) -> Boolean): String? {
+    fun readWithBackupOrNull(
+        file: File,
+        healBackup: Boolean = false,
+        isValid: (String) -> Boolean,
+    ): String? {
         val primary = readOrNull(file)
         if (primary != null && isValid(primary)) return primary
 
@@ -152,6 +164,9 @@ object AtomicJsonFile {
             // 回退成功要留痕：这说明上次写入没走完，是排查「数据丢了」的第一现场。
             // 日志失败不能影响读路径的返回值——数据已经拿到了，只是没记下来
             runCatching { warn("主文件不可用，已回退备份：${file.name}") }
+            // keepBackup=false 是必须的：默认行为会把坏的主文件复制成 .bak，
+            // 正好覆盖掉我们刚要用来恢复的那份好副本
+            if (healBackup) runCatching { write(file, backup, keepBackup = false) }
             return backup
         }
         return null

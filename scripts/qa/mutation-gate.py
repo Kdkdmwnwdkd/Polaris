@@ -74,8 +74,12 @@ GROUPS = {
             # 目录会在编译前展开成 *.kt
             "core/src/main/java/com/beichen/polaris/core/telemetry",
             "core/src/test/java/com/beichen/polaris/core/ConversationTruncationTest.kt",
+            "core/src/test/java/com/beichen/polaris/core/ConversationShardRecoveryTest.kt",
         ],
-        "classes": ["com.beichen.polaris.core.ConversationTruncationTest"],
+        "classes": [
+            "com.beichen.polaris.core.ConversationTruncationTest",
+            "com.beichen.polaris.core.ConversationShardRecoveryTest",
+        ],
     },
 }
 
@@ -148,6 +152,32 @@ MUTATIONS = [
         "old": "        truncatedChars = truncatedChars +\n            droppedChars(text) + droppedChars(reasoning.orEmpty())",
         "new": "        truncatedChars = truncatedChars + droppedChars(text)",
         "expect": ["多个被截断字段"],
+    },
+    {
+        # 恢复时把「文件名 stem」当成会话 id 写回索引。UUID 场景下两者相同，测试全绿；
+        # 只有脏 id（含 `/` 等）才会分叉——而备份导入恰恰最容易带进这种 id。
+        "id": "M10 恢复时索引写文件名 stem 而非真实 id",
+        "file": "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
+        "group": "storage",
+        "old": "        val ids = pairs.map { (stem, rec) -> rec?.id ?: stem }.distinct()",
+        "new": "        val ids = pairs.map { (stem, rec) -> stem }.distinct()",
+        "expect": ["恢复写出的索引记录的是会话真实 id"],
+    },
+    {
+        "id": "M11 回退 .bak 后不自愈主分片",
+        "file": "core/src/main/java/com/beichen/polaris/core/io/AtomicJsonFile.kt",
+        "group": "storage",
+        "old": "            if (healBackup) runCatching { write(file, backup, keepBackup = false) }",
+        "new": "            // 变异：去掉自愈",
+        "expect": ["回退备份后主分片应被自愈"],
+    },
+    {
+        "id": "M12 分片有效性判定形同虚设（坏内容也算可读）",
+        "file": "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
+        "group": "storage",
+        "old": "        ) { text -> parseShardOrNull(text) != null } ?: return null",
+        "new": "        ) { text -> text.isNotBlank() } ?: return null",
+        "expect": ["单个分片主文件损坏时回退其备份"],
     },
 ]
 
