@@ -442,13 +442,50 @@ android.app.RemoteServiceException: Context.startForegroundService()
 这两条都不该现在改：M1 的用途是只读观察，档位与端口变化只影响便利性。
 但 M2 做审批卡时必须一起解决——那时用户会真的依赖「标准档 + 弹卡」这条路。
 
+### 3.14 Consent 契约（P1-3 第一版，2026-11-18）
+
+M1 收尾时留下的判断是：**MCP 的审批卡不该单独做**——它会成为第五份审批实现
+（主界面一套、桌宠一套、子代理一套、技能一套，再加 MCP 一套）。
+查 P1 冻结令，解冻条件第 2 条正是「`Consent` / `ToolSource` / `CapabilitySpec`
+三个契约有第一版实现」。所以先做契约，M2 的卡以后者的身份接进来。
+
+**修的是什么**：`ToolApproval?` 里的 `null` 同时表示「这条通道没有弹窗位置」和
+「忘了传」。审计 F4 已把运行期改成拒绝，但**表达**层的歧义还在——读者无法从类型上
+判断一个 `null` 是设计还是疏忽。
+
+**为什么没选「必填参数」**：全仓 96 处 `RealAgentLoop(` + 11 处 `RegistryToolExecutor(`，
+绝大多数是 harness 的「我只想测工具执行」。改成必填得到 107 行噪声，判别力为零。
+改成三层：类型（`null` 不可表达、`Deny` 必须带理由）+ 默认值（`Consent.unset`，方向是关）
++ 门禁（A4 盯四个生产入口）。
+
+**顺手把裁决也搬进契约**：原先 try/catch 在 `RegistryToolExecutor` 里，后果是
+「取消不是拒绝」只有执行器知道，且执行器牵 `ToolRegistry`（要序列化编译器插件）
+→ 行为断言会 SKIP 掉。搬进 `Consent.decide` 后，三个源文件就能真编真跑。
+
+| 入口 | 现在写什么 |
+|---|---|
+| 主界面 / 子代理 | `Consent.ask { … }` |
+| 桌宠 | `Consent.Deny("桌宠气泡上没有审批按钮")` |
+| 技能 | `Consent.ask { … SkillNetGrant.allows(…) }` |
+
+桌宠那行的价值不在「拒绝」，在于**理由进了工具结果**：用户点开桌宠会话能看到
+「该操作需要用户确认，但桌宠气泡上没有审批按钮，已拒绝执行」。
+
+**验证**：`run-consent-verification.sh`，8 条契约 + 12 条裁决 + 1 条编译前提 = **21 条**。
+A6 用行号比较盯「拒绝分支在 `tool.execute` 之前」——B 段测裁决本身，测不到分支顺序。
+
+**没做**：`PetConsent`（桌宠气泡上的确认按钮）、`HeadlessPolicy`（后台任务策略表）、
+MCP 侧迁移（`McpApprover?` 仍可空，语义是 `-32004`，M2 一起迁）。
+
+设计见 [`docs/architecture/Consent-契约-P1-3-2026-11-18.md`](docs/architecture/Consent-契约-P1-3-2026-11-18.md)。
+
 
 ## 4. 代码红线（碰了会立刻红）
 
 | 红线 | 为什么 | 谁在守 |
 |---|---|---|
 | `:core` 不许 import `ui` / `tools` / Compose / `MainActivity` | 分层边界 | 编译器 + `run-arch-guard-verification.sh` |
-| `arch-baseline.txt` **只减不增** | 加一条等于把已知违规合法化 | 同上。当前上限：`ChatViewModel` 3625、`ChatScreen` 3186、`RealAgentLoop` 1532 |
+| `arch-baseline.txt` **只减不增** | 加一条等于把已知违规合法化 | 同上。当前上限：`ChatViewModel` 3723、`ChatScreen` 3235、`RealAgentLoop` 1532 |
 | `harness-baseline.txt` 只增不减（当前 **147**） | 数字变小说明有大面积 SKIP 被当成通过 | `gate.sh` 门禁 5/6 |
 | 守卫裁决**不许加 Allow** | 只能拦不能放行，是这套设计唯一的安全性质 | `run-agent-seams-verification.sh` |
 | 新 harness 必须「静态断言 + 自编译真跑」两段 | 只 grep 不断言行为 = 假绿 | `gate.sh` |
@@ -563,6 +600,43 @@ done
 
 判据：`PASS` 回到 104 左右，且 `run-voice-arbiter-verification.sh` 的 `[B]` 段
 能打出 `B1…B22` 那 22 条，而不是一行 `KS_HARNESS_SKIP`。
+
+### 5.7 坑五：Gradle 缓存里的畸形 `h/` 目录让 84 个 runner 一起红
+
+症状：全量汇总 `PASS=53 SKIP=1 FAIL=94`，日志里一片
+`BackendException` / `NoClassDefFoundError: kotlin/reflect/jvm/ReflectJvmMapping`，
+或 `module was compiled with an incompatible version of Kotlin (2.2.0, expected 1.9.0)`。
+
+根因：`~/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-compiler-embeddable/h/`
+里躺着一个 2.2.21 的 jar——**版本目录名是 `h`，不是版本号**。老 harness 用
+`find … | head -1` 取编译器，路径更浅的 `h/` 排在 `1.9.25/<hash>/` 前面，于是拿到的
+编译器是 2.2.21、stdlib 是 1.9.23，两边对不上。
+
+同一个坑在 `kotlin-stdlib` / `kotlinx-coroutines-core-jvm` /
+`kotlinx-serialization-json-jvm` / `kotlinx-serialization-core-jvm` 各有一份。
+
+```bash
+# 先看有没有
+find ~/.gradle/caches/modules-2/files-2.1 -maxdepth 3 -type d -name h
+# 有就挪走（别直接删，先确认里面只有那一个 jar）
+```
+
+为什么 `deps.sh` 的 harness 不受影响：`qa_find_jar` 按 `qa_kotlin_version` 取**同版本**，
+不走裸 `head -1`。约 19 个老脚本仍是裸 find——干净缓存里没事，缓存一脏就集体红。
+
+### 5.8 坑六：沙箱重建后 `/tmp/kotlinc` 没了，7 个老 harness 报「插件路径不存在」
+
+CI 里有一段 shim（`.github/workflows/build.yml` 的「Prepare kotlinc shim」）会在
+`/tmp/kotlinc` 造一个同名 `kotlinc`，并把序列化编译器插件放到
+`lib/kotlinx-serialization-compiler-plugin.jar`。沙箱不跑 CI，这段就没人做。
+
+症状：`error: plugin classpath entry points to a non-existent location:
+/tmp/kotlinc/lib/kotlinx-serialization-compiler-plugin.jar`。
+
+修法：照 CI 那段复刻一遍即可（`KJAR/STD/TROVE/ANN` 都从缓存取，
+插件从 maven central 下 `kotlin-serialization-compiler-plugin-embeddable-1.9.25.jar`）。
+**插件必须与编译器同为 embeddable 变体**——非 embeddable 插件配 embeddable 编译器
+会在编译期内部崩溃（exit=2）。
 
 ---
 

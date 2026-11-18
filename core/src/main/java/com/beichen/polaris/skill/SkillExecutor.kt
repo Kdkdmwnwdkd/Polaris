@@ -1,6 +1,7 @@
 package com.beichen.polaris.skill
 
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.Consent
 import com.beichen.polaris.core.FailureGuard
 import com.beichen.polaris.core.ToolCall
 import com.beichen.polaris.core.ToolResult
@@ -578,7 +579,7 @@ class SkillExecutor(
     ): ToolExecutor = RegistryToolExecutor(
         registry = registry,
         failureGuard = failureGuard,
-        approval = { tool, args ->
+        consent = Consent.ask { tool, args ->
             skill != null && SkillNetGrant.allows(
                 toolName = tool.name,
                 url = args["url"]?.primOrNull()?.contentOrNull,

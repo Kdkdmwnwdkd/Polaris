@@ -21,6 +21,7 @@ import com.beichen.polaris.core.AgentEvent
 import com.beichen.polaris.core.AgentTool
 import com.beichen.polaris.core.AssistantMessage
 import com.beichen.polaris.core.ChatMessage
+import com.beichen.polaris.core.Consent
 import com.beichen.polaris.core.FailureGuard
 import com.beichen.polaris.core.JsonSchema
 import com.beichen.polaris.core.LLMClient
@@ -611,7 +612,7 @@ private suspend fun testT01BusinessFailure() {
             // 走「未知工具」分支，审批根本不会被问到——那样测的就不是审批了。
             // 强制全量把裁剪这个变量隔离，用例才只测它该测的那件事。
             forceFullTools = true,
-            approval = { _, _ -> false }
+            consent = Consent.ask { _, _ -> false }
         )
         val history = loop.send("x")
         val toolMsgs = history.filterIsInstance<ToolMessage>()

@@ -2,7 +2,7 @@ package com.beichen.polaris.core.agent
 
 import com.beichen.polaris.core.AssistantMessage
 import com.beichen.polaris.core.LLMClient
-import com.beichen.polaris.core.ToolApproval
+import com.beichen.polaris.core.Consent
 import com.beichen.polaris.core.ToolRegistry
 import com.beichen.polaris.core.agent.journal.RunScope
 import kotlinx.coroutines.CancellationException
@@ -43,14 +43,16 @@ class SubAgentRunner(
     /** 单个子代理的上下文预算（token）。 */
     private val budgetTokens: Int = 12_000,
     /**
-     * R4：子代理的审批回调（null = 不弹审批）。
+     * R4 + P1-3：子代理的同意策略。
      *
-     * 当前白名单只含无副作用工具，所以传不传都「看起来一样」；但这是**今天**的事实，
+     * 当前白名单只含无副作用工具，所以传什么「看起来一样」；但这是**今天**的事实，
      * 不是**契约**。R4 之前子代理构造 [RealAgentLoop] 时压根没这个参数，
      * 白名单一旦加进任何需要确认的工具，就是一条静默旁路。传上去，让安全属性
      * 由「白名单恰好没放危险工具」变成「执行器本身会问」。
+     *
+     * 默认 [Consent.unset]：没有显式声明的子代理不会静默执行危险操作，而是拒绝并说明。
      */
-    private val approval: ToolApproval? = null
+    private val consent: Consent = Consent.unset("SubAgentRunner")
 ) {
 
     /**
@@ -102,7 +104,7 @@ class SubAgentRunner(
                     maxParallelTools = 2,
                     contextBudgetTokens = budgetTokens,
                     // R4：审批必须穿过子代理边界——见构造参数注释
-                    approval = approval,
+                    consent = consent,
                     // 白名单只有十几个工具，不能被「小模型核心集」再裁掉——
                     // 子代理拿不到 read_file 就等于瞎了
                     forceFullTools = true,

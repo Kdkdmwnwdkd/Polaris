@@ -1,6 +1,7 @@
 package com.beichen.polaris.core.agent
 
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.Consent
 import com.beichen.polaris.core.FailureGuard
 import com.beichen.polaris.core.GuardVerdict
 import com.beichen.polaris.core.KernelExposure
@@ -191,7 +192,7 @@ interface BatchToolExecutor : ToolExecutor {
  * 的全部逻辑原样搬入——未知工具 / 审批 / 熔断 / 执行 / onExecuted / 截断格式化 /
  * 图片收集，产出 [ToolCallOutcome.Completed]。
  *
- * 依赖注入而非自持：registry / failureGuard / approval / hooks 全部由构造参数
+ * 依赖注入而非自持：registry / failureGuard / consent / hooks 全部由构造参数
  * 传入——failureGuard 持有在 loop 上（T04 熔断状态不随 executor 每批重建丢失；
  * W-8 起其生命周期改为**回合作用域**：loop.send 入口 resetForTurn，回合内跨批保留、
  * 跨回合不继承），registry 由 loop 每批按当前字段构造本类（update(registry) 即时生效）。
@@ -199,7 +200,17 @@ interface BatchToolExecutor : ToolExecutor {
 class RegistryToolExecutor(
     private val registry: ToolRegistry,
     private val failureGuard: FailureGuard,
-    private val approval: ToolApproval? = null,
+    /**
+     * P1-3：本执行器的**同意策略**。
+     *
+     * 修前是 `approval: ToolApproval? = null`——`null` 同时表示「这条通道没有弹窗位置」
+     * 和「忘了传」，两者在类型上无法区分。现在两种意图各有一个值：有通道写 [Consent.Ask]，
+     * 没通道写 [Consent.Deny] 并给理由。
+     *
+     * 默认 [Consent.unset] 的方向是**关**：忘记表态时，需要审批的调用会被拒绝且说明原因，
+     * 而不是在没有用户确认的情况下真的执行。
+     */
+    private val consent: Consent = Consent.unset("RegistryToolExecutor"),
     private val hooks: Hooks = NoopHooks,
     /**
      * W-11：单条结果字符上限。默认全局 [MAX_TOOL_RESULT_CHARS]；AgentLoop 会按上下文
@@ -356,47 +367,62 @@ class RegistryToolExecutor(
         // W-79：审批判定从「工具级布尔」细化到「参数级」——shell_run 的 `ls` 不该弹窗，
         // `rm -rf` 必须弹。默认实现仍返回 needsApproval，其余工具行为不变。
         if (tool.needsApprovalFor(call.arguments)) {
-            // 审计 F4：审批通道缺失时**拒绝**，不是放行。
+            // 审计 F4 + P1-3：审批通道缺失时**拒绝**，不是放行。
             //
             // 修前是 `tool.needsApprovalFor(...) && approval != null`——「忘记注入 approval」
-            // 与「该工具免审」在行为上完全等价。今天三个构造点都传了值，所以没有可触发的
-            // 漏洞；但这是安全闸门，缺省方向必须是关：宁可让一次调用失败并说明原因，
-            // 也不要让它在没有用户确认的情况下真的执行了。
-            val approver = approval ?: return ToolCallOutcome.Completed(
-                toolMessageOf(
-                    call,
-                    ToolResult.fail(
-                        code = "no_approver",
-                        message = "该操作需要用户确认，但当前执行通道没有审批能力，已拒绝执行（${call.name}）。",
-                        hint = "不要重复发起相同调用；请回到主对话中直接调用该工具，由用户确认后再执行。"
-                    )
-                ),
-                emptyList(),
-                code = "no_approver"
-            )
-            val allowed = try {
-                approver(tool, call.arguments)
-            } catch (cancel: CancellationException) {
-                // 取消不是拒绝：上抛由树尾闭合处理，绝不吞成「用户拒绝」
-                throw cancel
-            } catch (e: Throwable) {
-                AgentLogger.e("Tool", "审批回调异常：${e.message}")
-                false
-            }
-            if (!allowed) {
-                AgentLogger.w("Tool", "审批未通过，拒绝执行 ${call.name}")
-                return ToolCallOutcome.Completed(
+            // 与「该工具免审」在行为上完全等价。F4 先把运行期改成拒绝；P1-3 再把
+            // `null` 从类型里去掉，让「没有审批能力」必须由 [Consent.Deny] 显式写出，
+            // 并带上一句能进结果的理由。
+            //
+            // 裁决本身在 [Consent.decide] 里（含「取消不算拒绝」这条规则）。执行器只负责
+            // 把四种结果翻译成工具结果——它不再拥有任何审批语义，也就不用抄 try/catch。
+            //
+            // 每个拒绝分支都必须在工具调用之前 return：Deny 通道下**一次都不该执行**，
+            // 也不该产生任何副作用。`run-consent-verification.sh` 用执行计数盯这一条。
+            when (val decision = consent.decide(tool, call.arguments)) {
+                is Consent.Decision.Allowed -> Unit
+                is Consent.Decision.Unavailable -> return ToolCallOutcome.Completed(
                     toolMessageOf(
                         call,
                         ToolResult.fail(
-                            code = "approval_denied",
-                            message = "用户拒绝了该危险操作（${call.name}）。",
-                            hint = "不要重复发起相同调用；可改换非危险工具完成，或向用户说明需要该操作的原因。"
+                            code = "no_approver",
+                            message = "该操作需要用户确认，但${decision.reason}，已拒绝执行（${call.name}）。",
+                            hint = "不要重复发起相同调用；请回到主对话中直接调用该工具，由用户确认后再执行。"
                         )
                     ),
                     emptyList(),
-                    code = "approval_denied"
+                    code = "no_approver"
                 )
+                is Consent.Decision.Denied -> {
+                    AgentLogger.w("Tool", "审批未通过，拒绝执行 ${call.name}")
+                    return ToolCallOutcome.Completed(
+                        toolMessageOf(
+                            call,
+                            ToolResult.fail(
+                                code = "approval_denied",
+                                message = "用户拒绝了该危险操作（${call.name}）。",
+                                hint = "不要重复发起相同调用；可改换非危险工具完成，或向用户说明需要该操作的原因。"
+                            )
+                        ),
+                        emptyList(),
+                        code = "approval_denied"
+                    )
+                }
+                is Consent.Decision.Failed -> {
+                    AgentLogger.e("Tool", "审批回调异常：${decision.cause}")
+                    return ToolCallOutcome.Completed(
+                        toolMessageOf(
+                            call,
+                            ToolResult.fail(
+                                code = "approval_denied",
+                                message = "审批通道出错，已拒绝执行（${call.name}）。",
+                                hint = "不要重复发起相同调用；请回报审批通道异常，由用户确认后再试。"
+                            )
+                        ),
+                        emptyList(),
+                        code = "approval_denied"
+                    )
+                }
             }
         }
         // R1「先落盘再执行」：日志写不进就**不越过执行边界**。

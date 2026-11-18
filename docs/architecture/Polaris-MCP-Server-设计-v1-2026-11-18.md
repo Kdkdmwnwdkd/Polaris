@@ -49,6 +49,8 @@ Polaris 反过来做 MCP server，让它成为这些客户端的「手」，体�
 **尚未做（M2 及以后）**
 
 - 审批卡片：`McpApprover` 接口已留，`null` 时一律拒绝（不是放行）。
+  P1-3 的 [`Consent`](Consent-契约-P1-3-2026-11-18.md) 已落地，**M2 的卡应当是一个
+  `Consent.Ask` 的实现**，而不是第五份审批实现；`McpApprover?` 的可空也在那时一并去掉。
 - DANGEROUS 工具与「完全信任」档：UI 里被 `return@forEach` 跳过。
 - 局域网 / TLS / 二维码：只在 loopback，跨设备需 `adb reverse`。
 - `ToolGuardChain` 真实装配：M1 传 `NONE`；M2 接入写操作时必须换成与本地同一条链。

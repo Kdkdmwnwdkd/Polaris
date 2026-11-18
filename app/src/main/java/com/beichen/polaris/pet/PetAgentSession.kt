@@ -5,6 +5,7 @@ import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.AssistantMessage
 import com.beichen.polaris.core.ChatMessage
 import com.beichen.polaris.core.ConfigStore
+import com.beichen.polaris.core.Consent
 import com.beichen.polaris.core.LLMClient
 import com.beichen.polaris.core.LLMConfig
 import com.beichen.polaris.core.ProviderManager
@@ -147,14 +148,18 @@ class PetAgentSession(context: Context) {
             forceFullTools = true,
             // 瞬时抖动重试一次就够：桌宠是即时交互，等 30 秒重试不如早点说「没连上」
             providerRetry = 1,
-            // approval 保持 null：见类注释「工具集为什么这么小」。
-            // 加任何有副作用的工具之前，先把审批通道补上。
+            // P1-3：桌宠没有弹窗位置，这是**设计**不是疏忽——所以写 Deny 并给出理由，
+            // 而不是留一个含义含糊的 null。理由会原样进入工具结果，用户点开桌宠会话能看见
+            // 「为什么这一步没执行」。
+            //
+            // 加任何有副作用的工具之前，先把气泡上的确认通道补上（P1-3 的第二阶段）。
             //
             // 但「没有审批通道」不等于「没有外发出口」：桌宠的工具表里有 web_search（免审），
             // read_file 也免审。没有这条守卫，一次「读文件 → 照文件里的话搜索」
             // 就能把工作区内容静默发出去（P0-3）。
             // consent 恒 false 是**刻意的**：桌宠没有弹窗位置，按「缺审批即拒绝」处理，
-            // 与 approval=null 同一条规矩。用户真要外发，去主界面问。
+            // 与 Consent.Deny 同一条规矩。用户真要外发，去主界面问。
+            consent = Consent.Deny("桌宠气泡上没有审批按钮"),
             seams = productionSeams(
                 toolGuards = listOf(EgressGuard(consent = { _, _ -> false }))
             ),

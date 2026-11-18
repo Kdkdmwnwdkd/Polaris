@@ -43,6 +43,7 @@ import com.beichen.polaris.core.agent.ConnectivityNetworkRecoveryWaiter
 import com.beichen.polaris.core.ConfigSanitizer
 import com.beichen.polaris.core.ConfigStore
 import com.beichen.polaris.core.CompletionNotifier
+import com.beichen.polaris.core.Consent
 import com.beichen.polaris.core.BackupArchive
 import com.beichen.polaris.core.BackupManifest
 import com.beichen.polaris.core.ConfigBackup
@@ -997,10 +998,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 SubAgentRunner(
                     llmProvider = { buildMainClient() },
                     baseRegistry = { this },
-                    // R4：审批穿过子代理边界（白名单当前无副作用工具，但不能再依赖这个巧合）。
-                    // 用 lambda 间接引用而不是直接传值：registry 的初始化早于 approvalHandler，
-                    // 直接取值会捕到 null；lambda 在真正弹窗时才读。
-                    approval = { tool, args -> approvalHandler(tool, args) }
+                    // R4 + P1-3：同意策略穿子代理边界。用 lambda 间接引用而不是直接传值：
+                    // registry 的初始化早于 approvalHandler，直接取值会捕到 null；lambda 在真正弹窗时才读。
+                    consent = Consent.ask { tool, args -> approvalHandler(tool, args) }
                 )
             )
         )
@@ -2039,7 +2039,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private val loop = RealAgentLoop(
         llmProvider = { buildMainClient() },
         registry = registry,
-        approval = approvalHandler,
+        consent = Consent.ask { tool, args -> approvalHandler(tool, args) },
         // 接缝③：第一个真实守卫（此前 `productionSeams` 全仓零调用）。必须走它而不是
         // `AgentSeams(...)`：日志口子只在那里接回 AgentLogger，直接构造会让拒绝记录静默丢失。
         seams = productionSeams(toolGuards = listOf(egressGuard)),

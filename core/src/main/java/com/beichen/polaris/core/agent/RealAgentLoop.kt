@@ -7,12 +7,12 @@ import com.beichen.polaris.core.AssistantMessage
 import com.beichen.polaris.core.ChatMessage
 import com.beichen.polaris.core.DEFAULT_SYSTEM_PROMPT
 import com.beichen.polaris.core.FailureGuard
+import com.beichen.polaris.core.Consent
 import com.beichen.polaris.core.LLMClient
 import com.beichen.polaris.core.LlmHttpException
 import com.beichen.polaris.core.KernelExposure
 import com.beichen.polaris.core.MEMORY_USAGE_PROMPT
 import com.beichen.polaris.core.SystemMessage
-import com.beichen.polaris.core.ToolApproval
 import com.beichen.polaris.core.ToolCall
 import com.beichen.polaris.core.ToolMessage
 import com.beichen.polaris.core.ToolRegistry
@@ -103,7 +103,7 @@ class LlmCallTimeoutException(val timeoutMs: Long) : RuntimeException(
  * @param providerRetry 供应商瞬时失败重试次数（默认 3，共 4 次尝试；hotfix10 上调：
  *   429 限流序列 10s/30s/60s 需 3 次重试才走得完，2 次会在第 3 次 429 后直接失败）。
  * @param maxHistoryMessages 上下文滑动窗口上限（默认 40）。
- * @param approval 危险工具审批回调（null = 关闭）。
+ * @param consent 危险工具的同意策略：有通道传 [Consent.Ask]，没有就传 [Consent.Deny] 并给理由。
  * @param checkpoint 界面投影回调（每批消息变更后调用）。**不是恢复依据**——
  *   它拿到的是一份内存列表快照，进程被杀时最后一次快照已经丢了；
  *   崩溃恢复只认 [journal]。
@@ -169,7 +169,7 @@ class RealAgentLoop(
     private val contextBudgetTokens: Int = ContextBudget.DEFAULT_BUDGET_TOKENS,
     /** W-10：请求视图里最多保留最近几条工具截图的 base64（更早的剥成文字标记）。 */
     private val keepRecentImages: Int = ContextBudget.DEFAULT_KEEP_IMAGES,
-    private val approval: ToolApproval? = null,
+    private val consent: Consent = Consent.unset("RealAgentLoop"),
     private val checkpoint: ((List<ChatMessage>) -> Unit)? = null,
     /** R1：回合日志（null = 不留恢复依据，harness 与无状态调用走这条）。 */
     private val journal: TurnJournal? = null,
@@ -1248,7 +1248,7 @@ class RealAgentLoop(
         executorFactory?.invoke() ?: RegistryToolExecutor(
             reg,
             failureGuard,
-            approval,
+            consent,
             hooks,
             // W-11：结果上限与上下文预算对齐——本地 2k 预算下 24k 字符的一条结果就撑爆 n_ctx
             maxResultChars = ContextBudget.toolResultLimitChars(llmProvider().providerId, contextBudgetTokens),

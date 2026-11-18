@@ -437,7 +437,13 @@
 #       （`ServerSocket.close()` 在 Linux 上不等于内核 socket 立刻销毁）。
 #   它首次进 CI 就红了三条：JSON 硬转换、文本断言计数、stop 的时序。
 #   三条都是真问题，记在 HANDOFF §3.13。
-147
+#
+# 2026-11-18：147 → 148（P1-3 Consent 契约）。
+#   新增 run-consent-verification.sh：8 条契约断言 + 12 条裁决行为 + 1 条编译前提。
+#   这条 harness 的存在本身就是判据：Consent.decide 只依赖 AgentTool + JsonObject，
+#   三个源文件就能真编真跑。如果哪天有人把裁决搬回 RegistryToolExecutor，
+#   B 段会因为「需要序列化编译器插件」而 SKIP——那说明契约又被拆散了。
+148
 # 143（2026-11-14 语音识别能力判定）：+ run-speech-capability-verification.sh
 #   [A] 29 条结构断言（判定表在 core 且零 Android 依赖、两条语音入口都调它、
 #   共用同一个探测实现、清单声明了识别服务可见性、两边都用 BCP-47 语言标签、

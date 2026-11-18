@@ -86,7 +86,13 @@ sealed interface ToolPart {
     }
 }
 
-/** 工具审批回调：返回 true 表示允许执行。 */
+/**
+ * 工具审批回调：返回 true 表示允许执行。
+ *
+ * P1-3 起这个别名只描述**回调的形状**，不再用来表达「有没有审批通道」——
+ * 后者由 [Consent] 承担。参数位置写 `ToolApproval?` 会在类型上把
+ * 「没有弹窗位置」和「忘了传」混成同一个值，那正是 [Consent] 要拆开的歧义。
+ */
 typealias ToolApproval = suspend (tool: AgentTool, args: JsonObject) -> Boolean
 
 /** Agent 调用某工具时的一次请求。 */
