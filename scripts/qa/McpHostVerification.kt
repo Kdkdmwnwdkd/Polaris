@@ -340,8 +340,32 @@ fun main() {
 
     // ── 停服 ──────────────────────────────────────────────────────────
     host.stop()
-    val afterStop = runCatching { post(port, init, readToken) }.isFailure
-    ok("B25 stop 之后端口不再接受连接", afterStop)
+    // 不只是「没抛异常就算过」：真被连上并回了 200 才是最坏的情况（用户关了开关却还在服务）。
+    val afterStop = runCatching { post(port, init, readToken) }
+    ok(
+        "B25 stop 之后端口不再接受连接",
+        afterStop.isFailure,
+        "实际还能连上，HTTP ${afterStop.getOrNull()?.first}",
+    )
+
+    // ── 反复开关：stop 的时序问题在快机器上躲得过一次，躲不过十次 ────────
+    var leaky = 0
+    repeat(10) {
+        val h = McpServerHost(
+            tools = source,
+            pairing = pairing,
+            audit = audit,
+            config = McpHostConfig(),
+            guard = ToolGuardChain.NONE,
+            approver = null,
+        )
+        val p = runCatching { h.start().getOrThrow() }.getOrNull() ?: return@repeat
+        h.stop()
+        if (runCatching { post(p, """{"jsonrpc":"2.0","id":99,"method":"ping"}""", readToken) }.isSuccess) {
+            leaky += 1
+        }
+    }
+    ok("B28 连续 10 轮 start/stop，stop 后都连不上", leaky == 0, "有 $leaky 轮仍可连接")
 
     println("")
     println("$passed 通过 / $failed 失败")

@@ -97,6 +97,9 @@ class McpServerHost(
     private val workers = Executors.newFixedThreadPool(WORKER_THREADS) { r ->
         Thread(r, "mcp-worker").apply { isDaemon = true }
     }
+    /** 正在处理的连接。stop 时逐个关掉——「关开关」要能打断正在跑的调用，不只是不再接新的。 */
+    private val activeConnections: MutableSet<Socket> =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
 
     /** 当前实际端口；未启动时为 -1。 */
     @Volatile
@@ -126,10 +129,27 @@ class McpServerHost(
         serverSocket = null
     }
 
+    /**
+     * 停服。
+     *
+     * 顺序是有讲究的，不是「关个 socket 就完事」：
+     *
+     * 1. `running=false` —— 让 accept 循环下一轮自己退出；
+     * 2. `close()` —— 把阻塞中的 `accept()` 踢醒（它会抛异常）；
+     * 3. **join accept 线程** —— Linux 上 close() 只是关掉 fd，内核 socket 仍活到
+     *    `accept()` 真正返回为止；这期间新连接照样完成三次握手进 backlog。
+     *    不 join 就会出现「关掉开关后还能连上一次」——CI 上就是这么红的（B25），
+     *    本地靠快 CPU 恰好躲过去。
+     * 4. 关掉所有活跃连接 —— 关开关要能打断正在执行的调用，而不是等它跑完。
+     */
     fun stop() {
         running.set(false)
         runCatching { serverSocket?.close() }
         serverSocket = null
+        acceptThread?.let { t -> runCatching { t.join(STOP_JOIN_MS) } }
+        acceptThread = null
+        activeConnections.forEach { runCatching { it.close() } }
+        activeConnections.clear()
         port = -1
     }
 
@@ -154,6 +174,7 @@ class McpServerHost(
     // ------------------------------------------------------------------ http
 
     private fun handleConnection(socket: Socket) {
+        activeConnections.add(socket)
         try {
             socket.soTimeout = SOCKET_TIMEOUT_MS
             val input = BufferedInputStream(socket.getInputStream())
@@ -202,6 +223,7 @@ class McpServerHost(
         } catch (_: Throwable) {
             runCatching { respond(socket, 500, rpcError(JsonNull, -32603, "internal error")) }
         } finally {
+            activeConnections.remove(socket)
             runCatching { socket.close() }
         }
     }
@@ -554,6 +576,8 @@ class McpServerHost(
         const val MAX_HEADER_BYTES = 16 * 1024
         const val MAX_LINE = 8 * 1024
         const val SOCKET_TIMEOUT_MS = 15_000
+        /** stop() 等 accept 线程退出的上限。它只会因 close 抛异常返回，正常是微秒级。 */
+        private const val STOP_JOIN_MS = 1_000L
         const val MAX_AUTH_FAILURES = 10
         const val AUTH_COOLDOWN_MS = 5L * 60 * 1000
     }
