@@ -12,9 +12,9 @@ Android 本地 AI Agent —— Kotlin / Jetpack Compose，原创实现，四层�
 > 产品名**北辰**（Polaris）。工程内部沿用的 `AgentKit` 与包名 `com.beichen.polaris` 是历史代号，
 > 不出现在桌面、系统设置或 App 内任何位置，仅为兼容已装应用升级链而保留。
 
-> 规模：Kotlin 源码 **369 文件 / 89,998 行**（`app/src/main` + `core/src/main`）｜ QA runner **142 个**（其中 Kotlin harness 104 个）｜ 版本号 = CI 构建号（`1.N`）
+> 规模：Kotlin 源码 **434 文件 / 102,685 行**（`app/src/main` + `core/src/main`）｜ QA runner **147 个**（其中 Kotlin harness 107 个）｜ 版本号 = CI 构建号（`1.N`）
 >
-> 数字按 2026-11-13 统计，会随提交漂移，别当契约看：`find app/src/main core/src/main -name '*.kt' | wc -l` 自己数一遍更快。
+> 数字按 2026-11-18 统计，会随提交漂移，别当契约看：`find app/src/main core/src/main -name '*.kt' | wc -l` 自己数一遍更快。
 >
 > 工程是两个 Gradle 模块：`:core`（内核：Agent 循环 / 工具协议 / 会话存储 / 终端 / 模型客户端 / 技能执行）
 > 与 `:app`（界面与装配）。`:core` 不依赖 Compose，也不 import `ui` / `tools`——这条边界由编译器守，
@@ -61,7 +61,7 @@ bash scripts/qa/run-hotfix11-verification.sh
 # 工具面成本审计（真实工具描述，不是 harness 里的假数据）
 python3 scripts/tool-surface-audit.py --verbose
 
-# 全套回归（123 个 harness；数字以 scripts/qa/harness-baseline.txt 为准）
+# 全套回归（147 个 harness；数字以 scripts/qa/harness-baseline.txt 为准）
 bash scripts/qa/run-all.sh
 ```
 

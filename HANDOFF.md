@@ -9,8 +9,8 @@
 ## 0. 三十秒版本
 
 **北辰（Polaris）**是一个跑在 Android 手机上的本地 AI Agent：Kotlin + Jetpack Compose，
-两个 Gradle 模块（`:core` 内核 / `:app` 界面装配），782 个提交，约 8.7 万行生产代码，
-141 个 QA runner。原创实现，参考开源项目只读思路、不抄代码。
+两个 Gradle 模块（`:core` 内核 / `:app` 界面装配），886 个提交，约 10.3 万行生产代码，
+147 个 QA runner。原创实现，参考开源项目只读思路、不抄代码。
 
 **刚做完的三件事**（都在 `main` 上）：
 
@@ -51,7 +51,7 @@ grep '^==== 汇总' /tmp/qa-full.log
 bash scripts/qa/gate.sh /tmp/qa-full.log
 ```
 
-**判据**：`exit=0`、汇总行 `PASS=103 SKIP=38 XFAIL=0 FAIL=0`、`GATE PASS`。
+**判据**：`exit=0`、汇总行 `PASS=147 SKIP=0 XFAIL=0 FAIL=0`、`GATE PASS`。
 只要有一条不满足，先修环境（见 §5），**不要**当成「代码坏了」去改代码。
 
 ---
@@ -449,7 +449,7 @@ android.app.RemoteServiceException: Context.startForegroundService()
 |---|---|---|
 | `:core` 不许 import `ui` / `tools` / Compose / `MainActivity` | 分层边界 | 编译器 + `run-arch-guard-verification.sh` |
 | `arch-baseline.txt` **只减不增** | 加一条等于把已知违规合法化 | 同上。当前上限：`ChatViewModel` 3625、`ChatScreen` 3186、`RealAgentLoop` 1532 |
-| `harness-baseline.txt` 只增不减（当前 **141**） | 数字变小说明有大面积 SKIP 被当成通过 | `gate.sh` 门禁 5/6 |
+| `harness-baseline.txt` 只增不减（当前 **147**） | 数字变小说明有大面积 SKIP 被当成通过 | `gate.sh` 门禁 5/6 |
 | 守卫裁决**不许加 Allow** | 只能拦不能放行，是这套设计唯一的安全性质 | `run-agent-seams-verification.sh` |
 | 新 harness 必须「静态断言 + 自编译真跑」两段 | 只 grep 不断言行为 = 假绿 | `gate.sh` |
 | 断言要数真实判据，不许为凑数写恒真断言 | `assertion-census` 会统计 | `scripts/qa/lib/` |
@@ -531,7 +531,8 @@ exec java -cp "$CP" "$MAIN" -kotlin-home "$BASE" "$@"
 
 ### 5.6 坑四：沙箱清理后 45 个 runner 集体 SKIP
 
-症状：`run-all.sh` 汇总变成 `PASS=97 SKIP=45`（本该是 `PASS=104 SKIP=38`），
+症状：`run-all.sh` 汇总变成 `PASS=97 SKIP=45`（当时基线是 `PASS=104 SKIP=38`；
+现在是 147/0），
 一个 FAIL 都没有。看起来「环境干净、一切正常」，实际是**编译型验证整体消失**——
 比报红更危险，因为门禁照样绿。
 
