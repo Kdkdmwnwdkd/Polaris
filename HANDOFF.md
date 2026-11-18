@@ -406,8 +406,9 @@ android.app.RemoteServiceException: Context.startForegroundService()
    的同一条路。
 2. **档位 ≠ 审批。** 档位放宽只是「工具可见」，`write_file` 在标准档里照样要弹卡。
    把两者合成一个维度，结果必然是「为了少弹窗放宽档位」，再也收不回。
-3. **锁屏 = 拒绝。** `screenOn` 由宿主注入（core 不能 import android），锁屏时非 `SAFE`
-   一律 `-32006`。人不在场，点屏幕/开应用没人看得见，审批也无从弹起。
+3. **不在场 = 拒绝。** `screenOn` 由宿主注入（core 不能 import android），非 `SAFE`
+   一律 `-32006`。判据是 **`isInteractive && !isKeyguardLocked`**，不是只看亮屏：
+   锁屏界面本身就是亮着的 Activity，只判 `isInteractive` 等于给锁屏开了后门。
 
 **为什么 MCP 层不吃 `ToolRegistry`**
 
@@ -416,8 +417,18 @@ android.app.RemoteServiceException: Context.startForegroundService()
 一次都没执行」这种安全断言**静默消失**。改成 `McpToolSource` 四个方法后，harness
 只编 8 个源文件就能真跑。
 
-**验证**：`scripts/qa/run-mcp-host-verification.sh`，9 条装配 + 22 条行为断言全绿。
+**验证**：`scripts/qa/run-mcp-host-verification.sh`，9 条装配 + 24 条行为断言全绿。
 其中 B11/B13 是核心：「被档位拒绝的调用，工具执行计数一次都没涨」。
+
+**首轮 CI 红了两处，都是真问题**（不是门禁误报）：
+
+| 门禁 | 症状 | 根因 | 改法 |
+|---|---|---|---|
+| S4 无 JSON 硬转换 | `McpServerHost` 用了 `?.jsonObject` | 与 hotfix33 同一类：`JsonNull` 上硬转抛异常。客户端发 `{"params":null}`（规范允许）会 500 而不是 `-32600` | 换 `objOrNull()` / `primOrNull()` |
+| assertion-census | 新 harness 带 15 条文本断言 | `body.contains("-32003")` 只证明「这个子串出现过」，`-3200` 也能过 | 解析 JSON 取 `error.code` 做整数比较；`tools/list` 取名字集合做集合相等 |
+
+副作用是断言变强了：B4 从「看到 `read_file`」变成「只读档**恰好**是
+`{read_file, calculator}`」，多泄漏一个工具立刻红。
 
 **没做（M2）**：审批卡片、DANGEROUS 工具、局域网/TLS、真实 `ToolGuardChain` 装配。
 

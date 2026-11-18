@@ -156,7 +156,7 @@ polaris://mcp/pair?host=192.168.1.7&port=51234&token=<256bit>&fp=<sha256>&name=D
 ### 4.1 三条铁律
 
 1. **外部客户端不能自带审批。** 客户端说「我已确认」不算数——它就是 `dsh-purge` 拆宿主提示词的那条路。
-2. **锁屏 = 拒绝。** 屏幕关着时人不在场，DANGEROUS 一律 deny，PRIVILEGED 也 deny；只有 SAFE 放行。
+2. **不在场 = 拒绝。** 判据是「亮屏 **且** 已解锁」，不是只看亮屏——锁屏界面本身是亮着的 Activity。不在场时 DANGEROUS 与 PRIVILEGED 一律 deny，只有 SAFE 放行。
 3. **`EgressGuard` 优先级高于档位。** 「读过私有内容 → 外发」必须弹窗，即使调用方是「完全信任」档，且该次审批**不可记忆**。
 
 ### 4.2 审批卡片内容
@@ -318,7 +318,7 @@ nanohttpd = { module = "org.nanohttpd:nanohttpd", version.ref = "nanohttpd" }
 
 - [x] 无 token → `401`，10 次失败锁 5 分钟
 - [x] `tools/list` 返回数量 = 6（只读档：app_list / ui_tree / read_file / memory_search / knowledge_search / calculator），且不含 `ask_user`/`plan_propose`
-- [ ] `app_list` 从电脑端 DSH 调用成功，结果与手机端本地调用逐字一致（**待真机**）
-- [ ] `ui_tree` 在锁屏时仍可用（readOnly），`app_launch` 在锁屏时被拒（**待真机**）
+- [ ] `app_list` 从电脑端 DSH 调用成功，结果与手机端本地调用逐字一致（**待真机**；脚本已备：`scripts/qa/device/mcp-e2e.sh`，矩阵 H1–H6）
+- [x] `ui_tree` 在不在场时仍可用（SAFE），`app_launch` 在不在场时被拒（harness B23/B24 用注入的 `screenOn={false}` 验证；真机侧还差一条「亮屏锁屏」手测）
 - [x] 审计 5 个字段齐全，`argsHash` 可复算
 - [x] 关掉「MCP 接入」开关后端口立即关闭（harness B22：stop 后连接被拒）
