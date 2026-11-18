@@ -35,7 +35,7 @@ Polaris 反过来做 MCP server，让它成为这些客户端的「手」，体�
 | `app/mcp/McpHostRuntime.kt` | 进程级持有者（已登记 `AppGraph`） |
 | `app/mcp/McpHostService.kt` | 前台服务（`startService` 入口，避开 5 秒窗口） |
 | `app/ui/McpHostCard.kt` | MCP 页「对外提供」卡片 |
-| `scripts/qa/run-mcp-host-verification.sh` + `McpHostVerification.kt` | 9 条装配断言 + 22 条行为断言 |
+| `scripts/qa/run-mcp-host-verification.sh` + `McpHostVerification.kt` | 9 条装配断言 + 27 条行为断言 |
 
 **与设计的四处偏差（都是有意的）**
 

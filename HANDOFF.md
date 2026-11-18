@@ -417,7 +417,7 @@ android.app.RemoteServiceException: Context.startForegroundService()
 一次都没执行」这种安全断言**静默消失**。改成 `McpToolSource` 四个方法后，harness
 只编 8 个源文件就能真跑。
 
-**验证**：`scripts/qa/run-mcp-host-verification.sh`，9 条装配 + 24 条行为断言全绿。
+**验证**：`scripts/qa/run-mcp-host-verification.sh`，9 条装配 + 27 条行为断言全绿。
 其中 B11/B13 是核心：「被档位拒绝的调用，工具执行计数一次都没涨」。
 
 **首轮 CI 红了两处，都是真问题**（不是门禁误报）：
