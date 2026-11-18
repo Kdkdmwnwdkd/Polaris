@@ -164,6 +164,15 @@ class EgressGuard(
          *
          * `web_snapshot` 不加：它只读当前页，不把新内容送出（页面发什么请求由
          * 打开时的 URL 决定，那一刻已经问过了）。
+         *
+         * ## 为什么 `github_commit` 也不在这里（2026-11-18）
+         *
+         * 它**本身就要审批**（`Approval.GIT_WRITE`），加进来会让同一次提交弹两个框——
+         * 正是本节开头警告的「重复确认比不确认更危险」。它的问题不是没闸，是
+         * **闸可以记忆**：用户点过一次「始终允许」之后，`read_file → commit → push`
+         * 就是零弹窗外发链。所以修法在审批层（`ChatViewModel.requestApproval`
+         * 把 `GROUP_GIT_WRITE` 一并算作外发，降级为不可记忆），与本集合的分工一致：
+         * 守卫管「没审批的通道」，审批层管「有审批但记得住的动作」。
          */
         val DEFAULT_EGRESS_TOOLS: Set<String> = setOf(
             "web_search",

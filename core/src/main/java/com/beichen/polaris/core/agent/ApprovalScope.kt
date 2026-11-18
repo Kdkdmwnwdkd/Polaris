@@ -57,6 +57,28 @@ object ApprovalScope {
     /** 网络外发通道（审计 F1）：唯一能把任意内容发到任意地址的工具。 */
     private const val NETWORK_TOOL = "http_request"
 
+    /**
+     * 「本回合读过私有内容之后，必须回到每次都问」的审批组。
+     *
+     * ## 为什么不止网络组
+     *
+     * `http_request` 按**域名**记忆：用户上周给 `example.com` 点过「始终允许」，
+     * 这次同域 POST 就被静默放行，而它发的正是刚用 `read_file` 读完的那份东西。
+     * `github_commit` 是同一类问题，只是通道不同——它按 `GIT_WRITE` 组记忆，
+     * 用户点过一次之后，`read_file → commit → push` 就是零弹窗外发链。
+     *
+     * ## 为什么不在 EgressGuard 里再加一道
+     *
+     * 守卫链只管**没有审批**的通道（`web_*` / `web_search`）。这两个工具本身就
+     * `needsApproval = true`，再加一道门会让同一次提交弹两个框——重复确认比不确认
+     * 更危险（用户会学会闭眼点允许）。正确的位置是审批层：**同一次弹窗**，
+     * 只是把「可记忆」降级为「一次性」。
+     */
+    val EGRESS_GROUPS: Set<String> = setOf(
+        ApprovalGrouping.GROUP_NETWORK,
+        ApprovalGrouping.GROUP_GIT_WRITE,
+    )
+
     /** 剪贴板工具（审计 F9）：`get` 是读取，`set` 是写入。 */
     private const val CLIPBOARD_TOOL = "clipboard"
 

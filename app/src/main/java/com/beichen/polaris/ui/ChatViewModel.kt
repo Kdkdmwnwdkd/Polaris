@@ -1726,11 +1726,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         val scope = ApprovalScope.of(toolName, args)
         val group = ApprovalGrouping.groupOf(toolName)
         // P1-②：本回合读过私有内容之后，外发就不再是「同类操作」。
-        // `http_request` 按**域名**记忆——用户上周给 example.com 点过「始终允许」，
-        // 这次同域 POST 就被静默放行，而它发的正是刚用 read_file 读完的那份东西。
         // 守卫链不敢再拦一次（会连弹两个框），所以把事实交给审批层：三档一律回到
         // 「每次问」且不可记忆，连 AUTO 档的会话白名单也不放行。
-        val egressNow = egressGuard.taintedNow && group == ApprovalGrouping.GROUP_NETWORK
+        // 2026-11-18：组集合含 GROUP_GIT_WRITE——`github_commit` 也可记忆，详见
+        // ApprovalScope.EGRESS_GROUPS。
+        val egressNow = egressGuard.taintedNow && group in ApprovalScope.EGRESS_GROUPS
         val grant = if (egressNow) {
             scope.copy(
                 memorizable = false,

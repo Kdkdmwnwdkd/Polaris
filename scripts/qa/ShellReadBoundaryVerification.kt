@@ -81,9 +81,23 @@ fun testDetection() {
         expectScope("ls /data/data/com.tencent.mm/files", "/data/data/com.tencent.mm")
     }
 
-    check("A5 相对路径不触发（落在 cwd 里，不构成绕过）") {
+    check("A5 普通相对路径不触发（确实落在 cwd 里）") {
         expectScope("cat notes.txt", null)
         expectScope("grep -r todo src", null)
+    }
+
+    check("A5b 相对路径穿越（`..` 爬出 cwd）必须命中") {
+        // 修前返回 null：`cat ../../../../../../sdcard/DCIM/a.jpg` 零弹窗读相册。
+        expectScope("cat ../../../../../../sdcard/DCIM/a.jpg", "/sdcard/DCIM")
+        expectScope("head -n 5 ../../../storage/emulated/0/Download/a.csv", "/storage/emulated")
+        // 带重定向的写法本函数仍会命中（isReadOnly 不判 `>`）：它只回答「读的是哪个目录」；
+        // 「要不要每次都问」由 isMemorizable 先判成不可记忆，不会走到这里取读授权键。
+        expectScope("cat ../../sdcard/DCIM/a.jpg > /tmp/x", "/sdcard/DCIM")
+    }
+
+    check("A5c `cd` 之后的相对路径按新目录解析") {
+        expectScope("cd /sdcard && cat DCIM/a.jpg", "/sdcard/DCIM")
+        expectScope("cd /sdcard/DCIM; head -n 1 Camera/a.jpg", "/sdcard/DCIM")
     }
 
     check("A6 系统只读位置不触发（看一眼 CPU 型号不该弹窗）") {

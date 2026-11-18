@@ -2307,7 +2307,9 @@ private fun MessageRow(item: UiItem, streaming: Boolean) {
                 // 功能五（P1-5）：token 用量（null = 供应商没给，不显示）
                 usage = item.usage,
                 // 功能五（P1-9）：推理过程（null = 无思考，不渲染折叠块）
-                reasoning = item.reasoning
+                reasoning = item.reasoning,
+                // 2026-11-18：落盘截断时在气泡底部明确标注（0 = 完整，不渲染）
+                truncatedChars = item.truncatedChars
             )
 
             is UiItem.Tool -> ToolCard(item)
@@ -2331,7 +2333,14 @@ private fun MessageBubble(
     /** 功能五（P1-5）：助手气泡的 token 用量（null = 无数据不显示；用户气泡恒 null）。 */
     usage: TokenUsage? = null,
     /** 功能五（P1-9）：推理过程原文（null = 模型没给思考，不渲染折叠块；用户气泡恒 null）。 */
-    reasoning: String? = null
+    reasoning: String? = null,
+    /**
+     * 落盘截断标记：正文被丢弃的字符数（0 = 完整）。
+     *
+     * 只在「从磁盘读回的会话」上非 0——实时上屏的消息永远是全量。没有这一行时，
+     * 重启后看到的是半截回答，用户会以为模型话说一半，冷启动续跑也会基于残文继续。
+     */
+    truncatedChars: Int = 0
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -2421,6 +2430,21 @@ private fun MessageBubble(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp)
+                            )
+                        }
+                        // 2026-11-18：落盘截断必须说出来。修前是静默 take(4000)，
+                        // 重启后看到的半截回答与「模型真的只说了这么多」无法区分。
+                        if (truncatedChars > 0) {
+                            Text(
+                                text = "正文已截断：原文 ${text.length + truncatedChars} 字符，" +
+                                    "落盘只存前 ${text.length} 字符",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(
+                                    start = 14.dp,
+                                    end = 14.dp,
+                                    bottom = 8.dp
+                                )
                             )
                         }
                     }

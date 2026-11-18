@@ -62,6 +62,17 @@ private const val DEFAULT_TITLE = "新对话"
 private const val MAX_FIELD_CHARS = 4000
 
 /**
+ * 正文落盘时被丢弃的字符数（0 = 完整）。
+ *
+ * 与 `take(MAX_FIELD_CHARS)` 成对使用：取了多少、丢了多少必须一起算出来，
+ * 否则读盘端只看到「短」，分不清「本来就短」和「被截短」。
+ *
+ * 调用方一律写成 `truncatedChars + droppedChars(...)`：从磁盘读回的 [UiItem] 已经带着
+ * 上一次的丢弃量，若直接覆盖成 0，一次「读回 → 重写」就会把标记抹掉。
+ */
+private fun droppedChars(text: String): Int = (text.length - MAX_FIELD_CHARS).coerceAtLeast(0)
+
+/**
  * 会话摘要（抽屉「最近对话」区直接消费，不加载消息正文——列表要轻）。
  *
  * @param updatedAt 最近一次消息/重命名的时间（列表倒序键）。
@@ -128,7 +139,17 @@ data class MsgRecord(
      *
      * 旧文件没有该字段 → false（历史记录按终态看待，与改动前一致）。
      */
-    val pending: Boolean = false
+    val pending: Boolean = false,
+    /**
+     * 落盘截断标记（2026-11-18）：正文超过 [MAX_FIELD_CHARS] 时被丢弃的字符数，0 = 完整。
+     *
+     * 修前只是静默 `take(4000)`：会话内 UI 看全文，重启后读到残文，看起来像「模型话说一半」；
+     * 冷启动续跑还会基于断掉的上下文继续推理。有了这个数，读盘路径能明确告诉用户
+     * 「已截断，原文 N 字符」，而不是让人自己猜。
+     *
+     * 旧文件没有该字段 → 0（未截断，与改动前一致）。
+     */
+    val truncatedChars: Int = 0
 )
 
 /**
@@ -179,7 +200,8 @@ fun UiItem.toMsgRecord(): MsgRecord = when (this) {
         id = UUID.randomUUID().toString(),
         role = ROLE_USER,
         content = text.take(MAX_FIELD_CHARS),
-        timeMs = timeMs
+        timeMs = timeMs,
+        truncatedChars = truncatedChars + droppedChars(text)
     )
 
     is UiItem.Assistant -> MsgRecord(
@@ -193,7 +215,8 @@ fun UiItem.toMsgRecord(): MsgRecord = when (this) {
         reasoning = reasoning.orEmpty().take(MAX_FIELD_CHARS),
         timeMs = timeMs,
         // W-RT7：模型归属随气泡落盘（费用下钻的依据）
-        modelId = modelId
+        modelId = modelId,
+        truncatedChars = truncatedChars + droppedChars(text)
     )
 
     is UiItem.Tool -> MsgRecord(
@@ -206,7 +229,8 @@ fun UiItem.toMsgRecord(): MsgRecord = when (this) {
         toolArgs = call.arguments.toString().take(MAX_FIELD_CHARS),
         isError = isError,
         // R-06：只有「执行中」这一段落 pending=true；终态落盘时一并清掉
-        pending = running && !interrupted
+        pending = running && !interrupted,
+        truncatedChars = truncatedChars + droppedChars(result)
     )
 }
 
@@ -223,10 +247,11 @@ internal fun MsgRecord.toUiItem(): UiItem = when (role) {
         // R-06：把「落盘时还在执行」还原成执行中。要不要显示成转圈由调用方裁决
         // （[com.beichen.polaris.ui.ConversationProjection.loadOf] 只在「这条会话确实
         // 正在跑」时保留 running，否则翻成「已中断」）——这里只管忠实还原事实。
-        running = pending
+        running = pending,
+        truncatedChars = truncatedChars
     )
 
-    ROLE_USER -> UiItem.User(content, timeMs = timeMs)
+    ROLE_USER -> UiItem.User(content, timeMs = timeMs, truncatedChars = truncatedChars)
 
     // 功能五（P1-5）：还原 token 用量；两个计数都 0 = 无数据（旧文件/供应商没给）→ null
     ROLE_ASSISTANT -> UiItem.Assistant(
@@ -240,7 +265,8 @@ internal fun MsgRecord.toUiItem(): UiItem = when (role) {
         reasoning = reasoning.takeIf { it.isNotBlank() },
         timeMs = timeMs,
         // W-RT7：还原模型归属（空 = 旧数据，下钻里归到「未知模型」）
-        modelId = modelId
+        modelId = modelId,
+        truncatedChars = truncatedChars
     )
     // 未知 role 兜底按 assistant 渲染：宁可显示不错丢（历史数据兼容）
     else -> UiItem.Assistant(content)
@@ -261,7 +287,14 @@ internal fun List<MsgRecord>.toUiItems(): List<UiItem> = map { it.toUiItem() }
  */
 fun ConversationRecord.toUiItems(): List<UiItem> = buildList {
     turns.forEachIndexed { turnIndex, turn ->
-        add(UiItem.User(turn.user.content, turnIndex, timeMs = turn.user.timeMs))
+        add(
+            UiItem.User(
+                turn.user.content,
+                turnIndex,
+                timeMs = turn.user.timeMs,
+                truncatedChars = turn.user.truncatedChars
+            )
+        )
         turn.trace.forEach { add(it.toUiItem()) }
         val sel = turn.variants.getOrNull(turn.selectedIndex)
         if (sel != null) {
@@ -281,7 +314,9 @@ fun ConversationRecord.toUiItems(): List<UiItem> = buildList {
                     reasoning = sel.reasoning.takeIf { it.isNotBlank() },
                     timeMs = sel.timeMs,
                     // W-RT7：选中变体的模型归属一起还原
-                    modelId = sel.modelId
+                    modelId = sel.modelId,
+                    // 2026-11-18：变体正文被截断时，读盘端同样要能看出来
+                    truncatedChars = sel.truncatedChars
                 )
             )
         }

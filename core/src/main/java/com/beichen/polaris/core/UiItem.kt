@@ -33,7 +33,15 @@ sealed interface UiItem {
     data class User(
         val text: String,
         val turnIndex: Int = -1,
-        val timeMs: Long = 0
+        val timeMs: Long = 0,
+        /**
+         * 落盘截断标记（2026-11-18）：本条正文被丢弃的字符数，0 = 完整。
+         *
+         * 只由「从磁盘读回」这条路径填——实时上屏的消息永远是全量。
+         * 存在的原因：`ConversationStore` 对正文有 4000 字符上限，截断后如果不标记，
+         * 用户看到的是「模型话说一半」，冷启动续跑也会基于断掉的上下文继续推理。
+         */
+        val truncatedChars: Int = 0
     ) : UiItem
 
     /**
@@ -52,6 +60,7 @@ sealed interface UiItem {
      *   null = 模型没给思考，UI 不渲染折叠块而非摆个空框。
      * @param modelId 产生本回答的模型标识（W-RT7）；空 = 旧数据/未记录，费用下钻归「未知模型」。
      *   本地推理统一记 `local-llama`——它价格表里是 0，且不会误撞云端模型名。
+     * @param truncatedChars 落盘截断标记：正文被丢弃的字符数，0 = 完整。只由读盘路径填。
      */
     data class Assistant(
         val text: String,
@@ -61,7 +70,8 @@ sealed interface UiItem {
         val usage: TokenUsage? = null,
         val reasoning: String? = null,
         val timeMs: Long = 0,
-        val modelId: String = ""
+        val modelId: String = "",
+        val truncatedChars: Int = 0
     ) : UiItem
 
     /**
@@ -80,7 +90,9 @@ sealed interface UiItem {
         val isError: Boolean,
         val images: List<String> = emptyList(),
         val running: Boolean = false,
-        val interrupted: Boolean = false
+        val interrupted: Boolean = false,
+        /** 落盘截断标记：结果正文被丢弃的字符数，0 = 完整。只由读盘路径填。 */
+        val truncatedChars: Int = 0
     ) : UiItem
 }
 

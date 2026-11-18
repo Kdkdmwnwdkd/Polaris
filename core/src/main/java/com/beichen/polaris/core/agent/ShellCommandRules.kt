@@ -198,21 +198,52 @@ object ShellCommandRules {
     /**
      * 这条命令读的是不是受保护目录；返回**同意粒度**（见 [consentScope]），否则 null。
      *
-     * 只看**只读段**里的**绝对路径**：写命令本来就要审批（且多半不可记忆），
-     * 相对路径落在 cwd 里（本机=filesDir、容器=/root），都不构成「绕过工作区」——
-     * 唯一能越界的写法就是写死一个绝对路径。
+     * ## 为什么必须解析相对路径（2026-11-18 修）
+     *
+     * 修前这里只认绝对路径，注释还写着「相对路径落在 cwd 里，不构成绕过」——
+     * 这个假设是错的：`cat ../../../../../../sdcard/DCIM/a.jpg` 里没有一枚
+     * 以 `/` 开头的 token，三道判据（只读白名单 / 绝对路径 / 保护根）全部落空，
+     * 于是零弹窗读走相册。cwd 的 `..` 足够多就一定能爬到 `/`。
+     *
+     * 现在的解析规则：
+     *  - 绝对路径：原样规范化；
+     *  - 相对路径：按 [cwd] 解析。默认 `"/"` 是**故意取的最坏情况**——把相对路径
+     *    当成从根出发，`../../sdcard/x` 就会折成 `/sdcard/x` 命中。代价是可能误报
+     *    （真实 cwd 更深时那条路径其实读不到），但误报只是多一次弹窗，漏报是静默读相册；
+     *  - `cd` / `pushd`：顺序跟踪，`cd /sdcard && cat DCIM/a.jpg` 的第二段按 `/sdcard` 解析。
+     *
+     * ## 已知边界（写出来，不假装没有）
+     *
+     * 会话工作区被绑定到 `/sdcard` 时，`cat DCIM/a.jpg` 这种**既无 `..` 也非绝对**的
+     * 路径无法静态判定（本函数拿不到真实 cwd）。这一档由「绑定工作区」这个显式动作
+     * 本身背书：用户已经指定了那个目录为工作区，读它不算越界。
      *
      * 注意这**不是**「要不要弹窗」的完整判据：`cat /sdcard/x > out` 这种带重定向的命令
      * 由 [isMemorizable] 判成不可记忆，走的是「每次都问」那一档；本函数只回答
      * 「它在读哪个受保护目录」，供审批链生成**按目录**的授权键。
      */
-    fun sensitiveReadRoot(command: String): String? {
+    fun sensitiveReadRoot(command: String, cwd: String = "/"): String? {
         if (command.isBlank()) return null
+        var dir = normalizeAbsolute(cwd) ?: "/"
         for (seg in segments(command)) {
+            val words = seg.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+            // `cd` 不在只读白名单里，但它的副作用决定了后面相对路径的基准，
+            // 所以要在 isReadOnly 判定**之前**单独处理。
+            val head = words.firstOrNull()?.trim('"', '\'')
+            if (head == "cd" || head == "pushd") {
+                val target = words.getOrNull(1)?.trim('"', '\'')
+                // 变量 / `~` / `cd -` 解析不了：保持原基准，宁可少归一化也不乱猜。
+                if (target != null && target != "-" && target != "~" && !target.contains('$')) {
+                    resolveAgainst(dir, target)?.let { dir = it }
+                }
+                continue
+            }
             if (!isReadOnly(seg)) continue
-            for (token in seg.split(Regex("\\s+"))) {
-                val raw = absolutePathIn(token) ?: continue
-                val normalized = normalizeAbsolute(raw) ?: continue
+            // 从 argv[1] 开始：argv[0] 是命令名，`cd /sdcard && cat DCIM/a.jpg` 里
+            // 那个 `cat` 会被当成相对路径解析成 `/sdcard/cat`，把整条命令误判成读目录。
+            for (token in words.drop(1)) {
+                val raw = pathTokenIn(token) ?: continue
+                val normalized = resolveAgainst(dir, raw) ?: continue
                 val root = PROTECTED_READ_ROOTS.firstOrNull {
                     normalized == it || normalized.startsWith("$it/")
                 } ?: continue
@@ -223,12 +254,12 @@ object ShellCommandRules {
     }
 
     /**
-     * 从 argv 里一枚 token 取出绝对路径；不是绝对路径返回 null。
+     * 从 argv 里一枚 token 取出路径（绝对或相对）；不像路径的返回 null。
      *
-     * 处理的三种写法都是真机上常见的：`/sdcard/a`、`"/sdcard/My Files/a.jpg"`（引号被
-     * 分词留下）、`--file=/sdcard/a`（长选项带值）。
+     * 处理的写法都是真机上常见的：`/sdcard/a`、`"/sdcard/My Files/a.jpg"`（引号被
+     * 分词留下）、`--file=/sdcard/a`（长选项带值）、`../../sdcard/a`（相对路径）。
      */
-    private fun absolutePathIn(token: String): String? {
+    private fun pathTokenIn(token: String): String? {
         var t = token.trim().trimEnd(',', ';', ')', ']', '}')
         t = t.trim('"', '\'')
         if (t.startsWith("--")) {
@@ -236,8 +267,13 @@ object ShellCommandRules {
             if (eq < 0) return null
             t = t.substring(eq + 1).trim('"', '\'')
         }
-        return t.takeIf { it.startsWith("/") }
+        if (t.isEmpty() || t.startsWith("-")) return null
+        return t
     }
+
+    /** 把 [path] 按 [dir] 解析成绝对路径；`..` 由 [normalizeAbsolute] 折叠。 */
+    private fun resolveAgainst(dir: String, path: String): String? =
+        if (path.startsWith("/")) normalizeAbsolute(path) else normalizeAbsolute("$dir/$path")
 
     /**
      * 规范化绝对路径：折叠 `.` / `..` 与重复分隔符。
