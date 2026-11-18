@@ -432,6 +432,16 @@ android.app.RemoteServiceException: Context.startForegroundService()
 
 **没做（M2）**：审批卡片、DANGEROUS 工具、局域网/TLS、真实 `ToolGuardChain` 装配。
 
+**两个已知的行为缺口**（不构成安全问题，但会让人困惑）：
+
+| 现象 | 原因 | 怎么修（M2） |
+|---|---|---|
+| 服务被系统杀掉重建后，档位回落到「只读」 | `START_STICKY` 重建时 `intent == null`，`tier` 取默认值。降权方向是安全的（收紧而非放宽），但用户会以为「我明明选了标准档」 | 把 tier 落 SharedPreferences，重建时读回 |
+| 重建后端口变了 | `McpHostConfig.port = 0` 由系统分配 | 配好固定端口（需先做「端口被占」的重试与提示） |
+
+这两条都不该现在改：M1 的用途是只读观察，档位与端口变化只影响便利性。
+但 M2 做审批卡时必须一起解决——那时用户会真的依赖「标准档 + 弹卡」这条路。
+
 
 ## 4. 代码红线（碰了会立刻红）
 
