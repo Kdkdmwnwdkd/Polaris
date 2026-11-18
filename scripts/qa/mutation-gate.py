@@ -23,9 +23,11 @@
 - 变异存活（测试仍全绿）→ SURVIVED（断言无判别力，退出码 1）
 - 编译失败 → INVALID（变异破坏了语法，是脚本定义的错，不是判定的错）
 - 缺编译器 / JUnit → SKIP（什么都没验证，**不算通过**）
+  CI 上要传 `--strict`：缺环境直接失败。否则「缺构件 → 退出码 0」会让一个
+  什么都没跑的 job 显示绿色，正是本项目最忌讳的那种绿。
 
 用法：
-    python3 scripts/qa/mutation-gate.py [--verbose]
+    python3 scripts/qa/mutation-gate.py [--verbose] [--strict]
 """
 
 from __future__ import annotations
@@ -306,9 +308,13 @@ def parse_failures(out: str) -> tuple[int, int, list[str]]:
 
 def main() -> int:
     verbose = "--verbose" in sys.argv
+    strict = "--strict" in sys.argv
     deps = find_classpath()
     if deps is None:
-        return 0  # SKIP 不失败：缺环境不该阻塞，但输出已明确说「什么都没验证」
+        if strict:
+            print("变异门禁：严格模式下缺构件视为失败（本次没有验证任何东西）")
+            return 1
+        return 0  # SKIP 不失败：缺环境不该阻塞本地开发，但输出已明确说「什么都没验证」
     compiler_cp, lib_cp, plugin = deps
 
     rows, failed = [], 0
