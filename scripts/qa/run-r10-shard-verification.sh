@@ -25,11 +25,12 @@ echo "== R-10 会话分片守卫 =="
 echo ""
 
 # ---------------------------------------------------------------- 依赖解析
-KC="${KOTLINC_HOME:-/tmp/kotlinc}"
-KOTLINC_BIN="$KC/bin/kotlinc"
-[ -x "$KOTLINC_BIN" ] || KOTLINC_BIN=$(command -v kotlinc || true)
+# 依赖解析统一走 deps.sh：没有 Android SDK 的机器上，qa_kotlinc 会用 Gradle 缓存里的
+# kotlin-compiler-embeddable 现造一个包装（stdlib / coroutines 都已拼好），
+# 不必再手工软链 /tmp/kc/lib。找不到才 SKIP。
+KOTLINC_BIN=$(qa_kotlinc)
 if [ -z "$KOTLINC_BIN" ] || [ ! -x "$KOTLINC_BIN" ]; then
-  echo "KS_HARNESS_SKIP $(basename "$0") 找不到 Kotlin 编译器：$KC/bin/kotlinc" >&2
+  echo "KS_HARNESS_SKIP $(basename "$0") 找不到 Kotlin 编译器（PATH / KOTLINC_HOME / Gradle 缓存均不可用）" >&2
   exit 3
 fi
 
@@ -41,7 +42,7 @@ PLUGIN=$(qa_find_jar_or_local \
   "kotlin-serialization-compiler-plugin-embeddable-*.jar" \
   "kotlinx-serialization-compiler-plugin.jar" 2>/dev/null || true)
 if [ -z "$PLUGIN" ] || [ ! -f "$PLUGIN" ]; then
-  echo "KS_HARNESS_SKIP $(basename "$0") 缺 kotlinx-serialization 编译器插件：$KC/lib/kotlinx-serialization-compiler-plugin.jar" >&2
+  echo "KS_HARNESS_SKIP $(basename "$0") 缺 kotlinx-serialization 编译器插件（KOTLINC_HOME/lib 与 Gradle 缓存均未找到）" >&2
   exit 3
 fi
 
@@ -51,10 +52,9 @@ SER_JSON=$(qa_find_jar_or_local \
 SER_CORE=$(qa_find_jar_or_local \
   "$QA_GRADLE_CACHE/org.jetbrains.kotlinx/kotlinx-serialization-core-jvm" \
   "kotlinx-serialization-core-jvm-*.jar" "kotlinx-serialization-core-jvm.jar" 2>/dev/null || true)
-STDLIB="$KC/lib/kotlin-stdlib.jar"
-[ -f "$STDLIB" ] || STDLIB=$(find "$(dirname "$KOTLINC_BIN")/../lib" -name 'kotlin-stdlib.jar' 2>/dev/null | head -1)
+STDLIB=$(qa_stdlib)
 if [ -z "$SER_JSON" ] || [ -z "$SER_CORE" ] || [ -z "$STDLIB" ]; then
-  echo "KS_HARNESS_SKIP $(basename "$0") 缺序列化运行库或 stdlib：$KC/lib/kotlinx-serialization-json-jvm.jar" >&2
+  echo "KS_HARNESS_SKIP $(basename "$0") 缺序列化运行库或 stdlib（KOTLINC_HOME / Gradle 缓存均未找到）" >&2
   exit 3
 fi
 CP="$SER_JSON:$SER_CORE"

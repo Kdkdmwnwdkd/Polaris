@@ -173,3 +173,101 @@ qa_classes_stale() {
         find "$src" -path "$src/cpp" -prune -o -name '*.kt' -newer "$newest" -print -quit 2>/dev/null
     done
 }
+
+# qa_kotlinc：给出一个**可执行的 kotlinc**（找不到输出空串，调用方照旧 SKIP）。
+#
+# 解析顺序：
+#   1. ${KOTLINC_HOME:-/tmp/kotlinc}/bin/kotlinc —— 手工搭的环境优先，尊重既有约定
+#   2. PATH 里的 kotlinc（装了发行版的机器）
+#   3. 用 Gradle 缓存里的 kotlin-compiler-embeddable **现造一个包装脚本**
+#
+# 为什么需要第 3 步：没有 Android SDK 的机器上，唯一能跑编译器的东西就是 Gradle
+# 缓存里那份 embeddable jar。修前每个行为段脚本都要求使用者手工软链出 /tmp/kc/lib、
+# 再自己补 stdlib 与 coroutines——漏一项的报错分别是
+# `unresolved reference: emptyList`（stdlib 没进 -cp）与
+# `NoClassDefFoundError: kotlinx/coroutines/CoroutineScope`（K2 前端依赖 coroutines），
+# 两者都长得像「源码写错了」。2026-11-19 又在这个坑里耗了一次，所以固化到这里。
+#
+# 包装脚本自带缓存（默认 /tmp/qa-kotlinc/bin/kotlinc），命中即复用；缓存里的 compiler
+# 路径失效（被清过）时自动重建。
+qa_kotlinc() {
+    local kc_bin="${KOTLINC_HOME:-/tmp/kotlinc}/bin/kotlinc"
+    if [ -x "$kc_bin" ]; then printf '%s\n' "$kc_bin"; return 0; fi
+    if command -v kotlinc >/dev/null 2>&1; then command -v kotlinc; return 0; fi
+
+    local compiler stdlib reflect annot coro wrapper cp
+    compiler=$(qa_find_jar_or_local \
+        "$QA_GRADLE_CACHE/org.jetbrains.kotlin/kotlin-compiler-embeddable" \
+        "kotlin-compiler-embeddable-*.jar" "kotlin-compiler.jar")
+    [ -n "$compiler" ] && [ -f "$compiler" ] || return 0
+    stdlib=$(qa_find_jar_or_local \
+        "$QA_GRADLE_CACHE/org.jetbrains.kotlin/kotlin-stdlib" \
+        "kotlin-stdlib-[0-9]*.jar" "kotlin-stdlib.jar")
+    [ -n "$stdlib" ] && [ -f "$stdlib" ] || return 0
+    reflect=$(qa_find_jar_or_local \
+        "$QA_GRADLE_CACHE/org.jetbrains.kotlin/kotlin-reflect" \
+        "kotlin-reflect-*.jar" "kotlin-reflect.jar")
+    annot=$(qa_find_jar_or_local \
+        "$QA_GRADLE_CACHE/org.jetbrains/annotations" "annotations-*.jar" "annotations.jar")
+    coro=$(qa_find_jar \
+        "$QA_GRADLE_CACHE/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm" \
+        "kotlinx-coroutines-core-jvm-*.jar")
+
+    cp="$compiler:$stdlib"
+    [ -n "$reflect" ] && [ -f "$reflect" ] && cp="$cp:$reflect"
+    [ -n "$annot" ] && [ -f "$annot" ] && cp="$cp:$annot"
+    [ -n "$coro" ] && [ -f "$coro" ] && cp="$cp:$coro"
+    if [ -z "$annot" ] || [ ! -f "$annot" ]; then
+        # annotations 是 K2 后端生成 @NotNull 时的硬依赖。缺了不会在编译早期报错，
+        # 而是**编译到代码生成阶段崩 RuntimeException**，日志里只有
+        # NoClassDefFoundError: org/jetbrains/annotations/NotNull——极难联想到「缺 jar」。
+        echo "qa_kotlinc: 警告：未找到 org.jetbrains:annotations，编译可能在后端崩掉" >&2
+    fi
+
+    wrapper="${QA_KOTLINC_WRAPPER:-/tmp/qa-kotlinc/bin/kotlinc}"
+    # 缓存校验用依赖集合指纹而不是 compiler 路径：补齐 annotations 之后包装必须重建，
+    # 否则仍然沿用旧 cp、继续在后端崩。
+    local stamp="# deps:$(printf '%s' "$cp" | cksum | cut -d' ' -f1)"
+    if [ -x "$wrapper" ] && grep -qF "$stamp" "$wrapper" 2>/dev/null; then
+        printf '%s\n' "$wrapper"; return 0
+    fi
+
+    mkdir -p "$(dirname "$wrapper")" || return 0
+    # stdlib 显式拼进 -cp：缓存里的 jar 名不带版本号，-kotlin-home 的自动发现找不到它
+    cat > "$wrapper" <<EOF
+#!/usr/bin/env bash
+# 由 scripts/qa/lib/deps.sh 的 qa_kotlinc() 生成，勿手改。
+$stamp
+STDLIB="$stdlib"
+args=(); has_cp=0
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -cp|-classpath) args+=("\$1"); shift; args+=("\$1:\$STDLIB"); has_cp=1; shift;;
+    *) args+=("\$1"); shift;;
+  esac
+done
+[ \$has_cp -eq 1 ] || args+=("-cp" "\$STDLIB")
+exec java -Xmx1g -cp "$cp" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler -no-stdlib -no-reflect "\${args[@]}"
+EOF
+    chmod +x "$wrapper" 2>/dev/null || return 0
+    printf '%s\n' "$wrapper"
+}
+
+# qa_stdlib：与 [qa_kotlinc] 配套的标准库 jar（**运行时** classpath 用）。
+#
+# 为什么单独一个函数：编译器能找到 stdlib ≠ `java -cp` 能找到。行为段脚本跑产物时
+# 用的是 `java -cp "$OUT:$CP:$STDLIB"`，STDLIB 留空的表现是运行期
+# `NoClassDefFoundError: kotlin/collections/CollectionsKt`——编过了却跑不起来。
+qa_stdlib() {
+    local home="${KOTLINC_HOME:-/tmp/kotlinc}" kb sl
+    if [ -f "$home/lib/kotlin-stdlib.jar" ]; then
+        printf '%s\n' "$home/lib/kotlin-stdlib.jar"; return 0
+    fi
+    kb=$(command -v kotlinc 2>/dev/null || true)
+    if [ -n "$kb" ]; then
+        sl="$(dirname "$kb")/../lib/kotlin-stdlib.jar"
+        if [ -f "$sl" ]; then printf '%s\n' "$sl"; return 0; fi
+    fi
+    qa_find_jar_or_local "$QA_GRADLE_CACHE/org.jetbrains.kotlin/kotlin-stdlib" \
+        "kotlin-stdlib-[0-9]*.jar" "kotlin-stdlib.jar"
+}
