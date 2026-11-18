@@ -5,12 +5,17 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
+source scripts/qa/lib/deps.sh
 OUT=/tmp/qa-verify-w29
 
 KC_HOME=${KOTLINC_HOME:-/tmp/kotlinc}
 STDLIB=$KC_HOME/lib/kotlin-stdlib.jar
-SER=${SER_JSON_JAR:-/tmp/w7-jars/kotlinx-serialization-json-jvm-1.6.3.jar}
-SERCORE=${SER_CORE_JAR:-/tmp/w7-jars/kotlinx-serialization-core-jvm-1.6.3.jar}
+SER=${SER:-$(qa_find_jar "$QA_GRADLE_CACHE/org.jetbrains.kotlinx/kotlinx-serialization-json-jvm/1.6.3" "*.jar")}
+# 历史遗留路径：只有缓存完全没有时才用（沙箱里手工放的一次性产物）
+[ -n "${SER:-}" ] || SER=/tmp/w7-jars/kotlinx-serialization-json-jvm-1.6.3.jar
+SERCORE=${SERCORE:-$(qa_find_jar "$QA_GRADLE_CACHE/org.jetbrains.kotlinx/kotlinx-serialization-core-jvm/1.6.3" "*.jar")}
+# 历史遗留路径：只有缓存完全没有时才用（沙箱里手工放的一次性产物）
+[ -n "${SERCORE:-}" ] || SERCORE=/tmp/w7-jars/kotlinx-serialization-core-jvm-1.6.3.jar
 
 SRC1="$ROOT/core/src/main/java/com/beichen/polaris/core/text/HeaderParsing.kt"
 SRC2="$ROOT/core/src/main/java/com/beichen/polaris/core/llm/BalanceParsing.kt"

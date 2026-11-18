@@ -196,7 +196,14 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 if [ ! -d "$OUT/com" ]; then
   fail "C 编译失败（上面是输出）——行为断言没跑成，不能算通过"
 else
-  STD=$(find "$KC/lib" "$(dirname "$KOTLINC_BIN")/../lib" -name 'kotlin-stdlib.jar' 2>/dev/null | head -1)
+  # stdlib 必须跟随软链找：`KOTLINC_HOME/lib` 常常是一个指向别处的软链，而 find
+  # 对**作为起点**的软链不下降——只输出那个链接本身，然后被 -name 过滤掉。
+  # 结果是 STD 为空、`java -cp "$OUT:$COROUTINES:"` 缺 stdlib，运行时抛
+  # NoClassDefFoundError: kotlin/jvm/functions/Function0（报错完全不像缺 jar）。
+  # 先问 deps.sh 的 qa_stdlib（用 test -f，天然穿透软链），再退回 find -L。
+  # shellcheck disable=SC2016
+  STD=$(qa_stdlib)
+  [ -n "${STD:-}" ] || STD=$(find -L "$KC/lib" "$(dirname "$KOTLINC_BIN")/../lib" -name 'kotlin-stdlib.jar' 2>/dev/null | head -1)
   BODY=$(java -cp "$OUT:$STD" R13CatalogVerificationKt 2>&1)
   rc=$?
   echo "$BODY" | grep -E '^  (PASS|FAIL)' || true

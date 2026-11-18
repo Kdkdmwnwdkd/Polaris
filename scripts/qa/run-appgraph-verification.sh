@@ -83,7 +83,9 @@ print(f"\n[A] 清单本体（解析到 {len(entries)} 条）")
 # 数字变化必须有对应新增，不能为了让它变绿而调数字。
 # 2026-11-17：29 条（+PetConversation，桌宠会话跨 Service 重建保持）
 # 2026-11-18：30 条（+McpHostRuntime，MCP 前台服务重建后监听与配对不能跟着丢）
-check("A1 清单条数为 30", len(entries) == 30, f"实际 {len(entries)}")
+# 2026-11-19：31 条（+ApprovalWhitelistStore，审批白名单同样是跨页面的进程级运行态；
+#   它此前漏登记，表现是 resetAll 之后「始终允许」仍然生效）
+check("A1 清单条数为 31", len(entries) == 31, f"实际 {len(entries)}")
 
 names = [e["name"] for e in entries]
 dups = sorted({n for n in names if names.count(n) > 1})

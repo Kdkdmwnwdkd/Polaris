@@ -63,11 +63,23 @@ object ApprovalWhitelistStore {
             ExpiringKeySet(TTL_MS) { clock() }
         }
 
-    /** 测试用：清空全部对话的授权并复位时钟。生产代码不应调用。 */
-    internal fun resetForTest() {
+    /**
+     * 清空全部对话的授权并复位时钟。
+     *
+     * 这是 [com.beichen.polaris.AppGraph] 要求每个带运行态的全局对象提供的入口：
+     * 切账号 / 清空数据时，上一份授权不能留给下一份身份用。见 `AppGraph.buildGlobals`
+     * 的登记条目——漏登记的表现不是报错，而是「清理过一次之后，某些免问还在」。
+     *
+     * 之所以同时复位 [clock]：测试替换过时钟后不复位，会把「快进了 31 分钟」带进
+     * 后续用例，表现为随机过期。生产路径上它本来就是默认实现，复位是幂等的。
+     */
+    fun reset() {
         byConversation.clear()
         clock = { System.currentTimeMillis() }
     }
+
+    /** 旧名保留：既有单测按这个名字调用，语义与 [reset] 完全相同。 */
+    internal fun resetForTest() = reset()
 
     /**
      * 带过期的键集合。

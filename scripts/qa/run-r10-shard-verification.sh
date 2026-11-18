@@ -37,7 +37,18 @@ fi
 # kotlinx.serialization 编译器插件：@Serializable 的 serializer 由它生成，
 # 少了它 encodeToString/decodeFromString 会在运行时抛 SerializationException，
 # 而代码里用 runCatching 兜着 —— 表现是「文件一直没生成」而不是「编译报错」。
-PLUGIN=$(qa_find_jar_or_local \
+# 插件必须**跟编译器同版本**，所以先看编译器自己那个 lib 目录，再退回 Gradle 缓存。
+#
+# 反过来（缓存优先）会稳定地踩一个坑：qa_kotlinc 用的是 KOTLINC_HOME 下的 2.2.21，
+# 缓存里却是 1.9.25 的插件，`-Xplugin` 一加载就崩
+#   NoClassDefFoundError: org/jetbrains/kotlin/codegen/extensions/ExpressionCodegenExtension
+# ——这个类在 2.x 里已经不存在了，报错文本里没有一个字提到「版本不一致」。
+KC_LIB=$(cd "$(dirname "$KOTLINC_BIN")/../lib" 2>/dev/null && pwd || true)
+PLUGIN=""
+if [ -n "$KC_LIB" ] && [ -f "$KC_LIB/kotlinx-serialization-compiler-plugin.jar" ]; then
+  PLUGIN="$KC_LIB/kotlinx-serialization-compiler-plugin.jar"
+fi
+[ -n "$PLUGIN" ] || PLUGIN=$(qa_find_jar_or_local \
   "$QA_GRADLE_CACHE/org.jetbrains.kotlin/kotlin-serialization-compiler-plugin-embeddable" \
   "kotlin-serialization-compiler-plugin-embeddable-*.jar" \
   "kotlinx-serialization-compiler-plugin.jar" 2>/dev/null || true)

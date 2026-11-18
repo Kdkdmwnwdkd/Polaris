@@ -7,6 +7,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
+source scripts/qa/lib/deps.sh
 OUT=/tmp/qa-verify-workflow-schedule
 
 # W-41：缓存根按环境推导（CI 是 /home/runner/.gradle），可被 AGENTKIT_GRADLE_CACHE 覆盖
@@ -25,8 +26,12 @@ if [ -z "${KOTLINC_JAR:-}" ] || [ -z "${STDLIB:-}" ] || [ -z "${SERIALIZATION:-}
   if [ -x "$KC_HOME/bin/kotlinc" ]; then
     KOTLINC_BIN="$KC_HOME/bin/kotlinc"
     STDLIB=${STDLIB:-$KC_HOME/lib/kotlin-stdlib.jar}
-    SERIALIZATION=${SERIALIZATION:-/tmp/w7-jars/kotlinx-serialization-json-jvm-1.6.3.jar}
-    SER_CORE=${SER_CORE:-/tmp/w7-jars/kotlinx-serialization-core-jvm-1.6.3.jar}
+    SERIALIZATION=${SERIALIZATION:-$(qa_find_jar "$QA_GRADLE_CACHE/org.jetbrains.kotlinx/kotlinx-serialization-json-jvm/1.6.3" "*.jar")}
+    # 历史遗留路径：只有缓存完全没有时才用（沙箱里手工放的一次性产物）
+    [ -n "${SERIALIZATION:-}" ] || SERIALIZATION=/tmp/w7-jars/kotlinx-serialization-json-jvm-1.6.3.jar
+    SER_CORE=${SER_CORE:-$(qa_find_jar "$QA_GRADLE_CACHE/org.jetbrains.kotlinx/kotlinx-serialization-core-jvm/1.6.3" "*.jar")}
+    # 历史遗留路径：只有缓存完全没有时才用（沙箱里手工放的一次性产物）
+    [ -n "${SER_CORE:-}" ] || SER_CORE=/tmp/w7-jars/kotlinx-serialization-core-jvm-1.6.3.jar
   fi
 fi
 

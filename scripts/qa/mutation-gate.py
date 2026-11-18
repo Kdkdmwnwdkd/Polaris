@@ -416,7 +416,24 @@ def find_classpath():
         os.path.join(cache, "org.jetbrains.kotlinx", "kotlinx-serialization-json-jvm", "**", "*.jar"),
         os.path.join(kc, "lib", "kotlinx-serialization-json-jvm.jar"),
     )
-    ser_plugin = _glob_jar(os.path.join(kc, "lib", "kotlinx-serialization-compiler-plugin*.jar"))
+    # trove4j：1.9.x 的 kotlin-compiler-embeddable 在编译器**自己的 classpath** 上需要它
+    # （K2 的集合实现用到 gnu.trove.THashMap）。缺了不会说「缺 jar」，而是
+    #   NoClassDefFoundError: gnu/trove/THashMap
+    # 并且整段错误以源码最后一行开头（`Tool.kt:167)`），看起来像语法错。
+    # 官方 kotlinc 发行版的 lib/ 里自带，Gradle 缓存里在 org.jetbrains.intellij.deps 下。
+    trove = _glob_jar(
+        os.path.join(cache, "org.jetbrains.intellij.deps", "trove4j", "**", "trove4j-*.jar"),
+        os.path.join(kc, "lib", "trove4j.jar"),
+        os.path.join(os.path.expanduser("~"), ".sdkman", "candidates", "gradle", "*", "lib", "trove4j-*.jar"),
+    )
+    # 插件的版本必须与编译器一致（同一处坑见 run-r10-shard 的注释）：先查缓存里
+    # embeddable 那一档，再退 KOTLINC_HOME。反过来（kc 优先）会拿 2.x 的插件去喂
+    # 1.9 的编译器，报的是 `KotlinFrontEndException: Front-end Internal error`，
+    # 完全不提版本。
+    ser_plugin = _glob_jar(
+        os.path.join(cache, "org.jetbrains.kotlin", "kotlin-serialization-compiler-plugin-embeddable", "**", "*.jar"),
+        os.path.join(kc, "lib", "kotlinx-serialization-compiler-plugin*.jar"),
+    )
     junit = _glob_jar(
         os.path.join(cache, "junit", "junit", "**", "junit-*.jar"),
         "/tmp/junit/junit-*.jar",
@@ -437,7 +454,7 @@ def find_classpath():
         print("      → 本脚本什么都没验证。装好 kotlinc 或用 KOTLINC_HOME/QA_GRADLE_CACHE 指路后重跑。")
         return None
 
-    compiler_cp = ":".join(x for x in [compiler, stdlib, reflect, annot, coro] if x)
+    compiler_cp = ":".join(x for x in [compiler, stdlib, reflect, annot, coro, trove] if x)
     # coro 同时要给运行时：守卫链（ToolGuardChainTest）里 runBlocking / delay 是
     # 被测代码的一部分，只在编译器 classpath 上会让 JUnit 报 NoClassDefFoundError。
     lib_cp = ":".join(x for x in [stdlib, coro, ser_core, ser_json, junit, hamcrest] if x)

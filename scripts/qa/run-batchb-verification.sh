@@ -6,6 +6,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
+source scripts/qa/lib/deps.sh
 OUT=/tmp/qa-verify-batchb
 
 : "${QA_GRADLE_CACHE:=${AGENTKIT_GRADLE_CACHE:-${GRADLE_USER_HOME:-$HOME/.gradle}/caches/modules-2/files-2.1}}"
@@ -19,14 +20,21 @@ TROVE=$(find "$CACHE/org.jetbrains.intellij.deps/trove4j" -name "trove4j-*.jar" 
 COROUTINES=$(find "$CACHE/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm" -name "*.jar" 2>/dev/null | grep -v sources | sort -V | tail -1) || true
 JB_ANNOTATIONS=$(find "$CACHE/org.jetbrains/annotations" -name "annotations-*.jar" 2>/dev/null | sort -V | tail -1) || true
 
-if [ -z "${KOTLINC_JAR:-}" ] || [ -z "${STDLIB:-}" ] || [ -z "${SERIALIZATION:-}" ]; then
+# SER_PLUGIN 也要进条件：缓存里命中编译器/序列化库但**没有插件**时，
+# 原来会跳过整个回落块，-Xplugin 拿到空串，编译器报
+# 「plugin classpath entry points to a non-existent location:」——看着像路径笔误。
+if [ -z "${KOTLINC_JAR:-}" ] || [ -z "${STDLIB:-}" ] || [ -z "${SERIALIZATION:-}" ] || [ -z "${SER_PLUGIN:-}" ]; then
   KC_HOME=${KOTLINC_HOME:-/tmp/kotlinc}
   if [ -x "$KC_HOME/bin/kotlinc" ]; then
     KOTLINC_BIN="$KC_HOME/bin/kotlinc"
     STDLIB=${STDLIB:-$KC_HOME/lib/kotlin-stdlib.jar}
     SER_PLUGIN=${SER_PLUGIN:-$KC_HOME/lib/kotlinx-serialization-compiler-plugin.jar}
-    SERIALIZATION=${SERIALIZATION:-/tmp/w7-jars/kotlinx-serialization-json-jvm-1.6.3.jar}
-    SER_CORE=${SER_CORE:-/tmp/w7-jars/kotlinx-serialization-core-jvm-1.6.3.jar}
+    SERIALIZATION=${SERIALIZATION:-$(qa_find_jar "$QA_GRADLE_CACHE/org.jetbrains.kotlinx/kotlinx-serialization-json-jvm/1.6.3" "*.jar")}
+    # 历史遗留路径：只有缓存完全没有时才用（沙箱里手工放的一次性产物）
+    [ -n "${SERIALIZATION:-}" ] || SERIALIZATION=/tmp/w7-jars/kotlinx-serialization-json-jvm-1.6.3.jar
+    SER_CORE=${SER_CORE:-$(qa_find_jar "$QA_GRADLE_CACHE/org.jetbrains.kotlinx/kotlinx-serialization-core-jvm/1.6.3" "*.jar")}
+    # 历史遗留路径：只有缓存完全没有时才用（沙箱里手工放的一次性产物）
+    [ -n "${SER_CORE:-}" ] || SER_CORE=/tmp/w7-jars/kotlinx-serialization-core-jvm-1.6.3.jar
   fi
 fi
 

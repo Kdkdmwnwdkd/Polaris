@@ -102,10 +102,22 @@ SCREEN=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
 # 出站守卫落地后这里多了一步「读过私有内容时降级为不可记忆」，变量名从 grant 变成了
 # scope → grant 两步；绑定变量名的断言会把一次纯语义增强判成回归。判据要看的是
 # 「键是不是 ApprovalScope 算的」，不是「它叫不叫 grant」。
-if grep -q 'ApprovalScope.of(toolName, args)' "$VM"; then
+# 2026-11-19：判定入口从 `ApprovalScope.of` 收敛成 `effectiveGrant`
+# （出站降级与授权键在同一处算，避免两处判定漂移），所以 G1 认**任一**求值入口。
+# 绑定具体函数名会把一次语义增强判成回归——上一版就是这么红的（产品更强了，断言没跟上）。
+# 真正要防的是「按工具名分组当键」，那一条由下面的 G1b 单独看着。
+if grep -qE 'ApprovalScope\.(of|effectiveGrant)\(' "$VM"; then
   g_good "G1 审批键由 ApprovalScope 按入参计算"
 else
-  g_bad "G1 ChatViewModel 没走 ApprovalScope.of —— 还在按工具名分组"
+  g_bad "G1 ChatViewModel 没走任何 ApprovalScope 求值入口 —— 还在按工具名分组"
+fi
+
+# G1b：`ApprovalGrouping.groupOf(...)` 只能用在「同类操作」标签上，不能直接当授权键。
+# 用工具名/组名当键，`rm -rf` 与 `ls` 会共用一张票——这正是 R-08 要修的缺陷本身。
+if grep -qE '(val|var) +grant *= *ApprovalGrant\([^)]*groupOf' "$VM"; then
+  g_bad "G1b 授权键仍由 groupOf 拼出 —— rm 与 ls 会共用同一张票"
+else
+  g_good "G1b 授权键不是按组名拼的"
 fi
 
 # G2：approveAlways 必须看 memorizable。只看 group 就写白名单，等于把 rm 记进去了。

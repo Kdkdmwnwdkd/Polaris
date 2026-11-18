@@ -41,6 +41,26 @@ if [ -n "${STALE_SRC:-}" ]; then
   echo "      → 修法：./gradlew :app:compileDebugKotlin（CI 上建议加 --no-daemon）"
 fi
 
+# 环境自检：缺这些工具时，**静态断言会静默误判**，而不是报错。
+#
+# 真实事故（2026-11-19）：沙箱的 /usr/bin/awk 断链（系统只有 mawk，没有 alternatives
+# 链接），而 20 多个脚本的 `code_has` 用 awk 实现——`awk` 命令不存在时返回 127，
+# 在 `if code_has …` 里等价于 false，于是脚本打印的不是「工具缺失」，而是
+#   FAIL A8 宿主没有检查 needsApprovalFor —— 外部调用会绕过审批
+# 一条**具体且错误**的安全结论。它会让人去修一个不存在的漏洞，比不跑更费时间。
+#
+# 所以这里统一探一次，缺失就打 ENV MISSING，由 gate.sh 把整轮判为不可信
+# （与 ENV STALE 同一套逻辑：结论不可信的时候，绿和红都不能采信）。
+missing_env=""
+for tool in awk sed grep; do
+  command -v "$tool" >/dev/null 2>&1 || missing_env="$missing_env $tool"
+done
+if [ -n "$missing_env" ]; then
+  echo "WARN  缺少基础文本工具：$missing_env"
+  echo "      → 静态断言会全部误判为「源码里没有这条线」，本轮结论不可信"
+  echo "ENV MISSING tools:$missing_env"
+fi
+
 # 已知失效清单：这些断言源码已与主代码脱节，编译就过不了。
 # 它们照跑（避免假装不存在），但归为 XFAIL，不阻塞；修好后从清单删掉即可。
 BROKEN_FILE="scripts/qa/known-broken.txt"

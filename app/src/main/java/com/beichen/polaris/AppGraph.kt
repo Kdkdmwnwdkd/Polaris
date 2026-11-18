@@ -28,6 +28,7 @@ import com.beichen.polaris.runtime.LocalLlmRuntime
 import com.beichen.polaris.runtime.lease.LeaseRegistry
 import com.beichen.polaris.terminal.TerminalJni
 import com.beichen.polaris.ui.AppearanceState
+import com.beichen.polaris.ui.ApprovalWhitelistStore
 import com.beichen.polaris.ui.MarkdownParser
 import com.beichen.polaris.ui.container.ContainerInstallController
 
@@ -400,6 +401,15 @@ object AppGraph {
                 resettable = false,
                 why = "解析器把游标放在每次 new 出来的 Parser 实例里，object 本身只有两个" +
                     "纯函数。没有状态可清——登记在这里是为了让「它为什么是 object」有答案。"
+            )
+        )
+        add(
+            Global(
+                name = "ApprovalWhitelistStore",
+                packageName = "com.beichen.polaris.ui",
+                link = "「本次会话始终允许」的授权键（按对话隔离、30 分钟过期）↔ " +
+                    "ChatViewModel 的审批链路（requestApproval / EgressGuard 判定）",
+                reset = { ApprovalWhitelistStore.reset() }
             )
         )
     }

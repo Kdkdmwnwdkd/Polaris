@@ -68,6 +68,12 @@ else
       fail "无法从汇总行解析 FAIL 数：$summary"
     elif [ "$f" -ne 0 ]; then
       fail "QA 汇总 FAIL=$f（必须为 0）"
+    elif grep -qE '^ENV MISSING' "$LOG"; then
+      # 缺基础工具（awk/sed/grep）时，静态断言会**静默误判**成「源码里没有这条线」，
+      # 打出一串具体且错误的安全结论。这种轮次的 PASS/FAIL 都不可采信：
+      # FAIL 是假的（工具不在），PASS 也可能是假的（断言压根没执行到比较）。
+      fail "环境缺件（run-all 打了 ENV MISSING）：$(grep -E '^ENV MISSING' "$LOG" | head -1)"
+      say "  装齐后再跑：apt-get install -y gawk（或修复 /usr/bin/awk 的 alternatives 链接）。"
     elif grep -qE '^ENV STALE' "$LOG"; then
       # 产物陈旧不改变 PASS/FAIL 计数，但它让「PASS」的含义变味：
       # 依赖 classpath 的 harness 读的是旧字节码，报错会指向早已改过的源码行。
