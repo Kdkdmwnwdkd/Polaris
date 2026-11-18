@@ -68,6 +68,11 @@ object McpHostRuntime {
             pairing = p,
             audit = a,
             config = McpHostConfig(),
+            // 锁屏时只放行 SAFE：人不在场，点屏幕/开应用没人看得见。
+            screenOn = {
+                val pm = app.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+                pm?.isInteractive ?: true
+            },
         )
         created.start().fold(
             onSuccess = { port ->

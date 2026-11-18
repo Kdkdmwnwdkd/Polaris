@@ -6,6 +6,8 @@ import com.beichen.polaris.core.agent.GuardContext
 import com.beichen.polaris.core.agent.GuardDecision
 import com.beichen.polaris.core.agent.ToolGuard
 import com.beichen.polaris.core.agent.ToolGuardChain
+import com.beichen.polaris.core.tool.Capability
+import com.beichen.polaris.core.tool.ToolCatalog
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -73,6 +75,14 @@ class McpServerHost(
     private val guard: ToolGuard = ToolGuardChain.NONE,
     /** 审批回调。null = 本版本没有审批 UI，任何需要审批的调用一律拒绝（绝不静默放行）。 */
     private val approver: McpApprover? = null,
+    /**
+     * 屏幕是否亮着且已解锁。默认 `true`（便于 harness 与无电源管理的宿主）。
+     *
+     * 为什么要由宿主注入：core 不能 import android。这条判断的意义是——
+     * **人不在场时，不让外部客户端动手机**。锁屏状态下 `ui_tap` / `app_launch`
+     * 这类操作没人看得见， approvals 也无从弹起，所以直接拒绝，而不是排队等解锁。
+     */
+    private val screenOn: () -> Boolean = { true },
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -343,6 +353,12 @@ class McpServerHost(
         if (!tier.allows(tool)) {
             audit.record(client.name, tier, name, args, "deny_tier", null, 0, "rejected")
             return rpcError(id, -32003, "tool '$name' is not exposed at tier '${tier.wire}'")
+        }
+
+        // 锁屏 = 拒绝。只放行 SAFE（读应用列表、读界面树这类无副作用操作）。
+        if (!screenOn() && ToolCatalog.capabilityOf(name) != Capability.SAFE) {
+            audit.record(client.name, tier, name, args, "deny_locked", null, 0, "rejected")
+            return rpcError(id, -32006, "device is locked; only read-only tools are allowed")
         }
 
         // 审批：没有审批 UI 就拒绝。绝不因为「是外部调用」而跳过 needsApprovalFor。

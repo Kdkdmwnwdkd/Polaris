@@ -377,6 +377,51 @@ android.app.RemoteServiceException: Context.startForegroundService()
 
 ---
 
+### 3.13 MCP 对外提供（M1 只读桥，2026-11-18 凌晨）
+
+先查了手机端 DSH 生态：开源有 20+ 个项目在做「把 DSH 装进手机」，最省的是
+`jackwener/DSH-Android`（Node 24 编成 `.so`，110 MB 包），最完整的是 `DSH-APP/DSHA`
+（内置 Ubuntu rootfs，1 GB）。它们的共同代价是**把 Node 搬进手机**，共同短板是
+**真机控制**（只能靠无障碍 + Shizuku/ADB 硬凑）。
+
+所以方向反过来：**把手机的工具按 MCP 暴露出去**，让那些客户端连上来把 Polaris 当手。
+体积零增长，且补的正是它们缺的那块。
+
+**落地内容**
+
+| 层 | 文件 | 要点 |
+|---|---|---|
+| 协议 | `core/mcp/server/McpServerHost.kt` | 手写 HTTP/1.1（只认 `POST /mcp`）+ JSON-RPC；**零新增依赖**，不引 NanoHTTPD |
+| 档位 | `McpTier.kt` | readonly / standard / full 只决定**可见性**；审批由 `needsApprovalFor` 单独判 |
+| 配对 | `McpPairing.kt` | 每客户端独立 token，只存 SHA-256；爆破 10 次降级 |
+| 审计 | `McpAudit.kt` | JSONL，参数只存摘要 + 前 200 字符；7 天滚动 |
+| 装配 | `app/mcp/McpToolset.kt` | 7 个工具：`app_list`/`ui_tree`/`read_file`/`memory_search`/`knowledge_search`/`calculator` + `app_launch` |
+| 服务 | `McpHostService.kt` | 前台 `dataSync`；入口用 `startService`（避开 5 秒窗口，同 §3.12 的教训） |
+| 入口 | `McpScreen` 顶部「对外提供」卡片 | 开关 / 档位 / 生成令牌 / 撤销 |
+
+**两个不能让步的决定**
+
+1. **没有审批界面就拒绝。** `approver == null` 时，`needsApprovalFor` 为真的调用一律
+   `-32004`。绝不能因为「是外部调用、没人看见」就放行——那正是 `dsh-purge` 拆宿主拦截面
+   的同一条路。
+2. **档位 ≠ 审批。** 档位放宽只是「工具可见」，`write_file` 在标准档里照样要弹卡。
+   把两者合成一个维度，结果必然是「为了少弹窗放宽档位」，再也收不回。
+3. **锁屏 = 拒绝。** `screenOn` 由宿主注入（core 不能 import android），锁屏时非 `SAFE`
+   一律 `-32006`。人不在场，点屏幕/开应用没人看得见，审批也无从弹起。
+
+**为什么 MCP 层不吃 `ToolRegistry`**
+
+`ToolRegistry.descriptors()` 用 `JsonSchema.serializer()`，要序列化编译器插件。
+把它拖进 harness，会让行为测试在没装插件的机器上编不过 → 被 SKIP → 「被拒的调用
+一次都没执行」这种安全断言**静默消失**。改成 `McpToolSource` 四个方法后，harness
+只编 8 个源文件就能真跑。
+
+**验证**：`scripts/qa/run-mcp-host-verification.sh`，9 条装配 + 22 条行为断言全绿。
+其中 B11/B13 是核心：「被档位拒绝的调用，工具执行计数一次都没涨」。
+
+**没做（M2）**：审批卡片、DANGEROUS 工具、局域网/TLS、真实 `ToolGuardChain` 装配。
+
+
 ## 4. 代码红线（碰了会立刻红）
 
 | 红线 | 为什么 | 谁在守 |

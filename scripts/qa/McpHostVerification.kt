@@ -222,10 +222,47 @@ fun main() {
     ok("B20 审计记了审批拒绝", auditText.contains("deny_approval"))
     ok("B21 审计参数只存摘要与预览，不存全文", auditText.contains("argsHash") && auditText.contains("argsPreview"))
 
+    // ── 锁屏：人不在场，只放行 SAFE ──────────────────────────────────
+    val lockedHost = McpServerHost(
+        tools = source,
+        pairing = pairing,
+        audit = audit,
+        config = McpHostConfig(),
+        guard = ToolGuardChain.NONE,
+        approver = null,
+        screenOn = { false },
+    )
+    val lockedPort = lockedHost.start().getOrElse {
+        println("  FAIL  B23 锁屏实例启动失败：${it.message}")
+        println("$passed 通过 / ${failed + 1} 失败")
+        return
+    }
+    val lockedCall = post(
+        lockedPort,
+        """{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"app_launch","arguments":{"target":"com.x"}}}""",
+        stdToken,
+    )
+    ok(
+        "B23 锁屏时 app_launch 被拒（-32006）",
+        lockedCall.second.contains("-32006"),
+        "体 ${lockedCall.second.take(140)}",
+    )
+    val lockedRead = post(
+        lockedPort,
+        """{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"calculator","arguments":{"expression":"1+1"}}}""",
+        readToken,
+    )
+    ok(
+        "B24 锁屏时 SAFE 工具仍可用",
+        lockedRead.second.contains("ran:calculator"),
+        "体 ${lockedRead.second.take(140)}",
+    )
+    lockedHost.stop()
+
     // ── 停服 ──────────────────────────────────────────────────────────
     host.stop()
     val afterStop = runCatching { post(port, init, readToken) }.isFailure
-    ok("B22 stop 之后端口不再接受连接", afterStop)
+    ok("B25 stop 之后端口不再接受连接", afterStop)
 
     println("")
     println("$passed 通过 / $failed 失败")

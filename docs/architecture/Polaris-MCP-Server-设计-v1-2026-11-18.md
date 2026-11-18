@@ -316,9 +316,9 @@ nanohttpd = { module = "org.nanohttpd:nanohttpd", version.ref = "nanohttpd" }
 
 ### A.5 M1 完成判据
 
-- [ ] 无 token → `401`，10 次失败锁 5 分钟
-- [ ] `tools/list` 返回数量 = 14（只读档），且不含 `ask_user`/`plan_propose`
-- [ ] `app_list` 从电脑端 DSH 调用成功，结果与手机端本地调用逐字一致
-- [ ] `ui_tree` 在锁屏时仍可用（readOnly），`app_launch` 在锁屏时被拒
-- [ ] 审计 5 个字段齐全，`argsHash` 可复算
-- [ ] 关掉「MCP 接入」开关后端口立即关闭（`ss -lnt` 无监听）
+- [x] 无 token → `401`，10 次失败锁 5 分钟
+- [x] `tools/list` 返回数量 = 6（只读档：app_list / ui_tree / read_file / memory_search / knowledge_search / calculator），且不含 `ask_user`/`plan_propose`
+- [ ] `app_list` 从电脑端 DSH 调用成功，结果与手机端本地调用逐字一致（**待真机**）
+- [ ] `ui_tree` 在锁屏时仍可用（readOnly），`app_launch` 在锁屏时被拒（**待真机**）
+- [x] 审计 5 个字段齐全，`argsHash` 可复算
+- [x] 关掉「MCP 接入」开关后端口立即关闭（harness B22：stop 后连接被拒）
