@@ -1,6 +1,8 @@
 package com.beichen.polaris.mcp
 
+import android.app.KeyguardManager
 import android.content.Context
+import android.os.PowerManager
 import com.beichen.polaris.core.mcp.server.McpAudit
 import com.beichen.polaris.core.mcp.server.McpClientRecord
 import com.beichen.polaris.core.mcp.server.McpHostConfig
@@ -68,10 +70,15 @@ object McpHostRuntime {
             pairing = p,
             audit = a,
             config = McpHostConfig(),
-            // 锁屏时只放行 SAFE：人不在场，点屏幕/开应用没人看得见。
+            // 「在场」= 亮屏 **且** 已解锁。只判 isInteractive 不够：
+            // 亮着屏停在锁屏界面时，外部客户端照样能点屏幕、开应用，
+            // 而用户在锁屏上什么也看不到——审批弹不出来，动作已经发生。
             screenOn = {
-                val pm = app.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
-                pm?.isInteractive ?: true
+                val pm = app.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                val km = app.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                val awake = pm?.isInteractive ?: true
+                val unlocked = km?.isKeyguardLocked == false
+                awake && unlocked
             },
         )
         created.start().fold(

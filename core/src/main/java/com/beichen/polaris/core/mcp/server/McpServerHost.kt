@@ -75,11 +75,16 @@ class McpServerHost(
     /** 审批回调。null = 本版本没有审批 UI，任何需要审批的调用一律拒绝（绝不静默放行）。 */
     private val approver: McpApprover? = null,
     /**
-     * 屏幕是否亮着且已解锁。默认 `true`（便于 harness 与无电源管理的宿主）。
+     * 用户是否在场（亮屏**且**已解锁）。默认 `true`（便于 harness 与无电源管理的宿主）。
      *
      * 为什么要由宿主注入：core 不能 import android。这条判断的意义是——
      * **人不在场时，不让外部客户端动手机**。锁屏状态下 `ui_tap` / `app_launch`
-     * 这类操作没人看得见， approvals 也无从弹起，所以直接拒绝，而不是排队等解锁。
+     * 这类操作没人看得见，审批也无从弹起，所以直接拒绝，而不是排队等解锁
+     * （排队的结果是「解锁瞬间手机自己动了一下」，比拒绝更吓人）。
+     *
+     * 注意「亮屏」不等于「在场」：Android 上锁屏界面是亮着的 Activity，
+     * `PowerManager.isInteractive` 为 true。宿主必须同时判 `KeyguardManager.isKeyguardLocked`，
+     * 否则等于给锁屏界面开了后门。core 只管语义，判据由宿主给。
      */
     private val screenOn: () -> Boolean = { true },
     private val clock: () -> Long = System::currentTimeMillis,
