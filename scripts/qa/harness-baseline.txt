@@ -443,7 +443,13 @@
 #   这条 harness 的存在本身就是判据：Consent.decide 只依赖 AgentTool + JsonObject，
 #   三个源文件就能真编真跑。如果哪天有人把裁决搬回 RegistryToolExecutor，
 #   B 段会因为「需要序列化编译器插件」而 SKIP——那说明契约又被拆散了。
-148
+#
+# 2026-11-18：148 → 149（P1-3 第二阶段：桌宠确认卡）。
+#   新增 run-pet-consent-verification.sh：8 条接线 + 17 条网关行为 + 1 条编译前提。
+#   A 段盯的是「卡片真的会被画出来」——组件写好了没人调用是这类改动最常见的失败形态，
+#   而行为 harness 证不了 Compose 渲染。B 段盯 ApprovalGate 的四种收场，
+#   它建出来的当天就抓到 cancelAll 把「界面销毁」报成「用户拒绝」。
+149
 # 143（2026-11-14 语音识别能力判定）：+ run-speech-capability-verification.sh
 #   [A] 29 条结构断言（判定表在 core 且零 Android 依赖、两条语音入口都调它、
 #   共用同一个探测实现、清单声明了识别服务可见性、两边都用 BCP-47 语言标签、

@@ -184,7 +184,7 @@ say ""
 # ---------------------------------------------------------------- D 工具边界
 say "[D] 工具边界（无审批 ⇒ 只能只读）"
 
-allowed="CalculatorTool WebSearchTool ReadFileTool MemorySearchTool"
+allowed="CalculatorTool WebSearchTool ReadFileTool MemorySearchTool ConfirmRequiredTool"
 registered=$(grep -oE 'register\([A-Za-z]+Tool\(' "$SESSION" | sed 's/register(//; s/($//' | sort -u)
 if [ -z "$registered" ]; then
   bad "D1 没解析到任何 register(...) —— 桌宠拿不到任何工具"
@@ -197,16 +197,26 @@ else
   done
   if [ -n "$rogue" ]; then
     bad "D1 桌宠注册了白名单外的工具：$rogue
-        桌宠没有审批界面，加写工具前必须先做审批通道，不能只往 registry 里补一行"
+        写工具必须经 ConfirmRequiredTool 包一层（口径见 Consent 契约 §6）"
   else
-    good "D1 工具集只在只读白名单内（$(printf '%s' "$registered" | tr '\n' ' ')）"
+    good "D1 工具集在白名单内（$(printf '%s' "$registered" | tr '\n' ' ')）"
   fi
 fi
 
-if grep -qE '^\s*approval\s*=' "$SESSION"; then
-  bad "D2 PetAgentSession 传了 approval —— 桌宠没有审批界面，这个参数只该保持 null"
+# P1-3 第二阶段：桌宠从「没有审批界面所以只许只读」变成「有确认卡所以允许写」。
+# 判据随之从「不许有 consent」变成「consent 必须接到真通道」——写 Ask 却不接
+# PetApproval，比写 Deny 更糟：挂 45 秒后说「用户拒绝」。
+if grep -qE 'consent *= *Consent\.ask' "$SESSION" && grep -q 'PetApproval\.ask' "$SESSION"; then
+  good "D2 consent 是 Consent.ask 且接到 PetApproval（气泡上有确认卡）"
 else
-  good "D2 approval 保持 null（与「只有只读工具」这条边界一致）"
+  bad "D2 桌宠的 consent 没接到 PetApproval —— 用户看不到卡，只会看到「拒绝了该操作」"
+fi
+
+# 有副作用就必须确认：写工具必须包在 ConfirmRequiredTool 里，不能裸注册。
+if grep -qE 'register\(AppLaunchTool\(' "$SESSION"; then
+  bad "D4 app_launch 裸注册 —— 有副作用却不问用户"
+else
+  good "D4 没有裸注册的写工具"
 fi
 
 if grep -q 'local-llama' "$SESSION" && grep -qi '不支持本地模型' "$SESSION"; then

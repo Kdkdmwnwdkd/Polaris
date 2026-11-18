@@ -141,7 +141,20 @@ fun PetPanel(
      */
     loadHistory: suspend () -> List<PetTurn>,
     /** 清空历史（内存 + 磁盘）。宿主负责落盘那半，界面负责清气泡。 */
-    onClearHistory: () -> Unit
+    onClearHistory: () -> Unit,
+    /**
+     * 非空 = 有一张待确认的卡（P1-3 第二阶段）。
+     *
+     * 从宿主传进来而不是在这里直接订阅 [PetApproval]：这个 Composable 至今没有
+     * 读过任何全局单例，保持它「给状态就画」的形状，渲染才能在 harness 里用假数据驱动。
+     * 订阅由 [PetOverlayHost] 做——顺带它还得负责「把气泡弹开」这件事，
+     * 那是窗口级动作，本来就不在 Composable 的职责里。
+     */
+    approval: PetApproval.Pending? = null,
+    /** 点「允许」。 */
+    onApprovalAllow: () -> Unit = {},
+    /** 点「不允许」。 */
+    onApprovalDeny: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     var messages by remember { mutableStateOf<List<PetBubble>>(emptyList()) }
@@ -214,6 +227,16 @@ fun PetPanel(
         }
 
         if (expanded) {
+            // 审批卡画在气泡**上方**：它是这一轮的前置条件，不是对话的一部分。
+            // 塞进消息列表里会被历史顶上去，用户正说着话根本注意不到。
+            if (approval != null) {
+                ApprovalCard(
+                    pending = approval,
+                    onAllow = onApprovalAllow,
+                    onDeny = onApprovalDeny
+                )
+                Spacer(Modifier.height(6.dp))
+            }
             BubbleCard(
                 messages = messages,
                 input = input,
@@ -274,6 +297,94 @@ fun PetPanel(
             onVoiceStart = onVoiceStart,
             onVoiceStop = onVoiceStop
         )
+    }
+}
+
+/**
+ * 待确认卡（P1-3 第二阶段）。
+ *
+ * ## 为什么只有两个按钮、没有「本次会话都允许」
+ *
+ * 「记住选择」需要一个持久化的策略表（哪些工具永久放行），那是 [Consent] 上一层的事，
+ * 现在没有。做一个只在内存里生效的「本次允许」，用户会以为它长期有效，
+ * 下次再问时他会点得比这次快——那比每次都问更危险。宁可啰嗦，不要假授权。
+ *
+ * ## 为什么没有倒计时数字
+ *
+ * 45 秒的窗口里跳动一个数字，用户的反应是「赶紧点」，而不是「看清楚」。
+ * 超时后卡片自己消失、工具结果里写明「没人回应」，信息不缺；
+ * 在卡上催促只会把审批变成反射动作。
+ */
+@Composable
+private fun ApprovalCard(
+    pending: PetApproval.Pending,
+    onAllow: () -> Unit,
+    onDeny: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = scheme.surfaceVariant.copy(alpha = 0.98f),
+        tonalElevation = 2.dp,
+        shadowElevation = 8.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(
+                text = "要执行 ${pending.tool} 吗？",
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp
+                ),
+                color = scheme.primary
+            )
+            if (pending.summary.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = pending.summary,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    ),
+                    color = scheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "不允许",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 12.sp),
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onDeny)
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(scheme.primary)
+                        .clickable(onClick = onAllow)
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "允许",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        color = scheme.onPrimary
+                    )
+                }
+            }
+        }
     }
 }
 

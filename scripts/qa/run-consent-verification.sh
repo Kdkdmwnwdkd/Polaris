@@ -80,7 +80,7 @@ fi
 missing=""
 code_has "$VM" "consent = Consent.ask" || missing="$missing ChatViewModel(主loop)"
 [ "$(grep -c 'consent = Consent.ask' "$VM" 2>/dev/null || echo 0)" -ge 2 ] || missing="$missing ChatViewModel(子代理)"
-code_has "$PET" "consent = Consent.Deny" || missing="$missing PetAgentSession"
+code_has "$PET" "consent = Consent.ask" || missing="$missing PetAgentSession"
 code_has "$SKILL" "consent = Consent.ask" || missing="$missing SkillExecutor"
 if [ -z "$missing" ]; then
   pass "A4 四个生产入口都显式声明了 consent"
@@ -88,11 +88,12 @@ else
   fail "A4 入口没表态：$missing —— 它们会退到默认拒绝，功能整体不可用"
 fi
 
-# 桌宠是「设计上没有通道」，所以必须是 Deny 而不是 Ask：写 Ask 等于假装有地方问。
-if code_has "$PET" 'consent = Consent.Deny('; then
-  pass "A5 桌宠声明的是 Deny（没有弹窗位置是设计，不是疏忽）"
+# 桌宠从 Deny 升到 Ask 的前提是**卡片真的会显示**。写一个没人接的 Ask 比写 Deny 更糟：
+# Deny 会老实说「我没有审批界面」，假 Ask 会挂 45 秒然后说「用户拒绝」。
+if code_has "$PET" "PetApproval.ask" && [ -f "$APP/pet/PetApproval.kt" ]; then
+  pass "A5 桌宠的 Ask 接到了 PetApproval（不是一句假装有地方问的声明）"
 else
-  fail "A5 桌宠没用 Deny —— 要么留了 null，要么假装有审批通道"
+  fail "A5 桌宠写了 Ask 却没有接 PetApproval —— 用户看不到卡片，只会看到「拒绝了该操作」"
 fi
 
 # 拒绝分支必须在工具执行之前。这条是本 harness 里唯一能防「先执行再拒绝」的断言：

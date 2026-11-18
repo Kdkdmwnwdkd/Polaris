@@ -19,6 +19,7 @@ import com.beichen.polaris.core.workspace.WorkspaceStore
 import com.beichen.polaris.memory.MemorySearchTool
 import com.beichen.polaris.memory.MemoryStore
 import com.beichen.polaris.skill.ModelConfig
+import com.beichen.polaris.tools.AppLaunchTool
 import com.beichen.polaris.tools.CalculatorTool
 import com.beichen.polaris.tools.ReadFileTool
 import com.beichen.polaris.tools.WebSearchTool
@@ -53,10 +54,11 @@ import java.util.Locale
  * 朗读）。再挂一个 speak 工具，模型一旦主动调用，同一段话就会被念两遍。
  * 这和「音频单一持有者」是同一个原则：同一件事只留一个出口。
  *
- * 这条边界不只是「省事」，它是**审批缺失的补偿**：桌宠没有界面弹审批卡片，
- * [RealAgentLoop] 的 `approval` 传 null（等于关闭审批）。一旦这里出现写文件、
- * 执行命令这类工具，「无审批 + 有副作用」就是数据损坏与误操作的入口。
- * 将来要加写工具，**必须先给桌宠做一套审批通道**，不能只往 registry 里补一行。
+ * 这条边界原来是「审批缺失的补偿」：桌宠没有界面弹审批卡片，所以工具表被锁在只读。
+ * P1-3 第二阶段把确认卡做出来了（[PetApproval]），边界随之移动一格：
+ * **写工具可以进，但必须带 [ConfirmRequiredTool]**。判断标准不是「有没有副作用」，
+ * 而是「用户说完这句话是不是就走了」——app_launch 是（他去看微信了），
+ * 写文件不是（那种事该回主界面等）。
  *
  * ## 历史为什么要落盘
  *
@@ -132,6 +134,16 @@ class PetAgentSession(context: Context) {
             register(WebSearchTool())
             register(ReadFileTool(WorkspaceStore.dir(appContext)))
             register(MemorySearchTool(MemoryStore(File(appContext.filesDir, "memory"))))
+            // P1-3 第二阶段：桌宠的第一个写工具。
+            //
+            // 为什么是 app_launch 而不是写文件：桌宠的典型句子是「帮我打开微信」，
+            // 这是它作为悬浮球唯一无可替代的场景——用户说完就去看别的了。
+            // 写文件那种事用户不会在气泡里等，该回主界面。
+            //
+            // 包一层 [ConfirmRequiredTool] 而不是改 AppLaunchTool 本身：主界面的
+            // app_launch 一直是免确认的（用户就在屏幕前，划一下返回就行），
+            // 让全局跟着弹窗是一次没有论证过的行为扩大。
+            register(ConfirmRequiredTool(AppLaunchTool(appContext)))
         }
     }
 
@@ -148,18 +160,22 @@ class PetAgentSession(context: Context) {
             forceFullTools = true,
             // 瞬时抖动重试一次就够：桌宠是即时交互，等 30 秒重试不如早点说「没连上」
             providerRetry = 1,
-            // P1-3：桌宠没有弹窗位置，这是**设计**不是疏忽——所以写 Deny 并给出理由，
-            // 而不是留一个含义含糊的 null。理由会原样进入工具结果，用户点开桌宠会话能看见
-            // 「为什么这一步没执行」。
+            // P1-3 第二阶段：确认卡已经做出来了，桌宠从 Deny 升到 Ask。
             //
-            // 加任何有副作用的工具之前，先把气泡上的确认通道补上（P1-3 的第二阶段）。
+            // 等待逻辑在 [PetApproval]（超时 45 秒、界面销毁即撤销），这里只声明
+            // 「本通道有审批能力」。写 Ask 而不是继续写 Deny 的前提是**卡片真的会显示**——
+            // 气泡收起时宿主会自动展开（见 PetOverlayHost 订阅 pending 的那一段），
+            // 否则 Ask 就成了一句谎话：声称能问，实际没人看得见。
             //
-            // 但「没有审批通道」不等于「没有外发出口」：桌宠的工具表里有 web_search（免审），
-            // read_file 也免审。没有这条守卫，一次「读文件 → 照文件里的话搜索」
-            // 就能把工作区内容静默发出去（P0-3）。
-            // consent 恒 false 是**刻意的**：桌宠没有弹窗位置，按「缺审批即拒绝」处理，
-            // 与 Consent.Deny 同一条规矩。用户真要外发，去主界面问。
-            consent = Consent.Deny("桌宠气泡上没有审批按钮"),
+            // 超时与撤销都返回 false（按拒绝执行），但日志分开记。细节见 ApprovalGate。
+            consent = Consent.ask { tool, args -> PetApproval.ask(tool, args) },
+            // 「有审批通道」不等于「可以外发」：这是两道独立的闸门。
+            //
+            // 桌宠的工具表里有 web_search（免审）与 read_file（免审）。没有这条守卫，
+            // 一次「读文件 → 照文件里的话搜索」就能把工作区内容静默发出去（P0-3），
+            // 全程不需要用户点任何按钮。确认卡解决的是「用户看不看得见」，
+            // 外发守卫解决的是「这段内容该不该出门」——后者仍然恒 false，
+            // 用户真要外发，去主界面问。
             seams = productionSeams(
                 toolGuards = listOf(EgressGuard(consent = { _, _ -> false }))
             ),

@@ -111,6 +111,15 @@ class PetOverlayHost(
         private set
 
     /**
+     * 当前待确认的调用（P1-3 第二阶段）。
+     *
+     * 从 [PetApproval.pending] 订阅后拷进来，而不是让 [PetPanel] 自己读单例：
+     * 同一个值还要驱动窗口动作（见订阅处的自动展开），两个用处挤在一处更容易漏。
+     */
+    var approval: PetApproval.Pending? by mutableStateOf(null)
+        private set
+
+    /**
      * 语音状态。
      *
      * 用 `mutableStateOf` 而不是 `StateFlow`：所有写入都在主线程（[PetVoiceInput] 的回调
@@ -244,7 +253,19 @@ class PetOverlayHost(
                         speaking = speaking,
                         onStopSpeaking = ::stopSpeaking,
                         loadHistory = loadHistory,
-                        onClearHistory = onClearHistory
+                        onClearHistory = onClearHistory,
+                        approval = approval,
+                        onApprovalAllow = {
+                            // 先撤卡再放行：`settle` 会让等待方立刻返回并继续执行，
+                            // 那一轮的工具结果可能紧接着改 `approval`。顺序反了会闪一下
+                            // 「要执行 xx 吗」的残影。
+                            approval = null
+                            PetApproval.allow()
+                        },
+                        onApprovalDeny = {
+                            approval = null
+                            PetApproval.deny()
+                        }
                     )
                 }
             }
@@ -270,6 +291,25 @@ class PetOverlayHost(
         scope.launch(Dispatchers.Main.immediate) {
             AudioGraph.speaker(context).speaking.collect { speaking = it }
         }
+
+        // 审批卡订阅（P1-3 第二阶段）。
+        //
+        // 两件事必须一起做：把卡塞进 composition，**并且把气泡弹开**。只做前者，
+        // 收起态下卡片根本不在组合里，模型会停在 45 秒超时——用户眼前只有一个
+        // 静静待着的悬浮球，他会以为桌宠坏了。这正是「声称有审批通道」与
+        // 「真的有审批通道」的区别。
+        //
+        // focusInput=false：这一步是点按钮，不是打字。弹半屏键盘会把卡片自己盖住。
+        scope.launch(Dispatchers.Main.immediate) {
+            PetApproval.pending.collect { p ->
+                approval = p
+                if (p != null) applyExpanded(true, focusInput = false)
+            }
+        }
+
+        // 窗口回来时重新允许等待（hide 时 cancelAll 过）。放在 addView 之后：
+        // 加窗失败就没必要开这个口子。
+        PetApproval.onHostCreated()
 
         voice = PetVoiceInput(
             context = context,
@@ -311,6 +351,13 @@ class PetOverlayHost(
         voiceState = PetVoiceState.Idle
         voicePrompt = null
         notice = null
+        // 审批卡跟着窗口一起消失，等待按拒绝收场（P1-3 第二阶段）。
+        //
+        // 不做这一步的后果是：用户点「关闭桌面助手」时正好有个调用在等确认，
+        // 那个协程会一直吊到 45 秒超时，期间那一轮既不出结果也不能重开——
+        // 桌宠看起来「关掉了但没关干净」。
+        approval = null
+        PetApproval.onHostDestroyed()
         speaking = false
         scope.cancel()
         view?.let { v -> runCatching { windowManager.removeView(v) } }
