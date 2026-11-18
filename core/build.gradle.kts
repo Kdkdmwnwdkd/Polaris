@@ -52,4 +52,10 @@ dependencies {
     // 技能脚本执行引擎（skill/SkillExecutor：ClassShutter + 指令计数熔断）。
     // 纯 Java，无需 NDK；换 QuickJS 时只替换 JsEngine 实现。
     api(libs.rhino.runtime)
+
+    // 纯函数单测（2026-11-18）：审批判定、shell 读边界这类决策表型逻辑不该只靠
+    // `scripts/qa` 现拼 kotlinc 来验——那条路缺编译器就整段 SKIP，绿得没有内容。
+    // 放在 :core 而不是 :app，是因为被测对象（ShellCommandRules / ApprovalScope /
+    // ApprovalTier）全在这个模块里，且都不碰 Android 类型，JVM 上直接跑。
+    testImplementation("junit:junit:4.13.2")
 }
