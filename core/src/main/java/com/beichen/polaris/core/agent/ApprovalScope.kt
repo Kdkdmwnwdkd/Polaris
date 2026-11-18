@@ -229,6 +229,50 @@ object ApprovalScope {
             ?.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * 这次调用是否落进「本回合读过私有内容之后必须重问」的范围。
+     *
+     * 单独暴露而不是让调用方自己写 `tainted && group in EGRESS_GROUPS`：判定与降级
+     * 必须同源。两处各写一遍的结果不是「多一层保险」，而是迟早一处改了另一处没改——
+     * 改的那处看起来更严格，实际却是**绕过免打扰通道的那半边**失效（弹窗照弹，
+     * 但档位/白名单/截图缓存仍然放行，用户看到的是「问了但我没点它就过了」）。
+     */
+    fun isEgressTurn(toolName: String, taintedNow: Boolean): Boolean =
+        taintedNow && ApprovalGrouping.groupOf(toolName) in EGRESS_GROUPS
+
+    /**
+     * 结合「本回合是否读过私有内容」给出**这次真正生效**的授权。
+     *
+     * 读过私有内容之后再外发，就不再是「同类操作」了：`http_request` 按域名记忆、
+     * `github_commit` 按 GIT_WRITE 记忆，用户上周点过的「始终允许」不该替这一次签字。
+     * 所以把 `memorizable` 降级为 false，并在文案里说明为什么又问了一遍
+     * （不说明的话，用户会以为刚点过的允许丢了）。
+     *
+     * ## 为什么只降级外发组，而不是一刀切
+     *
+     * 把所有审批都变成「每次问」看着更安全，实际是把这套机制废掉：用户点一天
+     * 「允许」之后就会闭眼点，那才是真正危险的时刻。降级的范围必须与风险同宽。
+     *
+     * ## 为什么本来就不可记忆时直接返回
+     *
+     * `rm -rf`、提权 shell、MCP 工具本来就是每次问。它们再叠一句「本回合读过私有内容」
+     * 只是噪音，而且会让弹窗文案随上下文漂移——同一个命令在不同回合显示不同类别名，
+     * 用户无法形成稳定预期。
+     */
+    fun effectiveGrant(
+        toolName: String,
+        args: JsonObject,
+        taintedNow: Boolean,
+    ): ApprovalGrant {
+        val grant = of(toolName, args)
+        if (!grant.memorizable) return grant
+        if (!isEgressTurn(toolName, taintedNow)) return grant
+        return grant.copy(
+            memorizable = false,
+            label = grant.label + " · 本回合读过私有内容",
+        )
+    }
+
     /** 一次 granting 是否命中已有的会话白名单。不可记忆的档**永远不命中**（防御旧数据/别处写入）。 */
     fun allows(grant: ApprovalGrant, sessionAllowed: Set<String>): Boolean =
         grant.memorizable && grant.key in sessionAllowed

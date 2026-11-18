@@ -56,11 +56,13 @@ GROUPS = {
             "core/src/main/java/com/beichen/polaris/core/llm/JsonSafe.kt",
             "core/src/test/java/com/beichen/polaris/core/agent/ShellCommandRulesTest.kt",
             "core/src/test/java/com/beichen/polaris/core/agent/ApprovalTierTest.kt",
+            "core/src/test/java/com/beichen/polaris/core/agent/EgressDowngradeTest.kt",
             "core/src/test/java/com/beichen/polaris/core/tool/ToolCatalogTest.kt",
         ],
         "classes": [
             "com.beichen.polaris.core.agent.ShellCommandRulesTest",
             "com.beichen.polaris.core.agent.ApprovalTierTest",
+            "com.beichen.polaris.core.agent.EgressDowngradeTest",
             "com.beichen.polaris.core.tool.ToolCatalogTest",
         ],
     },
@@ -210,6 +212,47 @@ MUTATIONS = [
         "new": "        // 变异：去掉「有目录没实现」检查",
         "expect": ["目录里有的工具没有实现时要报出来"],
     },
+    {
+        # lethal trifecta 的第三道闸。改成「永不降级」不会有任何编译错误，
+        # 而且这条路径在 JVM 上本来就测不到（原来只存在于 ChatViewModel 里）。
+        "id": "M16 读过私有内容后仍可记忆（永不降级）",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ApprovalScope.kt",
+        "old": "        taintedNow && ApprovalGrouping.groupOf(toolName) in EGRESS_GROUPS",
+        "new": "        taintedNow && ApprovalGrouping.groupOf(toolName) in emptySet<String>()",
+        "expect": [
+            "污染后网络外发降级为不可记忆",
+            "污染后 GitHub 写操作降级为不可记忆",
+        ],
+    },
+    {
+        # 一刀切降级：所有审批都变「每次问」。看着更安全，实际是把机制废掉——
+        # 用户点一天之后就会闭眼点。
+        "id": "M17 一刀切降级（不看是不是外发组）",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ApprovalScope.kt",
+        "old": "        if (!isEgressTurn(toolName, taintedNow)) return grant",
+        "new": "        if (!taintedNow) return grant",
+        "expect": [
+            "污染后普通 shell 不降级",
+            "污染后文件写入不降级",
+        ],
+    },
+    {
+        # 只改文案、不改 memorizable：弹窗里写着「本回合读过私有内容」，
+        # 用户照样能点「始终允许」并写进白名单。最阴的一种假修。
+        "id": "M18 降级只改文案不改可记忆性",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ApprovalScope.kt",
+        "old": "            memorizable = false,\n            label = grant.label",
+        "new": "            memorizable = grant.memorizable,\n            label = grant.label",
+        "expect": ["污染后网络外发降级为不可记忆"],
+    },
+    {
+        # key 跟着变：干净回合里点过的「始终允许」永远命中不了，域名记忆整段废掉。
+        "id": "M19 降级时换掉授权键",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ApprovalScope.kt",
+        "old": "            memorizable = false,\n            label = grant.label",
+        "new": "            key = grant.key + \"#egress\",\n            memorizable = false,\n            label = grant.label",
+        "expect": ["降级不改 key"],
+    },
 ]
 
 
@@ -293,19 +336,26 @@ def find_classpath():
 
 # ------------------------------------------------------------------- 编译执行
 
-def expand_sources(entries):
-    """目录展开成 *.kt，文件原样保留（顺序稳定，便于复现）。"""
+def expand_sources(entries, overrides=None):
+    """目录展开成 *.kt，文件原样保留（顺序稳定，便于复现）。
+
+    overrides 把「工作区里的真实路径」映射到「临时副本」，用于变异：
+    编译器只认路径，所以副本可以放在任何目录——包名由文件里的 package 声明决定，
+    与目录结构无关。
+    """
+    overrides = overrides or {}
     out = []
     for e in entries:
         full = os.path.join(ROOT, e)
         if os.path.isdir(full):
             out.extend(sorted(glob.glob(os.path.join(full, "*.kt"))))
         else:
-            out.append(full)
+            out.append(overrides.get(full, full))
     return out
 
 
-def compile_and_run(compiler_cp, lib_cp, plugin, outdir, sources, classes) -> tuple[str, str]:
+def compile_and_run(compiler_cp, lib_cp, plugin, outdir, sources, classes,
+                    overrides=None) -> tuple[str, str]:
     """返回 (编译错误, JUnit 输出)。编译失败时第二项为空。"""
     java = shutil.which("java") or "java"
     cmd = [
@@ -313,7 +363,7 @@ def compile_and_run(compiler_cp, lib_cp, plugin, outdir, sources, classes) -> tu
         "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler",
         "-no-stdlib", "-no-reflect", *plugin,
         "-cp", lib_cp, "-d", outdir,
-        *expand_sources(sources),
+        *expand_sources(sources, overrides),
     ]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
@@ -355,15 +405,26 @@ def main() -> int:
             failed += 1
             continue
         try:
-            open(target, "w", encoding="utf-8").write(original.replace(mut["old"], mut["new"]))
+            # 变异写在**临时副本**上，工作区零改动。
+            #
+            # 此前是直接改原文件、靠 finally 恢复。finally 挡不住 SIGKILL：超时被
+            # `timeout` 杀、Ctrl-C 按两下、CI 取消 job，都会把变异留在工作区。
+            # 而它留下的是一种**最坏的脏**——注入的缺陷看起来是正常代码，下一轮
+            # commit 顺手推上去，门禁全绿（断言本来就是对着变异版本写的），
+            # 直到真机上那条防护失效才被发现。
+            sandbox = tempfile.mkdtemp(prefix="mut-src-")
+            patched = os.path.join(sandbox, os.path.basename(target))
+            with open(patched, "w", encoding="utf-8") as f:
+                f.write(original.replace(mut["old"], mut["new"]))
             outdir = tempfile.mkdtemp(prefix="mut-")
             group = GROUPS[mut.get("group", "approval")]
             err, out = compile_and_run(
-                compiler_cp, lib_cp, plugin, outdir, group["sources"], group["classes"]
+                compiler_cp, lib_cp, plugin, outdir, group["sources"], group["classes"],
+                overrides={target: patched},
             )
             shutil.rmtree(outdir, ignore_errors=True)
         finally:
-            open(target, "w", encoding="utf-8").write(original)
+            shutil.rmtree(sandbox, ignore_errors=True)
 
         if err:
             rows.append((mut["id"], "INVALID", err.splitlines()[0][:90]))

@@ -1723,23 +1723,16 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      */
     private suspend fun requestApproval(toolName: String, args: JsonObject): Boolean = approvalMutex.withLock {
         // W-36/R-08：按「同类操作」放行而非工具名；shell 再看命令内容——不可逆命令永不记忆。
-        val scope = ApprovalScope.of(toolName, args)
         val group = ApprovalGrouping.groupOf(toolName)
         // P1-②：本回合读过私有内容之后，外发就不再是「同类操作」。
         // 守卫链不敢再拦一次（会连弹两个框），所以把事实交给审批层：三档一律回到
         // 「每次问」且不可记忆，连 AUTO 档的会话白名单也不放行。
         // 2026-11-18：组集合含 GROUP_GIT_WRITE——`github_commit` 也可记忆，详见
         // ApprovalScope.EGRESS_GROUPS。
-        val egressNow = egressGuard.taintedNow && group in ApprovalScope.EGRESS_GROUPS
-        val grant = if (egressNow) {
-            scope.copy(
-                memorizable = false,
-                // 文案必须说明「为什么这次又要问」——否则用户会觉得刚点过的允许丢了
-                label = scope.label + " · 本回合读过私有内容"
-            )
-        } else {
-            scope
-        }
+        // 2026-11-19：判定与降级收进 ApprovalScope（isEgressTurn / effectiveGrant），
+        // 纯函数、有 JUnit 与变异钉着；此前这段逻辑只存在于这里，JVM 测不到。
+        val egressNow = ApprovalScope.isEgressTurn(toolName, egressGuard.taintedNow)
+        val grant = ApprovalScope.effectiveGrant(toolName, args, egressGuard.taintedNow)
         // W-RT3：档位判定统一走 ApprovalTier——「逐步确认」连会话白名单也失效；
         // 「全自动」对低风险组（界面操作 / 截图 / 朗读通知 / 文件写入）免弹窗，
         // 高风险组（应用装卸 / GitHub 提交 / shell）维持原判。
