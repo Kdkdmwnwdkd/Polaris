@@ -40,21 +40,47 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-TEST_CLASS = "com.beichen.polaris.core.agent.ShellCommandRulesTest"
+# 按「最小编译闭包」分组：一次变异只重编它自己那条链上的文件。
+# 全放一起编（20+ 文件）会让每条变异都慢一倍，而变异点分布在这两条互不相干的链上。
+GROUPS = {
+    "approval": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/agent/ShellCommandRules.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/ApprovalScope.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/ApprovalGrouping.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/ApprovalTier.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/NotificationScope.kt",
+            "core/src/main/java/com/beichen/polaris/core/tool/ToolCatalog.kt",
+            "core/src/main/java/com/beichen/polaris/core/llm/JsonSafe.kt",
+            "core/src/test/java/com/beichen/polaris/core/agent/ShellCommandRulesTest.kt",
+            "core/src/test/java/com/beichen/polaris/core/agent/ApprovalTierTest.kt",
+        ],
+        "classes": [
+            "com.beichen.polaris.core.agent.ShellCommandRulesTest",
+            "com.beichen.polaris.core.agent.ApprovalTierTest",
+        ],
+    },
+    "storage": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
+            "core/src/main/java/com/beichen/polaris/core/UiItem.kt",
+            "core/src/main/java/com/beichen/polaris/core/AgentContract.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolResult.kt",
+            "core/src/main/java/com/beichen/polaris/core/ConversationBranch.kt",
+            "core/src/main/java/com/beichen/polaris/core/ConversationShard.kt",
+            "core/src/main/java/com/beichen/polaris/core/llm/JsonSafe.kt",
+            "core/src/main/java/com/beichen/polaris/core/io/AtomicJsonFile.kt",
+            "core/src/main/java/com/beichen/polaris/core/lifecycle/AppBackgroundHooks.kt",
+            # 目录会在编译前展开成 *.kt
+            "core/src/main/java/com/beichen/polaris/core/telemetry",
+            "core/src/test/java/com/beichen/polaris/core/ConversationTruncationTest.kt",
+        ],
+        "classes": ["com.beichen.polaris.core.ConversationTruncationTest"],
+    },
+}
 
 # 被测源文件。刻意只挑这一小片：审批链拿得出 30 秒内跑完的 JVM 断言的只有它，
 # 更广的覆盖面应该先写断言再谈变异，否则只是在测「grep 匹不匹配」。
-SOURCES = [
-    "core/src/main/java/com/beichen/polaris/core/agent/ShellCommandRules.kt",
-    "core/src/main/java/com/beichen/polaris/core/agent/ApprovalScope.kt",
-    "core/src/main/java/com/beichen/polaris/core/agent/ApprovalGrouping.kt",
-    "core/src/main/java/com/beichen/polaris/core/agent/ApprovalTier.kt",
-    "core/src/main/java/com/beichen/polaris/core/agent/NotificationScope.kt",
-    "core/src/main/java/com/beichen/polaris/core/tool/ToolCatalog.kt",
-    "core/src/main/java/com/beichen/polaris/core/llm/JsonSafe.kt",
-    "core/src/test/java/com/beichen/polaris/core/agent/ShellCommandRulesTest.kt",
-]
-
 MUTATIONS = [
     {
         "id": "M1 相对路径不解析（= P1-1 修前行为）",
@@ -85,6 +111,43 @@ MUTATIONS = [
         "new": "        grant.key in sessionAllowed",
         # 这条改动会让「不可记忆」退化成「可记忆」，属于安全降级。
         "expect": ["C5"],
+    },
+    {
+        "id": "M5 STRICT 档失效（白名单在逐步确认下也放行）",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ApprovalTier.kt",
+        "old": "        STRICT -> false",
+        "new": "        STRICT -> sessionAllowed",
+        "expect": ["STRICT 任何组合都弹窗"],
+    },
+    {
+        "id": "M6 AUTO 档全放行（连 shell 也不问）",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ApprovalTier.kt",
+        "old": "        AUTO -> sessionAllowed || group in AUTO_ALLOW_GROUPS",
+        "new": "        AUTO -> true",
+        "expect": ["AUTO 高风险组仍按白名单判"],
+    },
+    {
+        "id": "M7 STANDARD 档失效（未授权也放行）",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ApprovalTier.kt",
+        "old": "        else -> sessionAllowed",
+        "new": "        else -> true",
+        "expect": ["STANDARD 只看白名单"],
+    },
+    {
+        "id": "M8 读回重写清零截断计数（第一版的真实 bug）",
+        "file": "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
+        "group": "storage",
+        "old": "        truncatedChars = truncatedChars + droppedChars(text)\n    )\n\n    is UiItem.Assistant",
+        "new": "        truncatedChars = droppedChars(text)\n    )\n\n    is UiItem.Assistant",
+        "expect": ["读回重写不清零"],
+    },
+    {
+        "id": "M9 推理过程截断不计数",
+        "file": "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
+        "group": "storage",
+        "old": "        truncatedChars = truncatedChars +\n            droppedChars(text) + droppedChars(reasoning.orEmpty())",
+        "new": "        truncatedChars = truncatedChars + droppedChars(text)",
+        "expect": ["多个被截断字段"],
     },
 ]
 
@@ -169,7 +232,19 @@ def find_classpath():
 
 # ------------------------------------------------------------------- 编译执行
 
-def compile_and_run(compiler_cp, lib_cp, plugin, outdir) -> tuple[str, str]:
+def expand_sources(entries):
+    """目录展开成 *.kt，文件原样保留（顺序稳定，便于复现）。"""
+    out = []
+    for e in entries:
+        full = os.path.join(ROOT, e)
+        if os.path.isdir(full):
+            out.extend(sorted(glob.glob(os.path.join(full, "*.kt"))))
+        else:
+            out.append(full)
+    return out
+
+
+def compile_and_run(compiler_cp, lib_cp, plugin, outdir, sources, classes) -> tuple[str, str]:
     """返回 (编译错误, JUnit 输出)。编译失败时第二项为空。"""
     java = shutil.which("java") or "java"
     cmd = [
@@ -177,7 +252,7 @@ def compile_and_run(compiler_cp, lib_cp, plugin, outdir) -> tuple[str, str]:
         "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler",
         "-no-stdlib", "-no-reflect", *plugin,
         "-cp", lib_cp, "-d", outdir,
-        *[os.path.join(ROOT, s) for s in SOURCES],
+        *expand_sources(sources),
     ]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
@@ -185,7 +260,7 @@ def compile_and_run(compiler_cp, lib_cp, plugin, outdir) -> tuple[str, str]:
         return ("\n".join(errs[:5]) or (r.stdout + r.stderr)[-500:]), ""
 
     run = subprocess.run(
-        [java, "-cp", f"{outdir}:{lib_cp}", "org.junit.runner.JUnitCore", TEST_CLASS],
+        [java, "-cp", f"{outdir}:{lib_cp}", "org.junit.runner.JUnitCore", *classes],
         capture_output=True, text=True,
     )
     return "", run.stdout + run.stderr
@@ -217,7 +292,10 @@ def main() -> int:
         try:
             open(target, "w", encoding="utf-8").write(original.replace(mut["old"], mut["new"]))
             outdir = tempfile.mkdtemp(prefix="mut-")
-            err, out = compile_and_run(compiler_cp, lib_cp, plugin, outdir)
+            group = GROUPS[mut.get("group", "approval")]
+            err, out = compile_and_run(
+                compiler_cp, lib_cp, plugin, outdir, group["sources"], group["classes"]
+            )
             shutil.rmtree(outdir, ignore_errors=True)
         finally:
             open(target, "w", encoding="utf-8").write(original)

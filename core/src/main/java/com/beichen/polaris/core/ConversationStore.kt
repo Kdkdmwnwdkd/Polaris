@@ -216,7 +216,10 @@ fun UiItem.toMsgRecord(): MsgRecord = when (this) {
         timeMs = timeMs,
         // W-RT7：模型归属随气泡落盘（费用下钻的依据）
         modelId = modelId,
-        truncatedChars = truncatedChars + droppedChars(text)
+        // 正文与推理过程各自独立截断，丢弃量必须**都**计入：只看正文的话，
+        // 「正文很短 + 思维链超长」的历史消息会显示「完整」，而推理过程已经被砍掉一半。
+        truncatedChars = truncatedChars +
+            droppedChars(text) + droppedChars(reasoning.orEmpty())
     )
 
     is UiItem.Tool -> MsgRecord(

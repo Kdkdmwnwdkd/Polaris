@@ -175,6 +175,21 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
+      # 纯函数单测（2026-11-19）。
+      #
+      # 审批档位与 shell 读边界是安全主干，此前只有 scripts/qa 的文本断言兜着——
+      # 把 `STRICT -> false` 改成 `true`、把相对路径解析删掉，grep 照样绿。
+      # :core 40 条（ShellCommandRules / ApprovalTier）+ :app 5 条（授权 TTL），
+      # 全都不碰 Android 类型，`testDebugUnitTest` 直接跑，约 1 分钟。
+      #
+      # 为什么单独一个 step 而不是并进下面那条 gradle：失败信息能直接指到测试方法名，
+      # 而不是混在 assembleRelease 的日志里。代价是一次 daemon 启动（约 20 秒），
+      # 换来「测试挂了就不打包」，这个交换在 19 分钟的构建里是划算的。
+      - name: "Unit tests (core: 审批与读边界判定)"
+        run: |
+          ./gradlew :core:testDebugUnitTest :app:testDebugUnitTest \
+            --no-daemon --stacktrace
+
       # Vulkan（GPU）后端要四样东西，缺一样都编不出来：
       #   1. glslc                    —— 把 .comp 编成 SPIR-V（host 侧可执行）
       #   2. SPIRV-Headers 的 CMake 包 —— ggml-vulkan 里是 find_package(... CONFIG REQUIRED)
