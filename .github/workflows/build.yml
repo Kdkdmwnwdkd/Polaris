@@ -700,7 +700,7 @@ jobs:
           KOTLIN_VERSION: "1.9.25"
           SER_VERSION: "1.6.3"
 
-      - name: 变异门禁（12 条）
+      - name: 变异门禁（15 条）
         env:
           KOTLINC_HOME: /tmp/kotlinc
           # 强制走 KOTLINC_HOME：runner 上可能残留别的 Gradle 缓存，混版本会让

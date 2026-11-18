@@ -56,10 +56,12 @@ GROUPS = {
             "core/src/main/java/com/beichen/polaris/core/llm/JsonSafe.kt",
             "core/src/test/java/com/beichen/polaris/core/agent/ShellCommandRulesTest.kt",
             "core/src/test/java/com/beichen/polaris/core/agent/ApprovalTierTest.kt",
+            "core/src/test/java/com/beichen/polaris/core/tool/ToolCatalogTest.kt",
         ],
         "classes": [
             "com.beichen.polaris.core.agent.ShellCommandRulesTest",
             "com.beichen.polaris.core.agent.ApprovalTierTest",
+            "com.beichen.polaris.core.tool.ToolCatalogTest",
         ],
     },
     "storage": {
@@ -180,6 +182,33 @@ MUTATIONS = [
         "old": "        ) { text -> parseShardOrNull(text) != null } ?: return null",
         "new": "        ) { text -> text.isNotBlank() } ?: return null",
         "expect": ["单个分片主文件损坏时回退其备份"],
+    },
+    {
+        # fail-closed 是工具目录唯一的安全兜底：未知工具默认 DANGEROUS。
+        # 改成 SAFE 不会有任何编译错误，也不会有任何 harness 红（改前确实没有）。
+        "id": "M13 未登记工具按 SAFE 处理（fail-open）",
+        "file": "core/src/main/java/com/beichen/polaris/core/tool/ToolCatalog.kt",
+        "old": "fun capabilityOf(name: String): Capability = byName[name]?.capability ?: Capability.DANGEROUS",
+        "new": "fun capabilityOf(name: String): Capability = byName[name]?.capability ?: Capability.SAFE",
+        "expect": ["未登记工具的能力按 DANGEROUS 处理"],
+    },
+    {
+        # MCP 工具名来自外部服务器。按前缀并组会让 web_eval_helper 落进 web 组，
+        # 继承用户勾过的「不再询问网页操作」。
+        "id": "M14 审批归组按前缀并组（外部工具继承静态组白名单）",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ApprovalGrouping.kt",
+        "old": "fun groupOf(toolName: String): String = ToolCatalog.approvalOf(toolName) ?: toolName",
+        "new": "fun groupOf(toolName: String): String = ToolCatalog.approvalOf(toolName) ?: ToolCatalog.groupOf(toolName)",
+        "expect": ["外部工具名以已声明组开头时不会并进那个组"],
+    },
+    {
+        "id": "M15 目录自检漏掉「有目录没实现」",
+        "file": "core/src/main/java/com/beichen/polaris/core/tool/ToolCatalog.kt",
+        "old": '''        (catalog - impl).sorted().forEach {
+            add("$it 在目录里但没有实现（模型照目录调用会拿到 unknown_tool）")
+        }''',
+        "new": "        // 变异：去掉「有目录没实现」检查",
+        "expect": ["目录里有的工具没有实现时要报出来"],
     },
 ]
 
