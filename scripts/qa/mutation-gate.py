@@ -54,15 +54,21 @@ GROUPS = {
             "core/src/main/java/com/beichen/polaris/core/agent/NotificationScope.kt",
             "core/src/main/java/com/beichen/polaris/core/tool/ToolCatalog.kt",
             "core/src/main/java/com/beichen/polaris/core/llm/JsonSafe.kt",
+            "core/src/main/java/com/beichen/polaris/core/AgentContract.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolResult.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/ToolDescriptor.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/ToolGuard.kt",
             "core/src/test/java/com/beichen/polaris/core/agent/ShellCommandRulesTest.kt",
             "core/src/test/java/com/beichen/polaris/core/agent/ApprovalTierTest.kt",
             "core/src/test/java/com/beichen/polaris/core/agent/EgressDowngradeTest.kt",
+            "core/src/test/java/com/beichen/polaris/core/agent/ToolGuardChainTest.kt",
             "core/src/test/java/com/beichen/polaris/core/tool/ToolCatalogTest.kt",
         ],
         "classes": [
             "com.beichen.polaris.core.agent.ShellCommandRulesTest",
             "com.beichen.polaris.core.agent.ApprovalTierTest",
             "com.beichen.polaris.core.agent.EgressDowngradeTest",
+            "com.beichen.polaris.core.agent.ToolGuardChainTest",
             "com.beichen.polaris.core.tool.ToolCatalogTest",
         ],
     },
@@ -253,6 +259,47 @@ MUTATIONS = [
         "new": "            key = grant.key + \"#egress\",\n            memorizable = false,\n            label = grant.label",
         "expect": ["降级不改 key"],
     },
+    {
+        # fail-open：守卫崩溃被当成「没意见」。这条链从「限制」变成「限制的假象」，
+        # 而且装得越多越危险（没人会怀疑一个装着三个守卫的系统）。
+        "id": "M20 守卫崩溃当成弃权（fail-open）",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ToolGuard.kt",
+        "old": '''                log("守卫 #${index + 1} 执行失败（${e::class.java.simpleName}: ${e.message}），按拒绝处理")
+                return GuardDecision.Deny(
+                    code = "guard_failed",
+                    message = "工具调用被策略层拦下：第 ${index + 1} 个守卫执行失败（${e::class.java.simpleName}）。",
+                    hint = "这不是参数问题，重试同样会失败。请告知用户检查策略设置。",
+                )''',
+        "new": "                log(\"变异：崩溃当成弃权\")\n                return GuardDecision.Abstain",
+        "expect": ["守卫抛异常按拒绝处理", "守卫抛 Error 也按拒绝处理"],
+    },
+    {
+        # 去掉「取消要穿透」：用户点停止，界面显示「工具执行失败」。
+        "id": "M21 取消被兜成拒绝",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ToolGuard.kt",
+        "old": '''            } catch (cancel: CancellationException) {
+                // 取消不是拒绝：点「停止」要能立刻退出，不能被守卫兜成一条错误结果
+                throw cancel''',
+        "new": "            } catch (cancel: CancellationException) {",
+        "expect": ["CancellationException 不被兜成拒绝"],
+    },
+    {
+        # 链按默认 3 秒算：需要问用户的守卫永远等不到用户回答。
+        "id": "M22 链忽略守卫自己的超时上限",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ToolGuard.kt",
+        "old": "            val budget = guard.timeoutMs",
+        "new": "            val budget = GUARD_TIMEOUT_MS",
+        "expect": ["超时用守卫自己的上限而不是链默认值"],
+    },
+    {
+        # 守卫拒绝了，但返回值被丢掉。这是整条链最致命的一种退化：
+        # 每个守卫都「跑过了」，日志里也有拒绝记录，工具照样执行。
+        "id": "M23 守卫的拒绝被丢弃",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ToolGuard.kt",
+        "old": "                return decision",
+        "new": "                // 变异：拒绝被丢弃",
+        "expect": ["首个拒绝即终止，后面的守卫不再被询问", "拒绝原样透传，不被改写"],
+    },
 ]
 
 
@@ -264,11 +311,22 @@ def _first(paths):
 
 
 def _glob_jar(*patterns):
-    out = []
+    """按 pattern 的先后顺序取第一个命中的 jar，命中内部按名字取最新。
+
+    不能把所有 pattern 的结果混在一起排序取最后一个：`/tmp/gcache/...` 与
+    `/tmp/ci1925/...` 是两套不同版本的 Kotlin 生态，字典序会跨档选中 gcache 里的
+    coroutines-1.10（元数据 2.2），用 1.9 编译器去读就报
+    `module was compiled with an incompatible version of Kotlin`——
+    错误文本以 jar 路径开头，截断后看起来像「文件不存在」，极难定位。
+    """
     for pat in patterns:
-        out.extend(glob.glob(pat, recursive=True))
-    out = [p for p in out if "-sources" not in p]
-    return sorted(out)[-1] if out else None
+        hits = [
+            p for p in glob.glob(pat, recursive=True)
+            if os.path.isfile(p) and "-sources" not in p
+        ]
+        if hits:
+            return sorted(hits)[-1]
+    return None
 
 
 def find_classpath():
@@ -296,6 +354,9 @@ def find_classpath():
     )
     coro = _glob_jar(
         os.path.join(cache, "org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm", "**", "kotlinx-coroutines-core-jvm-*.jar"),
+        # 官方 kotlinc 发行版自带这个 jar（CI 走这一档）；漏掉它时守卫链测试会在
+        # 编译阶段报 unresolved reference: runBlocking，看起来像测试写错了。
+        os.path.join(kc, "lib", "kotlinx-coroutines-core-jvm*.jar"),
         "/tmp/gcache/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm/*.jar",
         os.path.join(os.path.expanduser("~"), ".sdkman", "candidates", "gradle", "*", "lib", "kotlinx-coroutines-core-jvm-*.jar"),
     )
@@ -329,7 +390,9 @@ def find_classpath():
         return None
 
     compiler_cp = ":".join(x for x in [compiler, stdlib, reflect, annot, coro] if x)
-    lib_cp = ":".join(x for x in [stdlib, ser_core, ser_json, junit, hamcrest] if x)
+    # coro 同时要给运行时：守卫链（ToolGuardChainTest）里 runBlocking / delay 是
+    # 被测代码的一部分，只在编译器 classpath 上会让 JUnit 报 NoClassDefFoundError。
+    lib_cp = ":".join(x for x in [stdlib, coro, ser_core, ser_json, junit, hamcrest] if x)
     plugin = ["-Xplugin=" + ser_plugin] if ser_plugin else []
     return compiler_cp, lib_cp, plugin
 
