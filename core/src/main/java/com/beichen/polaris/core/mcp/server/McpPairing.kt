@@ -1,6 +1,7 @@
 package com.beichen.polaris.core.mcp.server
 
 import com.beichen.polaris.core.io.AtomicJsonFile
+import com.beichen.polaris.core.llm.objOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -8,8 +9,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.File
@@ -158,7 +157,7 @@ class McpPairing(
         val text = AtomicJsonFile.readWithBackupOrNull(file) { raw ->
             runCatching { json.parseToJsonElement(raw) }.isSuccess
         } ?: return mutableListOf()
-        val root = json.parseToJsonElement(text).jsonObject
+        val root = json.parseToJsonElement(text).objOrNull() ?: return mutableListOf()
         val arr = root["clients"] as? JsonArray ?: return mutableListOf()
         arr.mapNotNull { element ->
             val o = element as? JsonObject ?: return@mapNotNull null

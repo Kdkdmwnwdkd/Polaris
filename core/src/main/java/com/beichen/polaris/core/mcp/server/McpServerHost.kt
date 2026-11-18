@@ -6,6 +6,8 @@ import com.beichen.polaris.core.agent.GuardContext
 import com.beichen.polaris.core.agent.GuardDecision
 import com.beichen.polaris.core.agent.ToolGuard
 import com.beichen.polaris.core.agent.ToolGuardChain
+import com.beichen.polaris.core.llm.objOrNull
+import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.tool.Capability
 import com.beichen.polaris.core.tool.ToolCatalog
 import kotlinx.coroutines.runBlocking
@@ -18,9 +20,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.BufferedInputStream
 import java.io.File
@@ -287,11 +286,11 @@ class McpServerHost(
     // ------------------------------------------------------------------ rpc
 
     private fun dispatch(body: String, client: McpClientRecord): String? {
-        val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
+        val root = runCatching { json.parseToJsonElement(body).objOrNull() }.getOrNull()
             ?: return rpcError(JsonNull, -32700, "parse error")
 
         val id = root["id"] ?: JsonNull
-        val method = root["method"]?.jsonPrimitive?.contentOrNullSafe()
+        val method = root["method"].primOrNull()?.content
             ?: return rpcError(id, -32600, "missing method")
 
         // 通知类一律 202，不回 body。
@@ -342,10 +341,10 @@ class McpServerHost(
         if (isBlocked()) return rpcError(id, -32002, "too many auth failures, retry later")
 
         val tier = McpTier.fromWire(client.tier)
-        val params = root["params"]?.jsonObject
-        val name = params?.get("name")?.jsonPrimitive?.contentOrNullSafe()
+        val params = root["params"].objOrNull()
+        val name = params?.get("name").primOrNull()?.content
             ?: return rpcError(id, -32602, "missing params.name")
-        val args = params["arguments"]?.jsonObject ?: JsonObject(emptyMap())
+        val args = params?.get("arguments").objOrNull() ?: JsonObject(emptyMap())
 
         val tool = tools.get(name)
             ?: return rpcError(id, -32602, "unknown tool: $name")
@@ -528,9 +527,6 @@ class McpServerHost(
         429 -> "Too Many Requests"
         else -> "Internal Server Error"
     }
-
-    private fun JsonPrimitive.contentOrNullSafe(): String? =
-        runCatching { content }.getOrNull()
 
     companion object {
         const val WORKER_THREADS = 4

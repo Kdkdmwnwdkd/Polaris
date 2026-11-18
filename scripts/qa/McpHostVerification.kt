@@ -25,6 +25,9 @@ import com.beichen.polaris.core.ToolCall
 import com.beichen.polaris.core.ToolMessage
 import com.beichen.polaris.core.ToolResult
 import com.beichen.polaris.core.agent.ToolDescriptor
+import com.beichen.polaris.core.llm.arrOrNull
+import com.beichen.polaris.core.llm.objOrNull
+import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.mcp.server.McpToolSource
 import com.beichen.polaris.core.agent.ToolGuardChain
 import com.beichen.polaris.core.mcp.server.McpAudit
@@ -32,6 +35,7 @@ import com.beichen.polaris.core.mcp.server.McpHostConfig
 import com.beichen.polaris.core.mcp.server.McpPairing
 import com.beichen.polaris.core.mcp.server.McpServerHost
 import com.beichen.polaris.core.mcp.server.McpTier
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -66,6 +70,40 @@ private class FakeTool(
         return ToolResult.ok(message = "ran:$name")
     }
 }
+
+/**
+ * 解析响应体里的 `result.protocolVersion`。
+ *
+ * 一律走 [objOrNull] / [primOrNull] 软转换：这是**被测方真实会收到的输入**，
+ * 硬转在 `null` 字段上抛异常，用它会掩盖「协议层把 null 当对象读」的缺陷。
+ */
+private fun protocolVersion(body: String): String? = rpcResult(body)
+    ?.get("protocolVersion").primOrNull()?.content
+
+private fun rpcResult(body: String): JsonObject? =
+    runCatching { Json.parseToJsonElement(body).objOrNull()?.get("result").objOrNull() }.getOrNull()
+
+/** `result.tools[].name` 的集合——档位过滤的可见结果。 */
+private fun toolNames(body: String): Set<String> = rpcResult(body)
+    ?.get("tools").arrOrNull()
+    ?.mapNotNull { it.objOrNull()?.get("name").primOrNull()?.content }
+    ?.toSet()
+    .orEmpty()
+
+/** JSON-RPC 错误码；成功响应返回 null。 */
+private fun errorCode(body: String): Int? = runCatching {
+    Json.parseToJsonElement(body).objOrNull()
+        ?.get("error").objOrNull()
+        ?.get("code").primOrNull()
+        ?.content?.toIntOrNull()
+}.getOrNull()
+
+/** `tools/call` 成功时的文本内容（M1 只回 text，不涉图片/资源）。 */
+private fun toolText(body: String): String =
+    rpcResult(body)?.get("content").arrOrNull()
+        ?.mapNotNull { it.objOrNull()?.get("text").primOrNull()?.content }
+        ?.joinToString("\n")
+        .orEmpty()
 
 private fun post(port: Int, body: String, token: String?): Pair<Int, String> {
     val conn = URL("http://127.0.0.1:$port/mcp").openConnection() as HttpURLConnection
@@ -151,20 +189,20 @@ fun main() {
     val good = post(port, init, readToken)
     ok(
         "B3 正确 token → 握手成功且协议版本回显",
-        good.first == 200 && good.second.contains("2024-11-05"),
+        good.first == 200 && protocolVersion(good.second) == "2024-11-05",
         "状态 ${good.first}，体 ${good.second.take(120)}",
     )
 
     // ── 档位可见性 ────────────────────────────────────────────────────
-    val listRead = post(port, """{"jsonrpc":"2.0","id":2,"method":"tools/list"}""", readToken).second
-    ok("B4 只读档看到 read_file", listRead.contains("\"read_file\""))
-    ok("B5 只读档看不到 app_launch（PRIVILEGED）", !listRead.contains("\"app_launch\""))
-    ok("B6 只读档看不到 ui_tap（DANGEROUS）", !listRead.contains("\"ui_tap\""))
+    val readNames = toolNames(post(port, """{"jsonrpc":"2.0","id":2,"method":"tools/list"}""", readToken).second)
+    ok("B4 只读档只暴露 SAFE 工具", readNames == setOf("read_file", "calculator"), "实际 $readNames")
+    ok("B5 只读档看不到 app_launch（PRIVILEGED）", "app_launch" !in readNames)
+    ok("B6 只读档看不到 ui_tap（DANGEROUS）", "ui_tap" !in readNames)
 
-    val listStd = post(port, """{"jsonrpc":"2.0","id":3,"method":"tools/list"}""", stdToken).second
-    ok("B7 标准档看到 app_launch", listStd.contains("\"app_launch\""))
-    ok("B8 标准档仍看不到 ui_tap", !listStd.contains("\"ui_tap\""))
-    ok("B9 任何档位都看不到 app_uninstall", !listStd.contains("\"app_uninstall\""))
+    val stdNames = toolNames(post(port, """{"jsonrpc":"2.0","id":3,"method":"tools/list"}""", stdToken).second)
+    ok("B7 标准档看到 app_launch", "app_launch" in stdNames, "实际 $stdNames")
+    ok("B8 标准档仍看不到 ui_tap", "ui_tap" !in stdNames)
+    ok("B9 任何档位都看不到 app_uninstall", "app_uninstall" !in stdNames)
 
     // ── 越档调用：必须拒绝且不执行 ────────────────────────────────────
     val before = calls.get()
@@ -175,7 +213,7 @@ fun main() {
     )
     ok(
         "B10 只读档调 app_launch → -32003",
-        crossCall.second.contains("-32003"),
+        errorCode(crossCall.second) == -32003,
         "体 ${crossCall.second.take(140)}",
     )
     ok("B11 被拒的调用一次都没执行", calls.get() == before, "执行数 ${calls.get() - before}")
@@ -189,7 +227,7 @@ fun main() {
     )
     ok(
         "B12 需审批的工具在无审批界面时 → -32004（不静默执行）",
-        approvalCall.second.contains("-32004"),
+        errorCode(approvalCall.second) == -32004,
         "体 ${approvalCall.second.take(140)}",
     )
     ok("B13 需要审批的调用一次都没执行", calls.get() == before2)
@@ -202,7 +240,7 @@ fun main() {
     )
     ok(
         "B14 档位内调用成功且结果回传",
-        okCall.first == 200 && okCall.second.contains("ran:read_file"),
+        okCall.first == 200 && toolText(okCall.second).indexOf("ran:read_file") >= 0,
         "体 ${okCall.second.take(160)}",
     )
     ok("B15 成功的调用确实执行了一次", calls.get() == before2 + 1, "执行数 ${calls.get() - before2}")
@@ -212,15 +250,36 @@ fun main() {
     ok("B16 通知返回 202 且无 body", notify.first == 202, "实际 ${notify.first}")
 
     val unknown = post(port, """{"jsonrpc":"2.0","id":7,"method":"nope/nope"}""", readToken)
-    ok("B17 未知方法 → -32601", unknown.second.contains("-32601"))
+    ok("B17 未知方法 → -32601", errorCode(unknown.second) == -32601, "实际 ${errorCode(unknown.second)}")
 
     // ── 审计 ──────────────────────────────────────────────────────────
     val auditFiles = File(dir, "audit").listFiles()?.filter { it.name.endsWith(".jsonl") }.orEmpty()
     val auditText = auditFiles.joinToString("\n") { it.readText() }
     ok("B18 审计落盘", auditFiles.isNotEmpty())
-    ok("B19 审计记了越档拒绝", auditText.contains("deny_tier"))
-    ok("B20 审计记了审批拒绝", auditText.contains("deny_approval"))
-    ok("B21 审计参数只存摘要与预览，不存全文", auditText.contains("argsHash") && auditText.contains("argsPreview"))
+    val decisions = auditFiles.flatMap { f -> f.readLines() }.mapNotNull { line ->
+        runCatching {
+            Json.parseToJsonElement(line).objOrNull()?.let { o ->
+                (o["decision"].primOrNull()?.content ?: "?") to (o["tool"].primOrNull()?.content ?: "?")
+            }
+        }.getOrNull()
+    }
+    ok(
+        "B19 审计记了越档拒绝（deny_tier / app_launch）",
+        decisions.any { it == "deny_tier" to "app_launch" },
+        "实际 $decisions",
+    )
+    ok(
+        "B20 审计记了审批拒绝（deny_approval / write_file）",
+        decisions.any { it == "deny_approval" to "write_file" },
+        "实际 $decisions",
+    )
+    val fields = auditFiles.flatMap { f -> f.readLines() }.mapNotNull { line ->
+        runCatching { Json.parseToJsonElement(line).objOrNull() }.getOrNull()
+    }
+    ok(
+        "B21 审计参数只存摘要与预览，不存全文",
+        fields.isNotEmpty() && fields.all { it["argsHash"].primOrNull() != null && it["argsPreview"].primOrNull() != null },
+    )
 
     // ── 锁屏：人不在场，只放行 SAFE ──────────────────────────────────
     val lockedHost = McpServerHost(
@@ -244,7 +303,7 @@ fun main() {
     )
     ok(
         "B23 锁屏时 app_launch 被拒（-32006）",
-        lockedCall.second.contains("-32006"),
+        errorCode(lockedCall.second) == -32006,
         "体 ${lockedCall.second.take(140)}",
     )
     val lockedRead = post(
@@ -254,7 +313,7 @@ fun main() {
     )
     ok(
         "B24 锁屏时 SAFE 工具仍可用",
-        lockedRead.second.contains("ran:calculator"),
+        toolText(lockedRead.second).indexOf("ran:calculator") >= 0,
         "体 ${lockedRead.second.take(140)}",
     )
     lockedHost.stop()

@@ -134,6 +134,7 @@ DEPS="$STDLIB:$COROUTINES:$SER_JSON:$SER_CORE"
 java -cp "$COMPILER_CP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   -no-stdlib -no-reflect -classpath "$DEPS" -d "$OUT" -nowarn \
   "$CORE/io/AtomicJsonFile.kt" \
+  "$CORE/llm/JsonSafe.kt" \
   "$CORE/AgentContract.kt" \
   "$CORE/ToolResult.kt" \
   "$CORE/tool/ToolCatalog.kt" \
