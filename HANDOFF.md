@@ -465,19 +465,54 @@ M1 收尾时留下的判断是：**MCP 的审批卡不该单独做**——它会
 | 入口 | 现在写什么 |
 |---|---|
 | 主界面 / 子代理 | `Consent.ask { … }` |
-| 桌宠 | `Consent.Deny("桌宠气泡上没有审批按钮")` |
+| 桌宠 | `Consent.ask { … PetApproval.ask(…) }`（第二阶段，见 §3.15） |
 | 技能 | `Consent.ask { … SkillNetGrant.allows(…) }` |
 
-桌宠那行的价值不在「拒绝」，在于**理由进了工具结果**：用户点开桌宠会话能看到
-「该操作需要用户确认，但桌宠气泡上没有审批按钮，已拒绝执行」。
+桌宠那一格当时是 `Deny`：价值不在「拒绝」，在于**理由进了工具结果**——用户点开桌宠会话
+能看到「该操作需要用户确认，但桌宠气泡上没有审批按钮，已拒绝执行」。但那条理由说的是
+「没有按钮」，而按钮是可以做的，所以有了 §3.15。
 
 **验证**：`run-consent-verification.sh`，8 条契约 + 12 条裁决 + 1 条编译前提 = **21 条**。
 A6 用行号比较盯「拒绝分支在 `tool.execute` 之前」——B 段测裁决本身，测不到分支顺序。
 
-**没做**：`PetConsent`（桌宠气泡上的确认按钮）、`HeadlessPolicy`（后台任务策略表）、
-MCP 侧迁移（`McpApprover?` 仍可空，语义是 `-32004`，M2 一起迁）。
-
 设计见 [`docs/architecture/Consent-契约-P1-3-2026-11-18.md`](docs/architecture/Consent-契约-P1-3-2026-11-18.md)。
+
+### 3.15 桌宠确认卡（P1-3 第二阶段，2026-11-18 下午）
+
+§3.14 把桌宠写成 `Consent.Deny`，代价是整个工具表被锁在四个只读工具上：
+用户说「帮我打开微信」，模型只能回「我这个界面没法确认」。这一节把按钮做出来。
+
+**四件东西**：
+
+| 文件 | 职责 | 为什么单独一层 |
+|---|---|---|
+| `core/ApprovalGate.kt` | 挂起 / 超时 / 取消，四种 `Outcome` | 只依赖 coroutines，一个文件就能真编真跑 |
+| `app/pet/PetApproval.kt` | 进程级状态 + 参数摘要 + 生命周期 | 要 Context / StateFlow，不能进 core |
+| `PetPanel.ApprovalCard` | 一张卡：工具名 + 一句参数 + 两个按钮 | 纯渲染，状态由宿主传 |
+| `app/pet/ConfirmRequiredTool.kt` | 给任意工具加「必须确认」 | 场景差异留在调用点，不改工具类 |
+
+桌宠工具表因此多了 `app_launch`（`ConfirmRequiredTool(AppLaunchTool(ctx))`）。
+选它不选写文件：桌宠的典型句子是「帮我打开微信」，用户说完就去看微信了，
+这是悬浮球唯一无可替代的场景。
+
+**三个取舍**：
+
+1. **`cancelAll` 传 `Outcome` 而不是 `false`。** 最初实现用 `complete(false)` 解除等待，
+   与「用户点拒绝」共用一个值。harness 的 B8 当天就抓到：界面销毁后等待方拿到 `DENIED`，
+   工具结果写「用户拒绝了该操作」——而用户从头到尾没看见那张卡。
+2. **没有「本次会话都允许」。** 那需要持久化策略表，现在没有。内存版的「本次允许」会被
+   用户当成长期授权，下次点得更快。A8 盯着审批路径不许出现 `SharedPreferences`。
+3. **卡片出现时自动展开气泡。** 只订阅不展开，收起态下卡片不在组合里，模型停在 45 秒
+   超时，用户眼前只有一个静静待着的悬浮球。
+
+**验证**：`run-pet-consent-verification.sh`，8 条接线 + 17 条网关 + 1 条编译前提 = **26 条**。
+A 段盯「卡片真的会被画出来」——组件写好了没人调用是这类改动最常见的失败形态，
+而行为 harness 证不了 Compose 渲染。真编在云端服务器做的（`BUILD SUCCESSFUL`，
+AGP 8.5 / JDK 21）。
+
+**`HeadlessPolicy` 缓做**：查过 `WorkflowWorker` 只做「到期 → 发通知」，**后台不跑 Agent**
+（设计如此）。策略表现在没有任何消费者，做出来是一段没有调用方的抽象。等真有后台执行
+入口时再做，那时形状也会更清楚。
 
 
 ## 4. 代码红线（碰了会立刻红）
@@ -486,7 +521,7 @@ MCP 侧迁移（`McpApprover?` 仍可空，语义是 `-32004`，M2 一起迁）�
 |---|---|---|
 | `:core` 不许 import `ui` / `tools` / Compose / `MainActivity` | 分层边界 | 编译器 + `run-arch-guard-verification.sh` |
 | `arch-baseline.txt` **只减不增** | 加一条等于把已知违规合法化 | 同上。当前上限：`ChatViewModel` 3723、`ChatScreen` 3235、`RealAgentLoop` 1532 |
-| `harness-baseline.txt` 只增不减（当前 **147**） | 数字变小说明有大面积 SKIP 被当成通过 | `gate.sh` 门禁 5/6 |
+| `harness-baseline.txt` 只增不减（当前 **149**） | 数字变小说明有大面积 SKIP 被当成通过 | `gate.sh` 门禁 5/6 |
 | 守卫裁决**不许加 Allow** | 只能拦不能放行，是这套设计唯一的安全性质 | `run-agent-seams-verification.sh` |
 | 新 harness 必须「静态断言 + 自编译真跑」两段 | 只 grep 不断言行为 = 假绿 | `gate.sh` |
 | 断言要数真实判据，不许为凑数写恒真断言 | `assertion-census` 会统计 | `scripts/qa/lib/` |
