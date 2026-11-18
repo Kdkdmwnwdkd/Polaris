@@ -411,7 +411,11 @@ def expand_sources(entries, overrides=None):
     for e in entries:
         full = os.path.join(ROOT, e)
         if os.path.isdir(full):
-            out.extend(sorted(glob.glob(os.path.join(full, "*.kt"))))
+            # 目录展开出来的每一项也要过 overrides：有变异点落在目录项里时
+            # （如 telemetry），只替换文件项会让那条变异静默失效——
+            # old 能匹配上、编译的却是原文件，于是测试全绿、结论 SURVIVED。
+            for f in sorted(glob.glob(os.path.join(full, "*.kt"))):
+                out.append(overrides.get(f, f))
         else:
             out.append(overrides.get(full, full))
     return out
