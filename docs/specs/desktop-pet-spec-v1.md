@@ -182,7 +182,8 @@
   app/src/main/java/com/beichen/polaris/pet/PetState.kt            开关意图 + 运行态（AppGraph 第 26 条）
   app/src/main/java/com/beichen/polaris/pet/PetOverlayService.kt   前台服务（specialUse）
   app/src/main/java/com/beichen/polaris/pet/PetOverlay.kt          WindowManager + ComposeView + 三个 owner
-  app/src/main/java/com/beichen/polaris/pet/PetPanel.kt            形象（Canvas 自绘）+ 气泡 + 输入
+  app/src/main/java/com/beichen/polaris/pet/PetPanel.kt            形象（位图 + Canvas 叠加）+ 气泡 + 输入
+  app/src/main/res/drawable-nodpi/pet_avatar_{open,blink}.webp     形象本体（384²，各约 28KB）
   app/src/main/java/com/beichen/polaris/pet/PetAgentSession.kt     独立轻量会话（驱动 RealAgentLoop）
   scripts/qa/run-desktop-pet-verification.sh                       39 条守卫（A–H 八段）
 
@@ -204,9 +205,14 @@
 **起步顺序**：先做「能显示、能拖、能关」，确认悬浮窗在真机上不被杀；再接 Agent；最后接语音。
 别一上来就写语音，那部分最容易卡住且最不影响骨架验证。
 
-**形象**：原计划用 `res/drawable/pet_*.xml`，实际改成 `PetPanel.kt` 里的 Canvas 自绘
-（84dp 圆角身体 + 眨眼 + 呼吸 + 思考时的嘴型，零素材零依赖）。换正式美术资源时只动这一个
-Composable，窗口与状态层不用改。
+**形象**：走过两版。一期是 `PetPanel.kt` 里的 Canvas 自绘（84dp 圆角方块 + 眨眼 + 呼吸 +
+思考时的嘴型），零素材零依赖，作用是先证明窗口能活、能拖、能对话。2026-11-18 换成重绘的
+位图（`drawable-nodpi/pet_avatar_open.webp` / `pet_avatar_blink.webp`，384²，各约 28KB），
+窗口尺寸 84dp → 96dp。两版都只动 `PetBody()` 这一个 Composable，窗口与状态层没改——
+这就是一期把它单独拆出来的原因。
+
+形象是照参考图**重画**的，不是把别人的画打进包：角色设定（蓝发+/呆毛/鲸鱼鳍耳/鲸尾/女仆装）
+不受版权保护，受保护的是「那一张具体的画」。见 `docs/ops/桌宠形象-2026-11-18.md`。
 
 ---
 
@@ -220,6 +226,7 @@ Composable，窗口与状态层不用改。
 *2026-11-13 立案。当时 App 处于 run 711，应用内更新刚在真机闭环。*
 *2026-11-13 晚：一期骨架落地（§8 清单 + §10 纪要），守卫 `run-desktop-pet-verification.sh` 27 条。*
 *2026-11-14：二期语音闭环落地（§11，提交 `2390cf1`，CI run 722），新增 `[H]` 段 10 条 + `F1b`/`F1c` 两条反向断言，共 39 条。*
+*2026-11-18：形象换成重绘位图（`[M]` 段 5 条守卫），窗口 96dp。*
 
 ---
 
@@ -229,7 +236,7 @@ Composable，窗口与状态层不用改。
 
 **① 窗口宽度必须跟着展开态变。** 最初想用一个固定宽度（气泡那么宽）的窗口，靠透明区域
 「看不见就不挡事」。实际不行：`TYPE_APPLICATION_OVERLAY` 在**整个矩形范围**内拦截触摸，
-透明像素一样吃事件。所以收起态窗口宽度 = 形象宽度（84dp），展开才撑到 296dp。
+透明像素一样吃事件。所以收起态窗口宽度 = 形象宽度（当时 84dp，现 96dp），展开才撑到 296dp。
 
 **② 焦点标志和窗口尺寸必须一起改。** 展开时不去掉 `FLAG_NOT_FOCUSABLE`，输入框点不出键盘；
 去掉了不补 `FLAG_NOT_TOUCH_MODAL`，整个屏幕都点不动。两个标志是同一个动作的两半。

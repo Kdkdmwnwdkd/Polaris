@@ -735,6 +735,57 @@ else
   bad "L9d 没有清空入口 —— 历史落盘之后这是必须的出口"
 fi
 
+# —— 形象资源（2026-11-18 从 Canvas 方块换成重绘位图）——
+#
+# 这一组只守三件容易悄悄坏掉的事：资源被挪进按密度缩放的目录、有人塞回一张大图、
+# 眨眼时两张图对不齐导致人物抖一下。
+AVATAR_DIR=app/src/main/res/drawable-nodpi
+AV_OPEN=$AVATAR_DIR/pet_avatar_open.webp
+AV_BLINK=$AVATAR_DIR/pet_avatar_blink.webp
+
+if [ -f "$AV_OPEN" ] && [ -f "$AV_BLINK" ]; then
+  good "M1 两张形象资源都在（drawable-nodpi，不随密度缩放）"
+else
+  bad "M1 形象资源缺失 —— 桌宠会画不出来（drawRoundRect 已经删了）"
+fi
+
+# drawable-nodpi 是刻意的：放 drawable/ 会被按 dpi 缩放，同一张图在 2x/3x 上
+# 会得到不同的有效分辨率，眨眼切换时边缘会闪。
+if [ -d "$AVATAR_DIR" ] && [ -z "$(ls "$AVATAR_DIR" | grep -v '\.webp$')" ]; then
+  good "M2 该目录只放 webp（体积是这条的验收标准，不是格式洁癖）"
+else
+  bad "M2 drawable-nodpi 里混进了非 webp 资源 —— 检查是不是有人塞了 png"
+fi
+
+big=0
+for f in "$AV_OPEN" "$AV_BLINK"; do
+  [ -f "$f" ] || continue
+  sz=$({ stat -c %s "$f" 2>/dev/null || wc -c < "$f"; })
+  [ "$sz" -gt 61440 ] && big=1
+done
+if [ "$big" -eq 0 ]; then
+  good "M3 单张形象 < 60KB（两张合计约 55KB）"
+else
+  bad "M3 形象资源超过 60KB —— 384px 的 Q 版不需要这么大"
+fi
+
+# 眨眼靠交叉淡化两张图。两张必须由**同一组** dstSize/dstOffset 绘制，
+# 否则闭眼那一帧会偏几个像素，看起来像人物抽了一下。
+draws=$(grep -c 'dstSize = dstSize' "$PANEL" 2>/dev/null || echo 0)
+offsets=$(grep -c 'dstOffset = dstOffset' "$PANEL" 2>/dev/null || echo 0)
+if [ "$draws" -eq 2 ] && [ "$offsets" -eq 2 ] && grep -q 'image = closed' "$PANEL"; then
+  good "M4 睁眼/闭眼共用同一组目标矩形（眨眼不位移）"
+else
+  bad "M4 两张图的绘制矩形不一致 —— 眨眼会抖"
+fi
+
+# 回退守卫：身体改回代码画，等于把形象又退回方块。
+if grep -q 'drawImage' "$PANEL" && ! grep -q 'drawRoundRect' "$PANEL"; then
+  good "M5 形象走位图，没有残留的方块绘制"
+else
+  bad "M5 PetPanel 里还留着 drawRoundRect，或者根本没画图"
+fi
+
 say ""
 if [ "$fail" -eq 0 ]; then
   echo "结果：$npass 通过 / 0 失败"

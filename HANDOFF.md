@@ -125,7 +125,7 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
 新增  app/.../pet/PetState.kt             开关意图 + 运行态（AppGraph 第 26 条）
       app/.../pet/PetOverlayService.kt    前台服务 + WindowManager（TYPE_APPLICATION_OVERLAY）
       app/.../pet/PetOverlay.kt           ComposeView + 手工挂三个 owner + 拖动吸附
-      app/.../pet/PetPanel.kt             形象（Canvas 自绘，无素材）+ 气泡 + 输入 + 语音入口
+      app/.../pet/PetPanel.kt             形象（位图 + Canvas 叠光晕）+ 气泡 + 输入 + 语音入口
       app/.../pet/PetAgentSession.kt      独立轻量会话（最小只读工具表）
       app/.../pet/PetVoice.kt             语音输入（SpeechRecognizer 直连 + 仲裁 + 超时）
       scripts/qa/run-desktop-pet-verification.sh   39 条守卫（A–H 八段）
@@ -152,8 +152,11 @@ bash scripts/qa/gate.sh /tmp/qa-full.log
 
 ### 3.5 三个拍板事项的结论（spec §4）
 
-1. **形象**：已定——矢量自绘（`PetPanel.kt` 里 Canvas 画，84dp，零素材）。要换正式美术资源时
-   只动那一个 Composable，窗口与状态层不用改。
+1. **形象**：已定，且**已换过一次**（2026-11-18）。一期是 `PetPanel.kt` 里 Canvas 自绘的
+   84dp 方块（零素材，用来先证明窗口能活）；现在是重绘的位图
+   `res/drawable-nodpi/pet_avatar_{open,blink}.webp`（384²，各约 28KB），窗口 96dp。
+   换形象只动 `PetBody()` 一个 Composable，窗口与状态层没改——一期把它拆出来就是为了这一步。
+   细节与取舍见 `docs/ops/桌宠形象-2026-11-18.md`。
 2. **唤醒词**：一期二期都**不做**。常驻麦克风约 1–3% 电量/小时，先证明有人用。
 3. **历史是否互通**：**不通**。桌宠定位「随手问一句」，历史只在内存里，进程死了就没。
 

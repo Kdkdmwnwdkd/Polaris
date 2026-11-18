@@ -43,15 +43,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.animation.core.LinearEasing
@@ -61,21 +65,24 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import com.beichen.polaris.R
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * 桌宠的全部视觉：一个会呼吸的小方块，加一个点开才出现的对话气泡。
+ * 桌宠的全部视觉：一个会呼吸、会眨眼的小人，加一个点开才出现的对话气泡。
  *
- * ## 为什么形象是画的
+ * ## 形象从哪来
  *
- * spec §4 给了三条路（矢量素材 / Lottie / 序列帧）。这里走第四条：**Canvas 直接画**。
- * 理由是体积与可动性——一个 84dp 的圆角身体 + 两只眼睛 + 一根天线，代码不到 60 行，
- * 零素材、零依赖，而且「眨眼」「呼吸」「思考时上下浮动」都是几个数字，改起来不用重新导出。
+ * 最早是 Canvas 现场画的圆角方块（零素材，用来证明窗口能活、能拖、能对话）。
+ * 形象定了之后换成两张重绘的位图：`pet_avatar_open` / `pet_avatar_blink`。
+ * 画是照参考图重画的，不是把别人的图打进包里——角色设定本身不受保护，
+ * 受保护的是「那一张具体的画」。
  *
- * 代价是它只能长这样了：真要一个像样的角色，还是得有美术资源。等形象定了再换，
- * 现在这版的作用是**证明窗口能活、能拖、能对话**，不是定稿。
+ * 为什么留着 Canvas 而不是直接 `Image`：录音时那圈扩散的光晕要画在人物**身后**，
+ * 而且要和呼吸共用一套动画时间轴。用 `drawImage` 叠在同一块画布上，
+ * 一个 `rememberInfiniteTransition` 就够，不必套两层 Composable。
  *
  * ## 交互
  *
@@ -776,9 +783,26 @@ private fun MenuRow(text: String, color: Color, onClick: () -> Unit) {
 /**
  * 形象本体。
  *
- * 三个动画叠在一起：整体上下浮动（呼吸）、眼睛定时闭合（眨眼）、
- * 思考时头顶那根天线的光点加快闪烁。都是 `rememberInfiniteTransition`，
- * 没有一处依赖业务状态——除了 `thinking`。
+ * ## 从「代码画的」换成「画好的图」
+ *
+ * 上一版是 Canvas 现场画的圆角方块，作用是证明窗口能活、能拖、能对话，不是定稿。
+ * 形象定下来后换成两张位图：`pet_avatar_open` / `pet_avatar_blink`，
+ * 384×384 WebP，28KB 与 27KB。两张是同一张底图重绘出来的，构图逐像素对齐
+ * （`getbbox()` 完全一致），所以眨眼只是换图，不会位移、不会抖。
+ *
+ * ## 保留的三个动画
+ *
+ * 上下浮动（呼吸）、定时换图（眨眼）、听声时向外扩散的圈，都挂在
+ * `rememberInfiniteTransition` 上，不依赖业务状态——除了 `thinking`。
+ *
+ * 画布背景是透明的：`TYPE_APPLICATION_OVERLAY` 窗口上没有底色，
+ * 图周围那圈留白必须是 alpha=0，否则会在桌面上贴出一个白方块。
+ *
+ * ## 尺寸
+ *
+ * 位图四周留了 6% 透明边，所以 96dp 窗口里人物约占 90dp。
+ * 上一版方块的身体只占窗口的 62%，换成图之后同样窗口会显得大一圈——
+ * 这也是 [PET_SIZE_DP] 84 → 96 看着并不突兀的原因。
  */
 @Composable
 private fun PetBody(
@@ -793,24 +817,29 @@ private fun PetBody(
 ) {
     val scheme = MaterialTheme.colorScheme
     val listening = voiceState is PetVoiceState.Arming || voiceState is PetVoiceState.Listening
-    val body = if (listening) scheme.primary.copy(alpha = 0.92f) else scheme.primary
-    val eye = scheme.onPrimary
-    val glow = scheme.primary.copy(alpha = 0.22f)
+
+    // 两张图常驻内存：加起来 55KB 解码后约 1.2MB，切换时不重新解码，
+    // 才不会在眨眼那一刻掉一帧。
+    val open = ImageBitmap.imageResource(R.drawable.pet_avatar_open)
+    val closed = ImageBitmap.imageResource(R.drawable.pet_avatar_blink)
 
     val transition = rememberInfiniteTransition(label = "pet")
 
+    // 呼吸。思考时快一倍——这是收起态下唯一能表达「它在跑」的东西，
+    // 因为气泡没展开时用户看不到任何文字。
     val bob by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = LinearEasing),
+            animation = tween(if (thinking) 900 else 2000, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "bob"
     )
 
-    // 眨眼：4.2 秒一轮，闭合只占 250ms。用 keyframes 而不是「随机」，
+    // 眨眼：4.2 秒一轮，闭合只占 280ms。用 keyframes 而不是「随机」，
     // 因为 Random 会让每帧都重组，且动画不再可预测。
+    // 值是「睁眼那张的不透明度」：1 = 完全睁着，0.06 = 基本闭上。
     val blink by transition.animateFloat(
         initialValue = 1f,
         targetValue = 1f,
@@ -826,26 +855,7 @@ private fun PetBody(
         label = "blink"
     )
 
-    // 天线：在听时最快（300ms 一个来回，接近人紧张时的呼吸），思考时次之，空闲时最慢。
-    // 这是「收起态下唯一能表达『它在听』的东西」——气泡没展开时用户看不到任何文字。
-    val antenna by transition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                when {
-                    listening -> 300
-                    thinking -> 520
-                    else -> 1800
-                },
-                easing = LinearEasing
-            ),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "antenna"
-    )
-
-    // 在听时从身体向外扩散的圈。只在录音期间绘制，空闲时是纯计算不画。
+    // 在听时从人物向外扩散的圈。
     val ripple by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
@@ -890,86 +900,60 @@ private fun PetBody(
     ) {
         val w = size.width
         val h = size.height
-        val lift = bob * h * 0.03f
+        val lift = bob * h * 0.025f
 
-        // 录音圈：先画，被身体盖住一半才好看（像从身体后面散出来的）
+        // 背后的光晕：听声时最亮（跟着呼吸闪），思考次之，空闲只留一点。
+        // 没有它，深色壁纸上一张深蓝头发的人物会糊进背景里。
+        val halo = when {
+            listening -> 0.32f * (1f - ripple * 0.45f)
+            thinking -> 0.18f + 0.12f * bob
+            else -> 0.08f
+        }
+        drawCircle(
+            color = scheme.primary.copy(alpha = halo),
+            radius = w * 0.44f,
+            center = Offset(w / 2f, h * 0.60f)
+        )
+
+        // 录音圈：从人物身后散出来
         if (listening) {
-            val cx = w / 2f
-            val cy = h * 0.58f
-            val r = w * (0.36f + 0.22f * ripple)
             drawCircle(
-                color = scheme.primary.copy(alpha = 0.28f * (1f - ripple)),
-                radius = r,
-                center = Offset(cx, cy)
+                color = scheme.primary.copy(alpha = 0.26f * (1f - ripple)),
+                radius = w * (0.34f + 0.26f * ripple),
+                center = Offset(w / 2f, h * 0.60f)
             )
         }
 
-        val bodyW = w * 0.76f
-        val bodyH = h * 0.62f
-        val left = (w - bodyW) / 2f
-        val top = h * 0.28f - lift
+        val side = w * 0.98f
+        val left = (w - side) / 2f
+        val top = h - side - lift
 
-        // 天线
-        val antennaX = w / 2f
-        val antennaTop = top - h * 0.14f
-        drawLine(
-            color = body.copy(alpha = 0.85f),
-            start = Offset(antennaX, top),
-            end = Offset(antennaX, antennaTop),
-            strokeWidth = w * 0.022f
-        )
-        drawCircle(
-            color = body.copy(alpha = antenna),
-            radius = w * 0.045f,
-            center = Offset(antennaX, antennaTop)
-        )
-
-        // 落地光晕
+        // 落地阴影：把它按在桌面上，而不是悬空贴图。
+        // 画在图**之前**，被脚和尾巴压住一半才自然。
         drawOval(
-            color = glow,
-            topLeft = Offset(left - w * 0.02f, top + bodyH + h * 0.03f),
-            size = Size(bodyW + w * 0.04f, h * 0.08f)
+            color = Color.Black.copy(alpha = 0.12f),
+            topLeft = Offset(left + side * 0.13f, top + side * 0.885f),
+            size = Size(side * 0.60f, side * 0.055f)
         )
 
-        // 身体
-        drawRoundRect(
-            color = body,
-            topLeft = Offset(left, top),
-            size = Size(bodyW, bodyH),
-            cornerRadius = CornerRadius(bodyH * 0.42f, bodyH * 0.42f)
+        // 两张图交叉淡化：blink 是睁眼那张的 alpha，闭眼那张拿剩下的。
+        // 这样 280ms 的闭合是渐变而不是硬切，小尺寸下不容易看出「跳帧」。
+        val dstSize = IntSize(side.toInt(), side.toInt())
+        val dstOffset = IntOffset(left.toInt(), top.toInt())
+        drawImage(
+            image = open,
+            dstOffset = dstOffset,
+            dstSize = dstSize,
+            alpha = blink,
+            filterQuality = FilterQuality.High
         )
-
-        // 眼睛
-        val eyeW = bodyW * 0.12f
-        val eyeH = bodyH * 0.2f * blink
-        val eyeY = top + bodyH * 0.42f - eyeH / 2f
-        val eyeGap = bodyW * 0.2f
-        drawRoundRect(
-            color = eye,
-            topLeft = Offset(w / 2f - eyeGap - eyeW / 2f, eyeY),
-            size = Size(eyeW, eyeH.coerceAtLeast(bodyH * 0.02f)),
-            cornerRadius = CornerRadius(eyeW / 2f, eyeW / 2f)
-        )
-        drawRoundRect(
-            color = eye,
-            topLeft = Offset(w / 2f + eyeGap - eyeW / 2f, eyeY),
-            size = Size(eyeW, eyeH.coerceAtLeast(bodyH * 0.02f)),
-            cornerRadius = CornerRadius(eyeW / 2f, eyeW / 2f)
-        )
-
-        // 嘴：思考时是一条扁椭圆（像在出声），闲置时是一条短线
-        if (thinking) {
-            drawOval(
-                color = eye.copy(alpha = 0.9f),
-                topLeft = Offset(w / 2f - bodyW * 0.08f, top + bodyH * 0.66f),
-                size = Size(bodyW * 0.16f, bodyH * 0.09f)
-            )
-        } else {
-            drawLine(
-                color = eye.copy(alpha = 0.55f),
-                start = Offset(w / 2f - bodyW * 0.06f, top + bodyH * 0.7f),
-                end = Offset(w / 2f + bodyW * 0.06f, top + bodyH * 0.7f),
-                strokeWidth = bodyH * 0.018f
+        if (blink < 1f) {
+            drawImage(
+                image = closed,
+                dstOffset = dstOffset,
+                dstSize = dstSize,
+                alpha = 1f - blink,
+                filterQuality = FilterQuality.High
             )
         }
     }
