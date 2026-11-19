@@ -92,10 +92,18 @@ fun main() {
     check("H5 契约与生产实现直连（适配层已移除）") {
         assertTrue("接口未扩参", "priorMessages: List<ChatMessage> = emptyList()" in
             read("core/src/main/java/com/beichen/polaris/core/agent/AgentLoop.kt"))
-        // 生产链路必须直接构造 RealAgentLoop：曾经的薄适配层 `core.AgentLoop` 把 20 个参数
+        // 生产链路必须直接构造 loop。曾经的薄适配层 core.AgentLoop 把 20 个参数
         // 原样转发，却因「两处默认值必须一致」靠人记，先后导致 maxSteps=16 截断任务、
         // providerRetry=2 让 429 第三档退避永不触发。删掉层比维护同步更可靠。
-        assertTrue("ChatViewModel 未直连 RealAgentLoop", "private val loop = RealAgentLoop(" in chatVm)
+        //
+        // P1 第三轮起唯一构造点收敛到 AgentLoopFactory（v4 §3.2 不变量 1），
+        // ChatViewModel 改走工厂而非直接 RealAgentLoop。它与「薄适配层」的区别是：
+        // 工厂是**有动机的收口层**（静态门禁 C1 守「唯一构造点」，未来还会在这里绑
+        // runtime / RunSource），不是无动机的转发层——但「工厂与 RealAgentLoop 的默认值
+        // 必须一致」这条靠人记的风险仍在，由 §18.6 如实挂账（LoopDefaults 单一真源是
+        // 后续项）。这条断言守的是「直连唯一构造点，不绕回直接 new」。
+        assertTrue("ChatViewModel 未直连唯一构造点 AgentLoopFactory",
+            "private val loop = AgentLoopFactory.create(" in chatVm)
         assertTrue("适配层又回来了", "class AgentLoop(" !in
             read("core/src/main/java/com/beichen/polaris/core/AgentLoop.kt"))
     }
