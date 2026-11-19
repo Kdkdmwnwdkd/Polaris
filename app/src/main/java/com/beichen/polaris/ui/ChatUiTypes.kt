@@ -1,5 +1,6 @@
 package com.beichen.polaris.ui
 
+import com.beichen.polaris.core.agent.ApprovalGrant
 import com.beichen.polaris.core.llm.FailureKind
 import com.beichen.polaris.core.llm.RecoveryAction
 import kotlinx.coroutines.CompletableDeferred
