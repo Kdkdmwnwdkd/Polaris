@@ -27,7 +27,7 @@
   什么都没跑的 job 显示绿色，正是本项目最忌讳的那种绿。
 
 用法：
-    python3 scripts/qa/mutation-gate.py [--verbose] [--strict] [--only <id 子串>]
+    python3 scripts/qa/mutation-gate.py [--verbose] [--strict] [--only <id 子串>] [--group <组名>]
 
 先跑基线（三个组的未变异断言必须全绿），再逐条注入变异。基线红时直接退出：
 基线红的时候每一条变异都会「CAUGHT」，那是假报告。
@@ -95,6 +95,17 @@ GROUPS = {
         ],
         "classes": [
             "com.beichen.polaris.core.DiagnosticsRedactionTest",
+        ],
+    },
+    # 本地模型的工具调用解析（第十二轮）。零依赖组：这个文件只 import kotlinx.serialization，
+    # 源码闭包就它自己一个——编译 360 行，跑一遍不到一秒，是全场最便宜的一组。
+    "parser": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt",
+            "core/src/test/java/com/beichen/polaris/core/llm/local/LocalToolCallParserTest.kt",
+        ],
+        "classes": [
+            "com.beichen.polaris.core.llm.local.LocalToolCallParserTest",
         ],
     },
     "storage": {
@@ -514,6 +525,101 @@ MUTATIONS = [
         "new": '''        Rule(Regex("""[A-Za-z0-9]{8,}""")) { MASK },''',
         "expect": ["UUID 与时间戳不被误伤", "普通 JSON 参数不被误伤"],
     },
+    # —— 第十二轮：本地模型的工具调用解析 ————————————————————————————
+    {
+        "id": "P1 嵌套形态只认名字不给参数（= 修前行为）",
+        "group": "parser",
+        "file": "core/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt",
+        "old": """        argsIn(target.holder)?.let { return it }
+        val dropKey = if (target.nested) "name" else target.nameKey""",
+        "new": """        argsIn(target.holder)?.takeIf { !target.nested }?.let { return it }
+        val dropKey = target.nameKey""",
+        "expect": ["function 形态要带出 arguments"],
+    },
+    {
+        "id": "P2 不认 tool_calls 数组",
+        "group": "parser",
+        "file": "core/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt",
+        "old": """        val calls = obj["tool_calls"] as? JsonArray
+        if (calls != null) {
+            for (e in calls) {
+                val fn = (e as? JsonObject)?.get("function") as? JsonObject ?: continue
+                nameIn(fn, available)?.let { (nk, n) -> return Target(fn, nk, n, nested = true) }
+            }
+        }""",
+        "new": """        val calls: JsonArray? = null""",
+        "expect": ["tool_calls 数组取第一个"],
+    },
+    {
+        "id": "P3 不认 function_call 形态",
+        "group": "parser",
+        "file": "core/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt",
+        "old": '''    private val NEST_KEYS = listOf("function", "function_call")''',
+        "new": '''    private val NEST_KEYS = listOf("function")''',
+        "expect": ["function_call 形态"],
+    },
+    {
+        "id": "P4 尾逗号修复不区分字符串内外（= 修前行为，改内容）",
+        "group": "parser",
+        "file": "core/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt",
+        "old": """        t = replaceOutsideStrings(t, TRAILING_COMMA) { it.groupValues[1] }""",
+        "new": """        t = t.replace(TRAILING_COMMA) { it.groupValues[1] }""",
+        "expect": [
+            "内容里的 逗号加右花括号 不被当成尾逗号",
+            "内容里的 逗号加右方括号 不被当成尾逗号",
+        ],
+    },
+    {
+        "id": "P5 Python 字面量修复不区分字符串内外（= 修前行为，改内容）",
+        "group": "parser",
+        "file": "core/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt",
+        "old": """        t = replaceOutsideStrings(t, PY_TRUE) { "true" }""",
+        "new": """        t = t.replace(PY_TRUE, "true")""",
+        "expect": ["内容里的 True 不被改成小写"],
+    },
+    {
+        "id": "P6 只取第一个花括号（= 修前行为，解说里的括号让调用作废）",
+        "group": "parser",
+        "file": "core/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt",
+        "old": """            out.add(text.substring(i, end + 1))
+            i = end + 1""",
+        "new": """            out.add(text.substring(i, end + 1))
+            break""",
+        "expect": ["先解释再调用时取到的是 JSON 而不是解说里的括号"],
+    },
+    {
+        "id": "P7 单引号不统一成双引号（值里带引号）",
+        "group": "parser",
+        "file": "core/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt",
+        "old": """        if (!t.contains('"')) t = t.replace('\\'', '"')""",
+        "new": """        if (!t.contains('"') && false) t = t.replace('\\'', '"')""",
+        "expect": ["整段用单引号定界时换成双引号"],
+    },
+    {
+        # 反向变异：只防「丢参数」会让实现越来越激进，把合法的参数名也剔掉。
+        "id": "P8 平铺兜底把 name 一律剔掉（丢 use_skill 的技能名）",
+        "group": "parser",
+        "file": "core/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt",
+        "old": """        val dropKey = if (target.nested) "name" else target.nameKey""",
+        "new": '''        val dropKey = "name"''',
+        "expect": ["参数平铺时其余顶层键都算参数"],
+    },
+    {
+        "id": "P9 名字里的括号不截断（read_file(path=...) 认不出）",
+        "group": "parser",
+        "file": "core/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt",
+        "old": """            val cleaned = raw.substringBefore('(').substringBefore(' ').trim()""",
+        "new": """            val cleaned = raw.trim()""",
+        "expect": ["混写 名字带括号 时括号后面的丢掉"],
+    },
+    {
+        "id": "P10 表外名字照单全收（模型瞎编什么就执行什么）",
+        "group": "parser",
+        "file": "core/src/main/java/com/beichen/polaris/core/llm/local/LocalToolCallParser.kt",
+        "old": """        if (raw in available) return raw""",
+        "new": """        return raw""",
+        "expect": ["表外的名字一律不返回"],
+    },
 ]
 
 
@@ -746,6 +852,16 @@ def main() -> int:
     if "--only" in sys.argv:
         idx = sys.argv.index("--only")
         only = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else ""
+    # --group <组名>：只跑一组。基线与变异一起收窄——只为调一个新组时，
+    # 没必要把五组的编译都过一遍。**收窄了就必须说出收窄了**：结尾那行汇总
+    # 会打印「只跑了 X 组」，免得把一份片面的报告当成全量结论。
+    only_group = None
+    if "--group" in sys.argv:
+        idx = sys.argv.index("--group")
+        only_group = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else ""
+        if only_group not in GROUPS:
+            print(f"没有这个组：{only_group}（可选：{', '.join(sorted(GROUPS))}）")
+            return 2
     deps = find_classpath()
     if deps is None:
         if strict:
@@ -763,6 +879,8 @@ def main() -> int:
     # 给出的是一份看起来可信的假报告。这与 `--strict` 是同一件事的两面：
     # 缺环境不装绿，坏基线也不装绿。
     for name in sorted(GROUPS):
+        if only_group is not None and name != only_group:
+            continue
         group = GROUPS[name]
         outdir = tempfile.mkdtemp(prefix="mut-base-")
         try:
@@ -785,6 +903,8 @@ def main() -> int:
 
     rows, failed = [], 0
     for mut in MUTATIONS:
+        if only_group is not None and mut.get("group", "approval") != only_group:
+            continue
         if only is not None and only not in mut["id"]:
             continue
         target = os.path.join(ROOT, mut["file"])
@@ -856,6 +976,11 @@ def main() -> int:
     if failed:
         print(f"变异门禁：{failed} 条未通过（断言没有判别力，或变异定义失效）")
         return 1
+    if only_group is not None or only is not None:
+        # 收窄跑必须自报收窄，否则「N 条全部被捕获」会被读成全量结论
+        scope = f"组 {only_group}" if only_group else f"id 含「{only}」"
+        print(f"变异门禁：{len(rows)} 条全部被捕获（**只跑了{scope}，不是全量**）")
+        return 0
     print(f"变异门禁：{len(rows)} 条全部被捕获")
     return 0
 
