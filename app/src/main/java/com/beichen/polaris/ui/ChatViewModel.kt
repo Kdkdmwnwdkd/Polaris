@@ -35,6 +35,7 @@ import com.beichen.polaris.automation.UiTreeTool
 import com.beichen.polaris.core.runtime.AgentLoopFactory
 import com.beichen.polaris.core.runtime.AgentRuntime
 import com.beichen.polaris.core.runtime.RunSource
+import com.beichen.polaris.core.runtime.RuntimeSessions
 import com.beichen.polaris.core.agent.TurnObservers
 import com.beichen.polaris.core.capability.CapabilityAuditReporter
 import com.beichen.polaris.core.capability.ToolActivationStore
@@ -1217,8 +1218,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      *  启动即崩「Cannot create an instance of ChatViewModel」——lambda 延迟求值，编译期毫无征兆；
      *  by lazy 也救不了（delegate 字段同样按声明序赋值）。类型显式标注是因为三个 lambda 反向
      *  引用本类成员，交给推断会撞上 K1 的 recursive problem，且报错指向无关调用。 */
+    private val runtime = AgentRuntime.shared()  // 与 loop 同一实例；取消时靠它作废旧代次
+
     private val generation: GenerationRunController = GenerationRunController(
         scope = viewModelScope,
+        onCancelGeneration = { runtime.cancel(RuntimeSessions.UI_MAIN) },
         activeId = { _activeConversationId.value },
         onStarted = { _truncationNotice.value = null },
         onSettling = { owner -> projection.settleInterrupted(owner) },
@@ -1560,13 +1564,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 未在运行时调用为 no-op。
      */
     override fun stop() {
-        // P1 第四轮：先作废旧代次，再发取消信号。
-        //
-        // 顺序不能反：`job.cancel()` 只是发出信号，取消真正传播到 loop 还要一会儿；
-        // 这段窗口里工具并行线程推来的事件仍会被 [com.beichen.polaris.core.runtime.TurnEventGate]
-        // 当作「当前回合」透传，新回合的界面上就会凭空长出旧回合的工具卡。
-        // 先自增代次号，窗口内的事件当场过期。
-        if (isRunning.value) runtime.cancel(MAIN_SESSION)
         if (!generation.cancel()) return
         AgentLogger.i("Chat", "用户请求停止运行")
         // W-14：挂起中的 ask_user 一并唤醒（否则协程被取消后 deferred 悬着，卡片不消失）
@@ -2038,23 +2035,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             ok
         }
 
-    /**
-     * 回合运行时（P1 第四轮）：主界面这一路回合的身份与所有权。
-     *
-     * 与 loop 用的是**同一个实例**（进程级单例）：`stop()` 取消回合时靠它自增代次号，
-     * 若这里另取一个实例，`cancel` 打在一个没人用的表上——事件照旧透传，
-     * 排查时会以为「代次号机制没生效」。
-     */
-    private val runtime = AgentRuntime.shared()
-
     private val loop = AgentLoopFactory.create(
         llmProvider = { buildMainClient() },
         registry = registry,
-        // 队列键：主界面同一时刻只跑一个回合。多会话切换由 isRunning 全局串行保证，
-        // 所以固定 session 不会把两个会话误当成同一个。
-        session = MAIN_SESSION,
-        source = RunSource.MAIN,
-        runtime = runtime,
+        session = RuntimeSessions.UI_MAIN, source = RunSource.MAIN, runtime = runtime,
         consent = Consent.ask { tool, args -> approvalHandler(tool, args) },
         // 接缝③：第一个真实守卫（此前 `productionSeams` 全仓零调用）。必须走它而不是
         // `AgentSeams(...)`：日志口子只在那里接回 AgentLogger，直接构造会让拒绝记录静默丢失。
@@ -2529,17 +2513,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     /** 功能四（P0-2）：附件图片长边上限——兼顾视觉模型识别效果与请求体积。 */
     private companion object {
-        /**
-         * 主界面这一路的回合身份（队列键）。与 [AgentRuntime] 的代次号表配套：
-         * `stop()` 用它作废旧回合，[com.beichen.polaris.core.runtime.RuntimeBoundAgentLoop]
-         * 用它排队。
-         *
-         * 为什么是常量而不是按会话 id：主界面的回合全程串行（`isRunning` 全局一个），
-         * 同一时刻不可能有两个会话在跑。按会话 id 建键只会让「同一个入口」在 runtime
-         * 眼里变成 N 个互不相干的身份，取消时还得遍历所有会话——收益为零。
-         */
-        const val MAIN_SESSION = "ui:main"
-
         const val MAX_EDGE = 1024
 
         /**
@@ -2737,9 +2710,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                         AgentLogger.i("Chat", "发送触发打断：stop=${decision.stop}")
                         // 必须先真的等旧一轮收尾（见 cancelAndWait 的注释），
                         // 否则旧轮的 finish 会抹掉新一轮的运行态。
-                        // P1 第四轮：同 stop()——先作废旧代次再取消，取消传播期间
-                        // 旧回合的迟到事件不会渗进新一轮。
-                        runtime.cancel(MAIN_SESSION)
                         val ok = generation.cancelAndWait(INTERRUPT_WAIT_MS)
                         if (!ok) {
                             // 超时说明旧回合连取消都不响应。此时开始新一轮会造成两轮重叠，

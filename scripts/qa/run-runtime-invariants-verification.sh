@@ -22,6 +22,7 @@ APP=app/src/main/java/com/beichen/polaris
 RT="$CORE/runtime/AgentRuntime.kt"
 BOUND="$CORE/runtime/RuntimeBoundAgentLoop.kt"
 FACTORY="$CORE/runtime/AgentLoopFactory.kt"
+CTRL="$APP/ui/GenerationRunController.kt"
 SUB="$CORE/agent/SubAgentRunner.kt"
 VM="$APP/ui/ChatViewModel.kt"
 PET="$APP/pet/PetAgentSession.kt"
@@ -200,10 +201,15 @@ else
   fail "E5 代次判断没按「开始类丢、收尾类留」——取消后 UI 或永久停在「执行中」，或旧卡污染新回合"
 fi
 
-if [ "$(grep -c 'runtime\.cancel(' "$VM" | tr -d ' ')" -ge 2 ]; then
-  pass "E6 ChatViewModel 的 stop 与「发送打断」两条路径都作废旧代次"
+# 取消入口有两个（cancel / cancelAndWait），将来还会有第三个——所以「作废旧代次」
+# 不写在调用方，而是收进 GenerationRunController 的 onCancelGeneration：在 job.cancel()
+# 之前触发。断言两件事：两个入口都调了它；宿主真的把作废接到了 runtime。
+cancels=$(grep -c 'onCancelGeneration()' "$CTRL" | tr -d ' ')
+cancel_hooked=$(grep -c 'onCancelGeneration = { runtime\.cancel(' "$VM" | tr -d ' ')
+if [ "$cancels" -ge 2 ] && [ "$cancel_hooked" -ge 1 ]; then
+  pass "E6 取消入口收在 controller：cancel/cancelAndWait 都在 job.cancel 前作废旧代次（$cancels 处）"
 else
-  fail "E6 只有 $([ "$(grep -c 'runtime\.cancel(' "$VM" | tr -d ' ')" -ge 1 ] && echo 一处 || echo 零处)存在 runtime.cancel(——代次号不自增，闸门永远放行"
+  fail "E6 取消没接到代次号（入口 $cancels 处 / 宿主接线 $cancel_hooked 处）——闸门永远放行"
 fi
 
 echo ""

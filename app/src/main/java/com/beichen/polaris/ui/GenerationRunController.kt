@@ -68,6 +68,14 @@ internal class GenerationRunController(
      * 现在状态是独立的类，钩子让「开始/收尾/复位」的顺序变成可断言的事实。
      */
     private val hooks: GenerationRunHooks = GenerationRunHooks.None,
+    /**
+     * 回合取消前的第一件事：作废旧代次（P1 第四轮）。
+     *
+     * 放在这里而不是让每个调用方自己记得：取消入口有两个（[cancel] 与 [cancelAndWait]），
+     * 将来还会有第三个。作废旧代次必须在 `job.cancel()` **之前**——取消信号传播到 loop
+     * 还有一段窗口，其间旧回合的迟到事件仍会被事件闸门当成当前回合透传。
+     */
+    private val onCancelGeneration: () -> Unit = {},
 ) {
 
     private val draftLock = Any()
@@ -216,6 +224,7 @@ internal class GenerationRunController(
     /** 用户点「停止」：取消在途协程。未在运行时返回 false（no-op）。 */
     fun cancel(): Boolean {
         val j = job ?: return false
+        onCancelGeneration()
         j.cancel()
         job = null
         return true
@@ -237,6 +246,7 @@ internal class GenerationRunController(
      */
     suspend fun cancelAndWait(timeoutMs: Long): Boolean {
         val j = job ?: return true
+        onCancelGeneration()
         j.cancel()
         return withTimeoutOrNull(timeoutMs) {
             j.join()

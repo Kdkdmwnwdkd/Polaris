@@ -8,6 +8,7 @@ import com.beichen.polaris.core.agent.journal.RunScope
 import com.beichen.polaris.core.runtime.AgentLoopFactory
 import com.beichen.polaris.core.runtime.AgentRuntime
 import com.beichen.polaris.core.runtime.RunSource
+import com.beichen.polaris.core.runtime.RuntimeSessions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -114,11 +115,8 @@ class SubAgentRunner(
                     AgentLoopFactory.create(
                         llmProvider = llmProvider,
                         registry = buildRegistry(),
-                        // 队列键按序号而不是标题：两个同名子任务（比如「读 a.kt」派两次）
-                        // 是**两个独立任务**，互斥会让 cloud=2 的并发退化成 1。
-                        // 子代理之间的并发由许可层（cloud=2）负责，队列层只答应「同一任务
-                        // 不会同时跑两份」——而这里每个序号只对应一个 async，天然成立。
-                        session = "sub:$index",
+                        // 按序号不按标题：同名子任务是两个独立任务，互斥会把 cloud=2 压回 1。
+                        session = RuntimeSessions.subAgent(index),
                         source = RunSource.SUBAGENT,
                         runtime = runtime,
                         systemPrompt = SubAgentLogic.systemPrompt(task.title),
