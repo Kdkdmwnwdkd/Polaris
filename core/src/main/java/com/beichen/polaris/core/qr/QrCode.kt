@@ -23,9 +23,14 @@ object QrCode {
         fun set(row: Int, col: Int, value: Boolean) { dark[row * size + col] = value }
     }
 
-    /** 负载超过全部支持版本的容量时抛出（不静默截断）。 */
-    class QrTooLongException(val bytes: Int) :
-        Exception("payload $bytes bytes exceeds max capacity (v13/L)")
+    /**
+     * 负载超过全部支持版本的容量时抛出（不静默截断）。
+     *
+     * 消息里的档位按 [level] 打印——原来写死 `(v13/L)`，M 档报错时会说「L 档满了」，
+     * 用户按提示去精简内容，方向从一开始就是错的。
+     */
+    class QrTooLongException(val bytes: Int, val level: Int = 0) :
+        Exception("payload $bytes bytes exceeds max capacity (v13/${if (level == 0) "L" else "M"})")
 
     // —— GF(256)，本原多项式 0x11D（QR 标准）——
     private val EXP = IntArray(512)
@@ -107,16 +112,26 @@ object QrCode {
             BlockSpec(22, listOf(8 to 37, 1 to 38))),
     )
 
-    /** 某档位能装的最大字节数（末版数据码字 − 模式与计数头保守 2 码字）。 */
-    fun capacityBytes(level: Int): Int = VERSIONS.last().spec(level).dataCodewords - 2
+    /**
+     * 某档位能装的最大字节数（末版数据码字 − 模式 + 计数头）。
+     *
+     * 计数位宽按 v13 算（16 位）：`(428×8−20)/8 = 425`（L）、`(334×8−20)/8 = 331`（M）。
+     * 旧实现写的是 `dataCodewords − 2`，把 20 位头当成 16 位，两个档位都**多报 1 字节**——
+     * 拿它当输入上限提示时，用户按提示填满会在 [encode] 里吃到 [QrTooLongException]。
+     */
+    fun capacityBytes(level: Int): Int {
+        val spec = VERSIONS.last().spec(level)
+        val headerBits = 4 + 16
+        return (spec.dataCodewords * 8 - headerBits) / 8
+    }
 
     /** 主入口：文本 → 二维码矩阵。选能装下的最小版本。 */
     fun encode(text: String, level: Int = 1): Matrix {
         val data = text.toByteArray(Charsets.UTF_8)
-        if (data.size > capacityBytes(level)) throw QrTooLongException(data.size)
+        if (data.size > capacityBytes(level)) throw QrTooLongException(data.size, level)
         val ver = VERSIONS.firstOrNull { v ->
             dataCodewordNeed(data.size, v.version) <= v.spec(level).dataCodewords
-        } ?: throw QrTooLongException(data.size)
+        } ?: throw QrTooLongException(data.size, level)
 
         val spec = ver.spec(level)
         val totalData = spec.dataCodewords
@@ -248,9 +263,16 @@ object QrCode {
                 (r == centers.last() && c == 6)) continue
             for (dr in -2..2) for (dc in -2..2) mark(r + dr, c + dc)
         }
-        // 格式信息带（两份）
+        // 格式信息带（两份），两段长度不同：
+        //   第一份 = col 8 的 row 0..8 + row 8 的 col 0..8（各 8 格，跳过时序带）；
+        //   第二份 = row 8 的 col size-8..size-1（8 格）+ col 8 的 row size-7..size-1（7 格）。
+        // 竖段是 7 格：row size-8 / col 8 是**暗模块**（下面单独标记），既不是格式信息位、
+        // 也不是数据区。这一格曾经掩盖过一个真缺陷——drawFormat 的第二份按 8+8 写时，
+        // 位 7 落在 (row8, col size-8) 没人写，而多出来的那一格正好压在暗模块上，
+        // 于是「少写一位」在矩阵里看不出来（暗模块恒为深，覆盖了它）。
         for (i in 0..8) { mark(8, i); mark(i, 8) }
-        for (i in 0..7) { mark(8, size - 1 - i); mark(size - 1 - i, 8) }
+        for (i in 0..7) mark(8, size - 1 - i)
+        for (i in 0..6) mark(size - 1 - i, 8)
         // 版本信息带（v7+）：左下 3 行 × 6 列 + 右上 6 行 × 3 列
         if (version >= 7) {
             for (r in size - 11 until size - 8) for (c in 0..5) mark(r, c)
@@ -308,9 +330,12 @@ object QrCode {
         m.set(8, 8, bits[7] == 1)
         m.set(7, 8, bits[8] == 1)
         for (i in 9..14) m.set(14 - i, 8, bits[i] == 1)
-        // 第二份：右上横排 + 左下竖排
-        for (i in 0..7) m.set(size - 1 - i, 8, bits[i] == 1)
-        for (i in 8..14) m.set(8, size - 15 + i, bits[i] == 1)
+        // 第二份：右上横排（位 0..7）+ 左下竖排（位 8..14）。
+        // 位 7 落在 (row8, col size-8)，位 8 落在 (row size-7, col8)——横段 8 格、竖段 7 格。
+        // 2026-11-19 之前竖段按 8 格写、横段从 size-7 起，结果**位 7 两个位置都没写**：
+        // 解码器读到的那份恒定错 1 位，只能靠 BCH 纠回来（冗余从「可纠 3 位」降到 2 位）。
+        for (i in 0..7) m.set(8, size - 1 - i, bits[14 - i] == 1)
+        for (i in 8..14) m.set(size - 15 + i, 8, bits[14 - i] == 1)
         m.set(size - 8, 8, true) // 暗模块恒深
     }
 

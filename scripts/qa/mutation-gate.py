@@ -108,6 +108,20 @@ GROUPS = {
             "com.beichen.polaris.core.llm.local.LocalToolCallParserTest",
         ],
     },
+    # 二维码编码（本轮）。零依赖组：QrCode 只用 stdlib，解码器与 fixture 都在测试侧，
+    # 编 380 行不到两秒。它的判据是「解一遍」——比任何 grep 都强，但也就意味着
+    # 变异必须落在**编码**侧，落在解码器上只会证明解码器错了。
+    "qrcode": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/qr/QrCode.kt",
+            "core/src/test/java/com/beichen/polaris/core/qr/QrDecoder.kt",
+            "core/src/test/java/com/beichen/polaris/core/qr/QrFixtures.kt",
+            "core/src/test/java/com/beichen/polaris/core/qr/QrCodeTest.kt",
+        ],
+        "classes": [
+            "com.beichen.polaris.core.qr.QrCodeTest",
+        ],
+    },
     "storage": {
         "sources": [
             "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
@@ -619,6 +633,86 @@ MUTATIONS = [
         "old": """        if (raw in available) return raw""",
         "new": """        return raw""",
         "expect": ["表外的名字一律不返回"],
+    },
+    # —— 二维码（本轮）：每条都对应一个「编错了也不会抛异常」的位置 ——
+    {
+        "id": "Q1 格式信息第二份按 8+8 格写（= 修前行为，位 7 无家可归）",
+        "group": "qrcode",
+        "file": "core/src/main/java/com/beichen/polaris/core/qr/QrCode.kt",
+        "old": """        for (i in 0..7) m.set(8, size - 1 - i, bits[14 - i] == 1)
+        for (i in 8..14) m.set(size - 15 + i, 8, bits[14 - i] == 1)""",
+        "new": """        for (i in 0..7) m.set(size - 1 - i, 8, bits[i] == 1)
+        for (i in 8..14) m.set(8, size - 15 + i, bits[i] == 1)""",
+        "expect": ["编码结果的两份格式信息逐位相同", "编码结果与参考实现逐格相同"],
+    },
+    {
+        "id": "Q3 容量按 dataCodewords 减 2（把 20 位头当 16 位）",
+        "group": "qrcode",
+        "file": "core/src/main/java/com/beichen/polaris/core/qr/QrCode.kt",
+        "old": """        val spec = VERSIONS.last().spec(level)
+        val headerBits = 4 + 16
+        return (spec.dataCodewords * 8 - headerBits) / 8""",
+        "new": """        return VERSIONS.last().spec(level).dataCodewords - 2""",
+        "expect": ["容量按 16 位计数头算"],
+    },
+    {
+        "id": "Q4 异常消息写死 L 档",
+        "group": "qrcode",
+        "file": "core/src/main/java/com/beichen/polaris/core/qr/QrCode.kt",
+        "old": """        Exception("payload $bytes bytes exceeds max capacity (v13/${if (level == 0) "L" else "M"})")""",
+        "new": """        Exception("payload $bytes bytes exceeds max capacity (v13/L)")""",
+        "expect": ["异常里的档位与真实档位一致"],
+    },
+    {
+        "id": "Q5 暗模块写成浅色（定位基准丢了）",
+        "group": "qrcode",
+        "file": "core/src/main/java/com/beichen/polaris/core/qr/QrCode.kt",
+        "old": """        m.set(size - 8, 8, true) // 暗模块恒深""",
+        "new": """        m.set(size - 8, 8, false) // 暗模块恒深""",
+        "expect": ["暗模块恒为深", "编码结果与参考实现逐格相同"],
+    },
+    {
+        "id": "Q6 时序图形奇偶取反",
+        "group": "qrcode",
+        "file": "core/src/main/java/com/beichen/polaris/core/qr/QrCode.kt",
+        "old": """                m.set(6, i, i % 2 == 0)
+                m.set(i, 6, i % 2 == 0)""",
+        "new": """                m.set(6, i, i % 2 == 1)
+                m.set(i, 6, i % 2 == 1)""",
+        "expect": ["时序图形逐格交替", "编码结果与参考实现逐格相同"],
+    },
+    {
+        "id": "Q7 对齐图形不跳过与定位图形重叠的三个角",
+        "group": "qrcode",
+        "file": "core/src/main/java/com/beichen/polaris/core/qr/QrCode.kt",
+        "old": """                if ((r == 6 && c == 6) || (r == 6 && c == centers.last()) ||
+                    (r == centers.last() && c == 6)) continue""",
+        "new": """                if (false) continue""",
+        "expect": ["编码结果与参考实现逐格相同"],
+    },
+    {
+        "id": "Q8 格式信息位序整体反转（MSB/LSB 搞错）",
+        "group": "qrcode",
+        "file": "core/src/main/java/com/beichen/polaris/core/qr/QrCode.kt",
+        "old": """        val bits = IntArray(15) { fmt shr (14 - it) and 1 }""",
+        "new": """        val bits = IntArray(15) { fmt shr it and 1 }""",
+        "expect": ["编码结果与参考实现逐格相同"],
+    },
+    {
+        "id": "Q9 交织时块顺序反转",
+        "group": "qrcode",
+        "file": "core/src/main/java/com/beichen/polaris/core/qr/QrCode.kt",
+        "old": """            blocks.forEach { blk -> if (i < blk.size) interleaved[p++] = blk[i] }""",
+        "new": """            blocks.reversed().forEach { blk -> if (i < blk.size) interleaved[p++] = blk[i] }""",
+        "expect": ["每个版本的块结构都能被独立解码器还原"],
+    },
+    {
+        "id": "Q10 总选最后一个版本（永远 v13）",
+        "group": "qrcode",
+        "file": "core/src/main/java/com/beichen/polaris/core/qr/QrCode.kt",
+        "old": """        val ver = VERSIONS.firstOrNull { v ->""",
+        "new": """        val ver = VERSIONS.lastOrNull { v ->""",
+        "expect": ["长度一变化就选到能装下的最小版本", "编码结果与参考实现逐格相同"],
     },
 ]
 
