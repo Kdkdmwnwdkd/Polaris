@@ -714,6 +714,7 @@ P1 期间暂停新功能（冻结令）、真机机型（矩阵文档给了建�
 | 开源项目机制调研 | `docs/research/10/11/12-*.md` |
 | QA 怎么跑、门禁有哪几条 | `scripts/qa/gate.sh` 头部注释、`docs/ops/QA-GATE-CHAIN-HARDENING.md` |
 | 沙箱网络 / GitHub 通道 | `docs/ops/沙箱网络与GitHub通道说明.md` |
+| targetSdk 为什么是 28 / 升级那天要做什么 | [`docs/ops/targetSdk-升级清单.md`](docs/ops/targetSdk-升级清单.md) |
 
 ---
 

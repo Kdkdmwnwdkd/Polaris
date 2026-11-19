@@ -32,6 +32,7 @@ Android 本地 AI Agent —— Kotlin / Jetpack Compose，原创实现，四层�
 | **参考了谁、借了什么** | [参照谱系](docs/architecture/AgentKit-参照谱系-2026-11-05.md) · [第三方声明](THIRD_PARTY_NOTICES.md) |
 | **交互 / 视觉规范** | [UX 规范](docs/specs/agentkit-ux-spec-v1.md) · [视觉规范 v3](docs/specs/agentkit-visual-spec-v3.md) |
 | **历史周报与交付记录** | [`docs/archive/`](docs/archive/)：W-46~W-87 周报、各轮模拟器实测与交付报告 |
+| **targetSdk 为什么是 28 / 升级清单** | [targetSdk 升级清单](docs/ops/targetSdk-升级清单.md)：刻意选择（容器需数据目录 execve），升级是「先解决容器执行模型」的结构改动 |
 
 目录总览见 [`docs/README.md`](docs/README.md)。研究材料见 [`docs/research/`](docs/research/)（参照仓库的能力面扫描，只读思路、独立实现）。
 
@@ -76,6 +77,7 @@ bash scripts/qa/run-all.sh
 3. **净室重写**：参照仓库只读思路、不抄代码
 4. **失败永不崩**：外部数据入口一律降级（JSON 安全访问、分享降级、通知静默降级）
 5. **前向兼容**：落盘格式新增字段一律带默认值
+6. **`targetSdk=28` 是刻意选择，不是偷懒**：Android 10+ 禁止 `targetSdk>=29` 的应用从数据目录 `execve`，而容器（proot/busybox/node/python）全落在 `filesDir`，升了容器就死。代价（Scoped Storage 失效、上不了 Play）与升级路线见 [targetSdk 升级清单](docs/ops/targetSdk-升级清单.md)
 
 ---
 
