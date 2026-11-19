@@ -7,6 +7,7 @@ import com.beichen.polaris.core.ToolRegistry
 import com.beichen.polaris.core.agent.journal.RunScope
 import com.beichen.polaris.core.runtime.AgentLoopFactory
 import com.beichen.polaris.core.runtime.AgentRuntime
+import com.beichen.polaris.core.runtime.RunSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -80,8 +81,8 @@ class SubAgentRunner(
         // 谁先 withPermit("cloud") 拿到额度谁先跑，拿不到就挂起排队。429 退避
         // 与 Key 池在许可层之上兜底（v4 §3.2：子代理保留 N 路，但每一路都必须
         // 借许可）。
-        tasks.map { task ->
-            async(Dispatchers.IO) { runOne(task) }
+        tasks.mapIndexed { index, task ->
+            async(Dispatchers.IO) { runOne(task, index) }
         }.awaitAll()
     }
 
@@ -93,7 +94,7 @@ class SubAgentRunner(
      *  - 其他 [CancellationException]：外层取消（停止按钮）→ 必须重抛，否则停止无效；
      *  - 其余异常：模型/网络问题 → 记为失败并带上原因。
      */
-    private suspend fun runOne(task: SubTask): SubAgentOutcome {
+    private suspend fun runOne(task: SubTask, index: Int): SubAgentOutcome {
         val started = System.currentTimeMillis()
         return try {
             // R7：子代理并入主回合的日志与时间线。
@@ -113,6 +114,13 @@ class SubAgentRunner(
                     AgentLoopFactory.create(
                         llmProvider = llmProvider,
                         registry = buildRegistry(),
+                        // 队列键按序号而不是标题：两个同名子任务（比如「读 a.kt」派两次）
+                        // 是**两个独立任务**，互斥会让 cloud=2 的并发退化成 1。
+                        // 子代理之间的并发由许可层（cloud=2）负责，队列层只答应「同一任务
+                        // 不会同时跑两份」——而这里每个序号只对应一个 async，天然成立。
+                        session = "sub:$index",
+                        source = RunSource.SUBAGENT,
+                        runtime = runtime,
                         systemPrompt = SubAgentLogic.systemPrompt(task.title),
                         maxSteps = maxSteps,
                         maxParallelTools = 2,

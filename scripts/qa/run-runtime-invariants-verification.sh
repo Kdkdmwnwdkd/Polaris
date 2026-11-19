@@ -9,7 +9,9 @@
 #           可勾对——让「还剩几条」不再是一句口头的估计。
 #
 # 三入口 loop 收口（P1 第三轮）已把 C1 / B4 / D1a 收成 PASS 硬断言；
-# 当前唯一 PENDING 是 D1b（ui/pet 仍 import ToolRegistry），要等 ToolAssembler
+# 执行权收口（P1 第四轮）新增 [E] 段——构造点收拢之后，回合必须真的向 runtime
+# 登记（acquireTurn / close）、事件必须按代次过滤，否则队列层只是库里的死代码。
+# 当前唯一 PENDING 仍是 D1b（ui/pet 仍 import ToolRegistry），要等 ToolAssembler
 # （工具装配收口，v4 §3.3）落地后才关。
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -18,6 +20,8 @@ cd "$ROOT"
 CORE=core/src/main/java/com/beichen/polaris/core
 APP=app/src/main/java/com/beichen/polaris
 RT="$CORE/runtime/AgentRuntime.kt"
+BOUND="$CORE/runtime/RuntimeBoundAgentLoop.kt"
+FACTORY="$CORE/runtime/AgentLoopFactory.kt"
 SUB="$CORE/agent/SubAgentRunner.kt"
 VM="$APP/ui/ChatViewModel.kt"
 PET="$APP/pet/PetAgentSession.kt"
@@ -145,6 +149,61 @@ if [ -z "$bad_registry_imports" ]; then
   pass "D1b ui/pet 不再 import ToolRegistry（工具装配已收口）"
 else
   pend "D1b 仍 import ToolRegistry：$bad_registry_imports（待 ToolAssembler，v4 §3.3）"
+fi
+
+echo ""
+echo "[E] 执行权：回合必须真的向 runtime 登记（send 内 acquireTurn / close / 代次过滤）"
+
+if grep -qE 'session: String[,$]' "$FACTORY" && ! grep -qE 'session: String\s*=' "$FACTORY"; then
+  pass "E1 AgentLoopFactory.create 的 session 无默认值——入口必须显式表态回合身份"
+else
+  fail "E1 session 有默认值——两个入口会悄悄共用队列键，彼此串行且无人察觉"
+fi
+
+# 三个入口的调用点附近必须出现 session =。用 -A 10：create( 之后前十个参数内
+# 还没有 session，说明调用方在用位置参数硬猜，或者压根没接。
+e2_bad=""
+for src in "$VM" "$PET" "$SUB"; do
+  if ! grep -A 10 'AgentLoopFactory.create(' "$src" | grep -q 'session = '; then
+    e2_bad="$e2_bad $(basename "$src")"
+  fi
+done
+if [ -z "$e2_bad" ]; then
+  pass "E2 三个入口都显式传 session（主界面 / 桌宠 / 子代理各有身份）"
+else
+  fail "E2 未传 session：$e2_bad——该入口的回合不会进队列层"
+fi
+
+if grep -q 'val held = runtime.acquireTurn(session, source)' "$BOUND"; then
+  pass "E3 RuntimeBoundAgentLoop.send 内 acquireTurn——队列层对生产路径生效"
+else
+  fail "E3 send 没有 acquireTurn——队列层形同虚设（构造权收了，执行权没收）"
+fi
+
+e4_close=$(awk '
+  /finally/ { inf = 1; sub(/^[ \t]+/, "", $0); if ($0 ~ /^\/\//) inf = 0 }
+  inf && /held\.close\(\)/ { print NR; exit }
+' "$BOUND")
+if [ -n "$e4_close" ]; then
+  pass "E4 send 的 finally 里归还租约（行 $e4_close）——异常/取消不会永久锁死入口"
+else
+  fail "E4 finally 里没有 held.close()——一次失败就让该 (session, source) 永久锁死"
+fi
+
+# 只查「isCloseout 这个名字存在」是不够的：把它改成 `stale && false` 照样能过，
+# 而行为已经退化成「一律按代次丢」（正是 R10 那条变异）。所以这里钉**判断表达式本身**，
+# 再补一条分类表的事实：收尾两支必须归 true。
+if grep -q 'if (stale && !isCloseout(event)) return' "$BOUND" \
+   && grep -q 'ToolFinished, AgentEvent.RetryFinished -> true' "$BOUND"; then
+  pass "E5 收尾事件（ToolFinished / RetryFinished）不按代次丢弃——T05 取消后工具卡能落终态"
+else
+  fail "E5 代次判断没按「开始类丢、收尾类留」——取消后 UI 或永久停在「执行中」，或旧卡污染新回合"
+fi
+
+if [ "$(grep -c 'runtime\.cancel(' "$VM" | tr -d ' ')" -ge 2 ]; then
+  pass "E6 ChatViewModel 的 stop 与「发送打断」两条路径都作废旧代次"
+else
+  fail "E6 只有 $([ "$(grep -c 'runtime\.cancel(' "$VM" | tr -d ' ')" -ge 1 ] && echo 一处 || echo 零处)存在 runtime.cancel(——代次号不自增，闸门永远放行"
 fi
 
 echo ""

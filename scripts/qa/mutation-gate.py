@@ -164,14 +164,28 @@ GROUPS = {
     "runtime": {
         "sources": [
             "core/src/main/java/com/beichen/polaris/core/runtime/AgentRuntime.kt",
+            # P1 第四轮：执行权收口。RuntimeBoundAgentLoop 依赖 AgentLoop 接口
+            # （→ ChatMessage / ToolRegistry），所以编译闭包从「三个文件」扩到
+            # 「接口 + 契约 + registry」。多出来的文件都是纯 JVM、零 Android。
+            "core/src/main/java/com/beichen/polaris/core/runtime/RuntimeBoundAgentLoop.kt",
+            "core/src/main/java/com/beichen/polaris/core/AgentLoop.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/AgentLoop.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/ToolDescriptor.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolRegistry.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolLoadProfiler.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolLimits.kt",
             # TaskSpec 的 consent 字段是 Consent 类型，Consent 依赖 AgentTool（AgentContract）
             # 与 ToolResult——三个文件一起编译，与 run-consent-verification.sh 同一闭包。
             "core/src/main/java/com/beichen/polaris/core/Consent.kt",
             "core/src/main/java/com/beichen/polaris/core/AgentContract.kt",
             "core/src/main/java/com/beichen/polaris/core/ToolResult.kt",
             "core/src/test/java/com/beichen/polaris/core/runtime/AgentRuntimeTest.kt",
+            "core/src/test/java/com/beichen/polaris/core/runtime/RuntimeBoundAgentLoopTest.kt",
         ],
-        "classes": ["com.beichen.polaris.core.runtime.AgentRuntimeTest"],
+        "classes": [
+            "com.beichen.polaris.core.runtime.AgentRuntimeTest",
+            "com.beichen.polaris.core.runtime.RuntimeBoundAgentLoopTest",
+        ],
     },
 }
 
@@ -807,6 +821,51 @@ MUTATIONS = [
 
         private val shared: AgentRuntime by lazy { of() }""",
         "expect": ["shared 返回同一实例——进程内许可池只有一个真源"],
+    },
+    # —— 执行权收口（P1 第四轮）：每条都对应一类「接到 runtime 上但接错了」 ——
+    {
+        "id": "R8 send 拿到租约立刻归还（队列层对生产路径失效）",
+        "group": "runtime",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/RuntimeBoundAgentLoop.kt",
+        "old": """        val held = runtime.acquireTurn(session, source)
+        gate.bind(held)""",
+        "new": """        val held = runtime.acquireTurn(session, source).also { it.close() }
+        gate.bind(held)""",
+        "expect": ["同 session 的第二个 send 排队"],
+    },
+    {
+        "id": "R9 事件不按代次过滤（旧回合的迟到事件污染新回合）",
+        "group": "runtime",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/RuntimeBoundAgentLoop.kt",
+        "old": """        val stale = runtime.generation(session) != held.generation
+        if (stale && !isCloseout(event)) return""",
+        "new": """        // 变异：不按代次过滤，事件一律透传""",
+        "expect": ["cancel 后旧回合的开始类事件被丢弃"],
+    },
+    {
+        "id": "R10 收尾事件也按代次丢弃（取消后工具卡永久执行中，破 T05）",
+        "group": "runtime",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/RuntimeBoundAgentLoop.kt",
+        "old": """        if (stale && !isCloseout(event)) return""",
+        "new": """        if (stale) return""",
+        "expect": ["cancel 后旧回合的收尾类事件仍放行"],
+    },
+    {
+        "id": "R11 send 结束不归还租约（一次失败永久锁死该入口）",
+        "group": "runtime",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/RuntimeBoundAgentLoop.kt",
+        "old": """            gate.bind(null)
+            held.close()""",
+        "new": """            gate.bind(null)""",
+        "expect": ["delegate 抛异常仍归还回合"],
+    },
+    {
+        "id": "R12 未绑定回合时事件照样透传（send 之外的事件流无人管）",
+        "group": "runtime",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/RuntimeBoundAgentLoop.kt",
+        "old": """        val held = lease ?: return""",
+        "new": """        val held = lease ?: run { sink?.invoke(event); return }""",
+        "expect": ["未绑定回合时事件不转发"],
     },
 ]
 

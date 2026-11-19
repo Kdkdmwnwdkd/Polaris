@@ -14,6 +14,8 @@ import com.beichen.polaris.core.ToolRegistry
 import com.beichen.polaris.core.UserMessage
 import com.beichen.polaris.core.agent.EgressGuard
 import com.beichen.polaris.core.runtime.AgentLoopFactory
+import com.beichen.polaris.core.runtime.AgentRuntime
+import com.beichen.polaris.core.runtime.RunSource
 import com.beichen.polaris.core.agent.productionSeams
 import com.beichen.polaris.core.workspace.WorkspaceStore
 import com.beichen.polaris.memory.MemorySearchTool
@@ -151,6 +153,11 @@ class PetAgentSession(context: Context) {
         AgentLoopFactory.create(
             llmProvider = { createClient() },
             registry = registry,
+            // 队列键与主界面分开：桌宠和主界面可以同时各跑一个回合（许可层再按 backend
+            // 限并发）。共用键会把它们变成「一个人说两句话」，桌宠问一句要等主界面跑完——
+            // 这恰恰是两级并发要避免的过度串行。
+            session = PET_SESSION,
+            source = RunSource.PET,
             systemPrompt = SYSTEM_PROMPT,
             // 桌宠是「一句话问答」，不是长任务。步数上限压到 6：
             // 真需要十几步的事，用户在桌宠里也等不住，该回主应用。
@@ -375,6 +382,16 @@ class PetAgentSession(context: Context) {
 
     companion object {
         private const val TAG = "PetSession"
+
+        /**
+         * 桌宠这一路的回合身份（[AgentRuntime] 队列键的一半）。
+         *
+         * 与主界面的 `ui:main` 分开：两个入口是**两个说话人**，可以同时各跑一个回合；
+         * 真正需要互斥的是「同一入口内两次提问」，由本类的 `lock` 与 runtime 的
+         * `(session, source)` 键共同保证。
+         */
+        const val PET_SESSION = "ui:pet"
+
         private const val MAX_STEPS = 6
 
         /**

@@ -45,12 +45,39 @@ import com.beichen.polaris.core.llm.RetryProfile
  *
  * 返回 [AgentLoop] 接口而非具体类：收口之后 ui / pet / entry 只依赖抽象，
  * 不再 import `RealAgentLoop`（不变量 2）。
+ *
+ * ## 第四轮：构造权之外接上执行权
+ *
+ * 第三轮之后 loop 的构造点只有一个，但**跑起来仍无人向 [AgentRuntime] 登记**：
+ * `acquireTurn` 在生产路径上零调用，队列层只是库里的代码。本轮把返回类型从裸
+ * `AgentLoop` 换成 [RuntimeBoundAgentLoop]：`send` 内部 `acquireTurn` / `close`，
+ * 事件经 [TurnEventGate] 按代次过滤。于是「谁跑这个回合、什么时候排队、取消后
+ * 旧事件怎么丢」不再由调用方自决。
+ *
+ * ## [session] 无默认值
+ *
+ * 与 [TaskSpec.quota] / [TaskSpec.consent] 同一条纪律：session 是 (session, source)
+ * 互斥键的一半，给默认值就会让两个入口悄悄共用一个键、彼此串行，而且没人看得出来。
+ * 显式传值强迫调用方回答「我这个入口的回合身份是什么」。
  */
 object AgentLoopFactory {
 
     fun create(
         llmProvider: () -> LLMClient,
         registry: ToolRegistry,
+        /**
+         * 回合身份（队列键的一半）。同一 session + 同一 source 的第二个 `send`
+         * 会挂起，直到第一个归还。不同入口必须给不同值。
+         */
+        session: String,
+        /** 回合来源（队列键的另一半）。区分「用户在主界面问」与「桌宠自动触发」等。 */
+        source: RunSource = RunSource.MAIN,
+        /**
+         * 回合所有权与许可池。默认进程级单例：主界面 / 桌宠 / 子代理共享同一份
+         * 代次号表，`cancel` 才能跨入口生效（v4 §3.2 不变量 4 前半）。
+         * 测试注入 `AgentRuntime.of()` 拿干净状态。
+         */
+        runtime: AgentRuntime = AgentRuntime.shared(),
         systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
         maxSteps: Int = 60,
         maxParallelTools: Int = 5,
@@ -86,40 +113,48 @@ object AgentLoopFactory {
             RetryBackoffPolicy.networkAware(backoffPlan, networkRecovery),
         llmCallTimeoutMs: Long = 300_000L,
         turnBudgetMs: Long = 30 * 60 * 1000L,
-    ): AgentLoop = RealAgentLoop(
-        llmProvider = llmProvider,
-        registry = registry,
-        systemPrompt = systemPrompt,
-        maxSteps = maxSteps,
-        maxParallelTools = maxParallelTools,
-        providerRetry = providerRetry,
-        retryProfileProvider = retryProfileProvider,
-        maxHistoryMessages = maxHistoryMessages,
-        contextBudgetTokens = contextBudgetTokens,
-        keepRecentImages = keepRecentImages,
-        consent = consent,
-        checkpoint = checkpoint,
-        journal = journal,
-        journalTurn = journalTurn,
-        scope = scope,
-        memoryProvider = memoryProvider,
-        onEvent = onEvent,
-        shouldContinue = shouldContinue,
-        onTextDelta = onTextDelta,
-        onReasoningDelta = onReasoningDelta,
-        attemptOut = attemptOut,
-        hooks = hooks,
-        seams = seams,
-        observer = observer,
-        executorFactory = executorFactory,
-        forceFullTools = forceFullTools,
-        activeGroups = activeGroups,
-        networkRecovery = networkRecovery,
-        backoffPlan = backoffPlan,
-        rateLimitPlan = rateLimitPlan,
-        rateLimitBackoff = rateLimitBackoff,
-        retryBackoff = retryBackoff,
-        llmCallTimeoutMs = llmCallTimeoutMs,
-        turnBudgetMs = turnBudgetMs,
-    )
+    ): AgentLoop {
+        // 事件闸门必须先于 loop 存在：RealAgentLoop 的 onEvent 是构造参数，
+        // 而闸门要用「send 期间才存在的租约」做判断——所以闸门是共享的可变单元，
+        // 工厂把 `gate::emit` 交给内层，把 gate 交给外层装饰器，两边同一个对象。
+        // 没有 onEvent 的入口（子代理）不必绕经闸门，直接传 null。
+        val gate = TurnEventGate(runtime, session, onEvent)
+        val delegate = RealAgentLoop(
+            llmProvider = llmProvider,
+            registry = registry,
+            systemPrompt = systemPrompt,
+            maxSteps = maxSteps,
+            maxParallelTools = maxParallelTools,
+            providerRetry = providerRetry,
+            retryProfileProvider = retryProfileProvider,
+            maxHistoryMessages = maxHistoryMessages,
+            contextBudgetTokens = contextBudgetTokens,
+            keepRecentImages = keepRecentImages,
+            consent = consent,
+            checkpoint = checkpoint,
+            journal = journal,
+            journalTurn = journalTurn,
+            scope = scope,
+            memoryProvider = memoryProvider,
+            onEvent = if (onEvent == null) null else gate::emit,
+            shouldContinue = shouldContinue,
+            onTextDelta = onTextDelta,
+            onReasoningDelta = onReasoningDelta,
+            attemptOut = attemptOut,
+            hooks = hooks,
+            seams = seams,
+            observer = observer,
+            executorFactory = executorFactory,
+            forceFullTools = forceFullTools,
+            activeGroups = activeGroups,
+            networkRecovery = networkRecovery,
+            backoffPlan = backoffPlan,
+            rateLimitPlan = rateLimitPlan,
+            rateLimitBackoff = rateLimitBackoff,
+            retryBackoff = retryBackoff,
+            llmCallTimeoutMs = llmCallTimeoutMs,
+            turnBudgetMs = turnBudgetMs,
+        )
+        return RuntimeBoundAgentLoop(delegate, runtime, gate, session, source)
+    }
 }
