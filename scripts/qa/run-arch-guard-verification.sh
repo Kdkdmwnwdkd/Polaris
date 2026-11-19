@@ -175,6 +175,39 @@ else
 fi
 
 say ""
+say "[G] 拆分后的所有权：共享状态靠注入，写点必须唯一"
+
+# 3.1 第五批把「工具组开关」与「测试连接」搬出了 ChatViewModel。这两块都有一条
+# **静默失效**的失败模式，不靠编译期、只靠「谁持有那个对象」：
+#   · 工具组集合若在 facade 里自建，用户点击与 agent 的 __use_tools 各写各的，
+#     表现是「设置页显示已关闭，实际每轮仍把 ui 组发给模型」——不报错、不崩溃；
+#   · 测试连接的探测若在宿主里再写一份，两处端点/归因会漂移，卡片与 401 气泡对不上。
+# 所以判据不是「有没有这个类」，而是「宿主传的是不是同一个对象」「写点是不是只剩一处」。
+if grep -qE 'mutableSetOf[(]|ToolActivationStore[.]load[(]' app/src/main/java/com/beichen/polaris/ui/ToolGroupsFacade.kt; then
+  bad "[G] ToolGroupsFacade 自建/自读了组集合——必须用宿主注入的实例（否则与 loop 的 activeGroups 不是同一个）"
+else
+  good "[G] 工具组集合由宿主注入，facade 不自己造"
+fi
+
+if grep -q 'ToolGroupsFacade(app, activeToolGroups, registry)' app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt; then
+  good "[G] 宿主把 activeToolGroups 本身交给 facade（与 loop 的 activeGroups 同源）"
+else
+  bad "[G] 宿主没把 activeToolGroups 交给 facade——点击开关影响不到下一轮请求"
+fi
+
+if grep -q 'ToolActivationStore[.]save(' app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt; then
+  bad "[G] 落盘点又回到 ChatViewModel——两处写同一份激活组，迟早顺序打架"
+else
+  good "[G] 激活组落盘只剩 facade 一处写点"
+fi
+
+if grep -q 'testPing[(]' app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt; then
+  bad "[G] 宿主里还有 testPing——测试连接探测点不唯一"
+else
+  good "[G] 测试连接探测点唯一（ConnectionProbe）"
+fi
+
+say ""
 if [ "$fail" -eq 0 ]; then
   echo "架构守卫：$npass 通过 / 0 失败"
   echo "FAIL=0"

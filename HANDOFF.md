@@ -543,7 +543,7 @@ AGP 8.5 / JDK 21）。
 | 红线 | 为什么 | 谁在守 |
 |---|---|---|
 | `:core` 不许 import `ui` / `tools` / Compose / `MainActivity` | 分层边界 | 编译器 + `run-arch-guard-verification.sh` |
-| `arch-baseline.txt` **只减不增** | 加一条等于把已知违规合法化 | 同上。当前上限：`ChatViewModel` 3723、`ChatScreen` 3235、`RealAgentLoop` 1532 |
+| `arch-baseline.txt` **只减不增** | 加一条等于把已知违规合法化 | 同上。当前上限：`ChatViewModel` 3413、`ChatScreen` 3235、`RealAgentLoop` 1532 |
 | `harness-baseline.txt` 只增不减（当前 **149**） | 数字变小说明有大面积 SKIP 被当成通过 | `gate.sh` 门禁 5/6 |
 | 守卫裁决**不许加 Allow** | 只能拦不能放行，是这套设计唯一的安全性质 | `run-agent-seams-verification.sh` |
 | 新 harness 必须「静态断言 + 自编译真跑」两段 | 只 grep 不断言行为 = 假绿 | `gate.sh` |
@@ -711,7 +711,7 @@ CI 里有一段 shim（`.github/workflows/build.yml` 的「Prepare kotlinc shim�
 | 本地模型的工具调用解析 | **JVM 已覆盖，真机未测** | `LocalToolCallParserTest` 36 条 + 变异 P1–P10，修掉三个「看起来成功」的缺陷（见 §14）。但**真机上的解析率没有数据**——需要日志统计「解析失败 → 静默重试 → 成功/失败」三段比例，才知道这套宽容规则够不够 |
 | 二维码的真机扫码 | **编码已验证，相机链路未测** | 编码侧有外部锚点：`QrFixtures`（python-qrcode 生成）+ 独立解码器，22 条断言 + 变异 Q1/Q3–Q10。修掉「第二份格式信息缺位 7」（冗余从可纠 3 位降到 2 位）。**没有真实相机数据**——对焦、透视、反光、污损下的识读率无法在沙箱证明。见 §15 |
 | 单引号定界 + 内容含双引号 | **解析失败，已知边界** | `{'content': 'say "hi"'}` 无法在替换前判断哪个引号是定界符；猜错就是改内容。有断言钉住「失败」，而不是「给出一个带引号的错值」。见 §14.6 |
-| P1 结构性重构（**2026-11-19 解冻**） | **四轮已落，剩 ToolAssembler 等** | 第一轮 `AgentRuntime` 并发原语（19 断言 + R1–R7）。第二轮收不变量 3（`TaskSpec` 必含 quota+consent，无默认值）+ 不变量 4 后半（`SubAgentRunner` 借 `runtime.withPermit("cloud")`、去 chunked），并落静态门禁 `scripts/qa/run-runtime-invariants-verification.sh`。第三轮三入口 loop 收口（不变量 1 / 2 的 D1a / 4 前半）。第四轮**执行权收口**：`RuntimeBoundAgentLoop` 在 `send` 内 `acquireTurn` + `finally close`，`TurnEventGate` 按代次过滤事件（开始类丢、收尾类留）；三入口各有 session（`ui:main` / `ui:pet` / `sub:<index>`），`stop()` 与「发送打断」都先 `runtime.cancel`。`RuntimeBoundAgentLoopTest` 9 条断言（runtime 组 28 条），变异 R8–R12，全量 73 条 CAUGHT；静态门禁 `14 通过 / 0 失败 / 1 待收口`（唯一 PENDING 仍是 D1b）。**还没做**：`ToolAssembler`、冷启动两条路径合并、`LoopDefaults` 单一真源、真机矩阵。见 `docs/ops/P0-落地-2026-11-18.md` §16–§19 |
+| P1 结构性重构（**2026-11-19 解冻**） | **四轮 + 一轮解阻塞** | 第一轮 `AgentRuntime` 并发原语（19 断言 + R1–R7）。第二轮收不变量 3（`TaskSpec` 必含 quota+consent，无默认值）+ 不变量 4 后半（`SubAgentRunner` 借 `runtime.withPermit("cloud")`、去 chunked），并落静态门禁 `scripts/qa/run-runtime-invariants-verification.sh`。第三轮三入口 loop 收口（不变量 1 / 2 的 D1a / 4 前半）。第四轮**执行权收口**：`RuntimeBoundAgentLoop` 在 `send` 内 `acquireTurn` + `finally close`，`TurnEventGate` 按代次过滤事件（开始类丢、收尾类留）；三入口各有 session（`ui:main` / `ui:pet` / `sub:<index>`），`stop()` 与「发送打断」都先 `runtime.cancel`。`RuntimeBoundAgentLoopTest` 9 条断言（runtime 组 28 条），变异 R8–R12，全量 73 条 CAUGHT；静态门禁 `14 通过 / 0 失败 / 1 待收口`（唯一 PENDING 仍是 D1b）。第五轮**先解阻塞**：`ChatViewModel` 上轮已顶格（3723 = 冻结上限，加一行就红），这轮按 3.1 惯例拆出 `ChatUiTypes` / `ToolGroupsFacade` / `ConnectionProbe`，压回 3413 并把基线同步下调；守卫新增 [G] 段钉「集合靠注入、写点唯一」（4 条 + 反向自检 4/4）。**还没做**：`ToolAssembler`（下一批，同一片区域）、冷启动两条路径合并、`LoopDefaults` 单一真源、真机矩阵。见 `docs/ops/P0-落地-2026-11-18.md` §16–§20 |
 
 **已定，不再挂在这里**（2026-11-17）：桌宠历史落盘（做了）、外发审批档位（每次问）、
 真机机型（矩阵文档给了建议）。P1 冻结令已于 2026-11-19 解冻（见顶部与

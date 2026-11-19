@@ -41,7 +41,6 @@ import com.beichen.polaris.core.capability.CapabilityAuditReporter
 import com.beichen.polaris.core.capability.ToolActivationStore
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.StartupMark
-import com.beichen.polaris.core.KernelExposure
 import com.beichen.polaris.core.agent.ConnectivityNetworkRecoveryWaiter
 import com.beichen.polaris.core.ConfigSanitizer
 import com.beichen.polaris.core.ConfigStore
@@ -56,9 +55,6 @@ import com.beichen.polaris.core.PromptDeleteResult
 import com.beichen.polaris.core.llm.ProviderCatalog
 import com.beichen.polaris.core.llm.objOrNull
 import com.beichen.polaris.core.llm.primOrNull
-import com.beichen.polaris.core.llm.FailureKind
-import com.beichen.polaris.core.llm.Diagnosis
-import com.beichen.polaris.core.llm.RecoveryAction
 import com.beichen.polaris.core.llm.diagnoseException
 import com.beichen.polaris.core.llm.diagnoseHttpFailure
 import com.beichen.polaris.core.PromptItem
@@ -256,96 +252,15 @@ import java.util.UUID
 
 /** `SkillUiInfo` / `SkillToolInfo` 已搬到 SkillUi.kt（纯数据，不必占这个冻结文件的行数）。 */
 
-/**
- * W-30：一条消息的翻译状态。
- *
- * @param text 译文（成功时非空）
- * @param error 失败原因（失败时非空，UI 用 error 色显示而不是假装翻出来了）
- */
-data class TranslationUi(val text: String? = null, val error: String? = null)
 
-/**
- * 一次待确认的危险工具调用（L10）：由 AgentLoop 发起、UI 弹窗、用户决策后回填。
- *
- * @param toolName 待执行的工具名（如 ui_tap）。
- * @param argsPreview 入参预览（[ApprovalPreview] 保头保尾，避免超长参数撑爆 Dialog）。
- * @param deferred UI 用它回复 AgentLoop：complete(true) 放行、complete(false) 拒绝。
- */
-data class ApprovalRequest(
-    val toolName: String,
-    val argsPreview: String,
-    val deferred: CompletableDeferred<Boolean>,
-    /**
-     * 本次授权的作用域（R-08）：键、展示名、能否记住。
-     */
-    val grant: ApprovalGrant = ApprovalGrant("", "", true)
-)
 
-/**
- * 供应商瞬时失败的「自动恢复」进行态（Phase 2 DoD③）。
- *
- * 由 [ChatViewModel.retryState] 暴露：非 null 时 UI 显示「正在恢复（n/N）· 原因」横幅，
- * 恢复成功 / 最终失败 / 用户取消时清回 null。**取消不算失败，但必须立即清状态**
- * （T05 不变量：点停止后不得残留「正在恢复」）。
- *
- * @param attempt 1-based 重试序号（第几次重试）。
- * @param max 最大重试次数（= providerRetry）。
- * @param reason 面向用户的可读原因（已脱敏，不含原始异常 message）。
- */
-data class RetryState(
-    val attempt: Int,
-    val max: Int,
-    val reason: String
-)
 
-/** 「测试连接」的诊断结果：配置页卡片直接消费。 */
-data class TestResult(
-    /** 是否连通（HTTP 2xx）。 */
-    val ok: Boolean,
-    /** HTTP 状态码；网络异常时为 -1。 */
-    val code: Int,
-    /** 实际发起请求的完整端点。 */
-    val endpoint: String,
-    /** Key 指纹：len=35 head=sk-a tail=d38d。 */
-    val fingerprint: String,
-    /** 响应体前 200 字（已脱敏）；异常时为异常文案。 */
-    val bodyPreview: String,
-    /** 针对状态码的修复建议（失败时有值）。 */
-    val suggestion: String = "",
-    /** 失败归因（P1，2026-10-21）：UI 据此决定给哪个补救按钮，不再只给一句建议。 */
-    val kind: FailureKind = FailureKind.NONE,
-    /** 可直接执行的补救动作（去拿 Key / 拉模型列表 / 重试）。 */
-    val action: RecoveryAction = RecoveryAction.NONE
-)
 
 /**
  * UI 与业务的唯一桥梁：持有注册表、Agent 循环与配置，对外只暴露 StateFlow。
  * 业务规则（工具注册、循环策略、Skill 接入）都在这里组装，Compose 只负责渲染。
  */
-/**
- * 功能五（P1-4）：待发文件——文件名 + 已提取的正文文本。
- *
- * 文本在读取时就抽好（读文件是 IO 重活），发送时只是字符串拼接；
- * UI 只负责展示文件名与移除，不碰解析细节。
- */
-data class PendingFile(val name: String, val text: String)
 
-/**
- * 功能五（P1-4）：文件附件处理结果——三条成功路径 + 一条失败路径。
- *
- * 之所以要区分 [Text] 与 [Images]：用户需要知道「这份 PDF 是被当图片读的」
- * （影响模型能否引用原文精确字句），而不是笼统一句「已添加」。
- */
-sealed interface FileAttachResult {
-    /** 文本类文件已直读（[chars] = 实际取用字符数）。 */
-    data class Text(val name: String, val chars: Int) : FileAttachResult
-
-    /** PDF 已渲染为 [pages] 张图片并入图片链路。 */
-    data class Images(val name: String, val pages: Int) : FileAttachResult
-
-    /** 不支持的类型 / 读取失败——[reason] 直接展示给用户。 */
-    data class Failed(val reason: String) : FileAttachResult
-}
 
 /** W-14：单台 MCP 服务器最多接入的工具数（工具描述要进系统提示，不能无限扩张）。 */
 private const val MCP_MAX_TOOLS_PER_SERVER = 30
@@ -1230,7 +1145,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             // Phase 2 DoD③：兜底清「正在恢复」——重试收尾事件之外的最后一道保险
             _retryState.value = null
             // W-102：粘性激活的落盘点。send 的成功/失败/取消与 regenerate 全都汇聚到这里，漏一处就是「这次开的组没记住」。
-            persistToolGroups()
+            toolGroupFacade.persist()
             if (rebuildMessages) reloadActiveMessages()
             refreshLogs()
         },
@@ -1382,21 +1297,17 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 当前生效档案 id（配置页高亮 + 编辑器语义锚点）。 */
     override val activeProfileId: StateFlow<String> = _activeProfileId.asStateFlow()
 
-    /** 「测试连接」结果流：配置页卡片消费，null 表示尚未测试。 */
-    private val _testResult = MutableStateFlow<TestResult?>(null)
-    override val testResult: StateFlow<TestResult?> = _testResult.asStateFlow()
+    /** 「测试连接」结果流（3.1 第五批拆出，状态在 [ConnectionProbe]）。 */
+    override val testResult: StateFlow<TestResult?> get() = connectionProbe.result
 
     /**
      * A 批：输入变化时清空上一次测试结果。
      * 否则「测通旧配置 → 改 Base URL → 卡片仍绿色 → 保存并回对话」会把没测过的配置落盘。
      */
-    override fun clearTestResult() {
-        _testResult.value = null
-    }
+    override fun clearTestResult() = connectionProbe.clear()
 
-    /** 是否正在测试连接：UI 用它给按钮显示加载态，避免重复点击。 */
-    private val _testing = MutableStateFlow(false)
-    override val testing: StateFlow<Boolean> = _testing.asStateFlow()
+    /** 是否正在测试连接：UI 用它给按钮显示加载态，避免重复点击。状态在 [ConnectionProbe]。 */
+    override val testing: StateFlow<Boolean> get() = connectionProbe.testing
 
     override val input = MutableStateFlow("")
 
@@ -1818,6 +1729,16 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private val keyPoolStore = KeyPoolStore(app)
     private val keyPoolRuntime = KeyPoolRuntime()
 
+    /**
+     * 「测试连接」域：状态与探测都在 facade，这里只转发。
+     *
+     * 本地模型名走 lambda 而不是构造时取值——用户切了模型再点「测试」，卡片上必须
+     * 显示刚选的那个文件，而不是 ViewModel 创建时的那个。
+     */
+    private val connectionProbe = ConnectionProbe(viewModelScope, providerManager) {
+        localSetting.activeModel
+    }
+
     private val keyPool = KeyPoolFacade(configStore, keyPoolStore, keyPoolRuntime, providerManager)
 
     /** 备用 Key（设置页增删）；实现见 [KeyPoolFacade]。 */
@@ -1871,7 +1792,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * W-102：粘性激活的工具组（LRU 序：最久未用在前）。
      *
      * 进程内唯一实例，由 loop 的元工具 `__use_tools` 就地修改；每次回合收尾
-     * 经 [persistToolGroups] 落盘，杀进程后还能带回来。
+     * 经 [ToolGroupsFacade] 落盘，杀进程后还能带回来。
      *
      * 为什么不放 loop 内部：loop 是「一次请求的执行器」，而「这次任务开过哪些组」
      * 要跨多次 send 保留——同一会话里第二次「帮我截图」不该再开一遍 ui 组。
@@ -1886,138 +1807,19 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      */
     private val activeToolGroups: MutableSet<String> = ToolActivationStore.load(app)
 
-    /** 把当前激活组落盘（失败只记日志，不打断收尾——见 ToolActivationStore 的失败模式）。 */
-    private fun persistToolGroups() {
-        // 快照后落盘：集合可能正被 agent 线程改（每轮 plan 会 seed/pin/淘汰），
-        // 直接传进去会在 joinToString 里撞 ConcurrentModificationException。
-        // 锁对象就是集合本身，与 KernelExposure.plan 用同一把（见那里的 KDoc）。
-        val snapshot = synchronized(activeToolGroups) { activeToolGroups.toList() }
-        ToolActivationStore.save(app, snapshot)
-        refreshToolGroups()
-    }
+    /** 组开关的增删/落盘/重算全在 facade；这里只留集合实例（loop 要的是同一个对象）。 */
+    private val toolGroupFacade = ToolGroupsFacade(app, activeToolGroups, registry)
 
-    private val _toolGroupsUi = MutableStateFlow<List<ToolGroupRow>>(emptyList())
+    /** 设置页的组清单（已启用在前，同状态内按工具数降序）。实现见 facade。 */
+    override val toolGroupsUi: StateFlow<List<ToolGroupRow>> get() = toolGroupFacade.ui
 
-    /**
-     * 设置页要展示的组清单（已启用在前，同状态内按工具数降序）。
-     *
-     * 为什么是 StateFlow 而不是「进页面时算一次」：关掉一个组之后同屏的其它行要立刻
-     * 重新排序/置灰，靠 `remember` 算一次会停在旧快照上，用户点第二下才发现已经关了。
-     */
-    override val toolGroupsUi: StateFlow<List<ToolGroupRow>> = _toolGroupsUi.asStateFlow()
+    override fun refreshToolGroups() = toolGroupFacade.refresh()
 
-    /**
-     * 重算 [toolGroupsUi]。
-     *
-     * 调用点：设置页进入时（`LaunchedEffect`）、每次落盘激活组之后、以及用户手动关闭后。
-     * 不做成「响应式监听注册表」：MCP 工具是异步注册的，真要做到实时得给 registry 加
-     * 观察者，而这块 UI 的用途只是「看一眼、关掉一个」，下一次进页面刷新足够。
-     */
-    override fun refreshToolGroups() {
-        val counts = KernelExposure.groupsOf(registry.list()).toMap()
-        val snapshot = synchronized(activeToolGroups) { activeToolGroups.toSet() }
-        _toolGroupsUi.value = counts.entries
-            // 排序：常驻 → 其它已启用 → 未启用；同档按工具数从多到少。
-            // 「常驻」必须排在「已启用」之前：file 永远是启用态，若只按启用与否排，
-            // 用户勾上一个 9 个工具的组，那一行就会插到 file 上方，看起来像 file 掉了。
-            .sortedWith(
-                compareBy(
-                    { it.key !in snapshot },
-                    { !KernelExposure.isPinned(it.key) },
-                    { -it.value },
-                    { it.key }
-                )
-            )
-            .map { (g, n) ->
-                ToolGroupRow(
-                    name = g,
-                    note = KernelExposure.noteOf(g),
-                    count = n,
-                    active = g in snapshot,
-                    pinned = KernelExposure.isPinned(g)
-                )
-            }
-    }
+    override fun dropToolGroup(group: String) = toolGroupFacade.drop(group)
 
-    /**
-     * 手动关掉一个工具组（W-103）——补上「粘性激活」缺的另一半。
-     *
-     * 之前只有「新建会话」能清空：用户在一个长会话里用完 `shell` 就再也关不掉，
-     * 只能等下次新建会话。而 `shell` 组 4 个工具 2676 字符，每轮都在付。
-     *
-     * 常驻组（`file` / `misc`）直接忽略：它们在 [KernelExposure.plan] 里会被强制加回，
-     * 关掉是假动作，UI 也不给入口（见 [ToolGroupRow.pinned]）。
-     *
-     * **不需要通知 loop**：组集合是同一个实例，下一轮 `plan()` 直接用新状态。
-     */
-    override fun dropToolGroup(group: String) {
-        if (KernelExposure.isPinned(group)) return
-        // 与 agent 线程共用同一把锁（集合本身）：关组时那一轮可能正在 plan 里遍历它。
-        val removed = synchronized(activeToolGroups) { activeToolGroups.remove(group) }
-        if (!removed) return
-        AgentLogger.i(
-            "ToolExposure",
-            "用户手动关闭工具组 $group，剩余=" +
-                synchronized(activeToolGroups) { activeToolGroups.joinToString(",") }
-        )
-        persistToolGroups()
-    }
+    override fun enableToolGroup(group: String) = toolGroupFacade.enable(group)
 
-    /**
-     * 手动开一个工具组（用户误关了想恢复）。
-     *
-     * 和 [dropToolGroup] 共用同一把锁；顺序语义与 `__use_tools` 一致：先 remove 再 add，
-     * 让这组排到 LRU 末尾（刚用过）。超上限时 [KernelExposure.enforceCap] 会挤掉最久未用的，
-     * UI 下一帧就会看到那一行变灰——不需要额外弹窗解释。
-     */
-    override fun enableToolGroup(group: String) {
-        // 判存在要用 `in`，不能用 `!remove(...)`：
-        // remove 返回 true 表示「原本就在、已经被我拿掉了」——依据它分支会把
-        // 「不存在」当成「已在」，然后**一个组也加不进去**（设置页勾选框点了没反应）。
-        val (changed, effective, remaining) = synchronized(activeToolGroups) {
-            if (group in activeToolGroups) {
-                // 已经开着：不改变 LRU 顺序，避免「点一下已勾选的框」把它顶成最新
-                Triple(false, true, activeToolGroups.joinToString(","))
-            } else {
-                // remove + add 与 `__use_tools` 同形：让这组排到 LRU 末尾（刚用过）。
-                // 本来就不在里面，remove 是空操作，保留只为两条路径写法一致。
-                activeToolGroups.remove(group)
-                activeToolGroups.add(group)
-                KernelExposure.enforceCap(activeToolGroups)
-                // 回执写**实际结果**：容量满时本次加入可能立刻被滞回淘汰掉。
-                Triple(true, group in activeToolGroups, activeToolGroups.joinToString(","))
-            }
-        }
-        if (!changed) return
-        AgentLogger.i(
-            "ToolExposure",
-            "用户手动开启工具组 $group（" + (if (effective) "已生效" else "被上限挤掉") + "），当前=$remaining"
-        )
-        persistToolGroups()
-    }
-
-    /**
-     * 清空粘性激活（新会话时调用）。
-     *
-     * 不清会怎样：用户做完一次屏幕任务，新开一个纯聊天会话，ui 组的 9 个工具依旧
-     * 每轮随请求发出——约 4500 字符，一条都用不到。这正是「不需要它的时候它还在」。
-     *
-     * 清空不等于「一个工具都不给」：下一次 `plan()` 会自动重新种上 file 组与元工具，
-     * 等于回到刚装好的状态。
-     */
-    private fun resetToolGroups() {
-        // 同上：清空也是一次写，必须和 agent 线程的遍历互斥。
-        val hadAny = synchronized(activeToolGroups) {
-            if (activeToolGroups.isEmpty()) {
-                false
-            } else {
-                activeToolGroups.clear()
-                true
-            }
-        }
-        if (!hadAny) return
-        persistToolGroups()
-    }
+    private fun resetToolGroups() = toolGroupFacade.reset()
 
     /** 出站守卫（P0-1/P0-3）：本回合读过私有内容后，`web_search` 先问用户。判据见 [EgressGuard]。 */
     private val egressGuard = EgressGuard(
@@ -2286,121 +2088,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         configStore.saveProfiles(updated, activeId)
     }
 
-    /** 由当前保存的 Key 生成「len=35 head=sk-a tail=d38d」指纹，供 401 气泡与测试卡片共用。 */
-    private fun keyFingerprint(apiKey: String): String {
-        val insp = ConfigSanitizer.inspectKey(apiKey)
-        return "len=${insp.length} head=${insp.head} tail=${insp.tail}"
-    }
-
-    /**
-     * 按供应商拼「测试连接」卡片展示的端点——与各 Provider 实现实际请求路径一致
-     * （openai: /chat/completions；claude: /v1/messages；gemini: /v1beta/models/{m}:generateContent；
-     * local-llama: 本地文件，展示「本地推理 + 文件名」）。
-     */
-    private fun endpointFor(cfg: ModelConfig): String {
-        if (cfg.providerId == "local-llama") {
-            val name = localSetting.activeModel.ifBlank { "未选择模型" }
-            return "本地推理 · llama.cpp · $name"
-        }
-        val base = ConfigSanitizer.normalizeBaseUrl(cfg.baseUrl).trimEnd('/')
-        return when (cfg.providerId) {
-            "claude" -> if (base.endsWith("/v1")) "$base/messages" else "$base/v1/messages"
-            "gemini" -> "$base/v1beta/models/${ConfigSanitizer.cleanModel(cfg.model)}:generateContent"
-            else -> "$base/chat/completions"
-        }
-    }
-
-    /**
-     * 「测试连接」：用配置页当前输入框的值（先实时清洗）发起一次最小请求，
-     * 把连通性结果写入 [_testResult] 供卡片渲染。网络 IO 全部走 Dispatchers.IO，不阻塞主线程。
-     *
-     * 最小请求体按供应商各自协议构造（Provider 实现内聚），
-     * 既不污染对话历史，也几乎不产生 token 消耗。
-     *
-     * @param baseUrl 输入框当前的 Base URL（原始值）。
-     * @param apiKey 输入框当前的 API Key（原始值）。
-     * @param model 输入框当前的模型名（原始值）。
-     * @param providerId 当前选中的供应商（"openai" / "claude" / "gemini"）。
-     */
-    override fun testConnection(baseUrl: String, apiKey: String, model: String, providerId: String) {
-        if (_testing.value) return
-        _testing.value = true
-        _testResult.value = null
-        viewModelScope.launch {
-            val cfg = ConfigSanitizer.sanitized(baseUrl, apiKey, model, providerId)
-            val endpoint = endpointFor(cfg)
-            // 本地模式没有 Key：指纹位展示模型文件名，比 "len=0" 更有信息量
-            val finger = if (cfg.providerId == "local-llama") {
-                "模型文件=${localSetting.activeModel.ifBlank { "未选择" }}"
-            } else {
-                keyFingerprint(cfg.apiKey)
-            }
-            val outcome = runCatching {
-                withContext(Dispatchers.IO) {
-                    providerManager
-                        .create(cfg.providerId, LLMConfig(cfg.baseUrl, cfg.apiKey, cfg.model))
-                        .testPing()
-                }
-            }
-            _testResult.value = when {
-                outcome.isFailure -> {
-                    val t = outcome.exceptionOrNull()!!
-                    // 异常文案离开日志系统前先脱敏（防御：异常里可能夹带 url 中的 key 片段）
-                    val msg = (t.message?.let { AgentLogger.sanitize(it) } ?: "未知错误").take(200)
-                    // P1：本地模型加载失败不是网络问题，单独归因（沿用原有排查提示）
-                    val isLocalModel = providerId == "local-llama"
-                    val diagnosis = if (isLocalModel) {
-                        Diagnosis(
-                            FailureKind.MODEL,
-                            "本地推理失败：确认模型文件已下载完整、设备为 arm64；" +
-                                "加载日志可在「日志」页查看（标签 llama-jni）",
-                            RecoveryAction.NONE
-                        )
-                    } else {
-                        diagnoseException(t)
-                    }
-                    TestResult(
-                        ok = false,
-                        code = -1,
-                        endpoint = endpoint,
-                        fingerprint = finger,
-                        bodyPreview = msg,
-                        suggestion = diagnosis.suggestion,
-                        kind = diagnosis.kind,
-                        action = diagnosis.action
-                    )
-                }
-
-                else -> {
-                    val ping = outcome.getOrThrow()
-                    if (ping.code in 200..299) {
-                        TestResult(
-                            ok = true,
-                            code = ping.code,
-                            endpoint = endpoint,
-                            fingerprint = finger,
-                            bodyPreview = ping.bodyPreview
-                        )
-                    } else {
-                        // P1：按「谁的问题 + 下一步点哪」归因（401/402→Key，429→限流，
-                        // 404/400(model)→模型名，4xx→端点，5xx→服务端），不再一律「客户端错误」。
-                        val diagnosis = diagnoseHttpFailure(ping.code, ping.bodyPreview)
-                        TestResult(
-                            ok = false,
-                            code = ping.code,
-                            endpoint = endpoint,
-                            fingerprint = finger,
-                            bodyPreview = ping.bodyPreview,
-                            suggestion = diagnosis.suggestion,
-                            kind = diagnosis.kind,
-                            action = diagnosis.action
-                        )
-                    }
-                }
-            }
-            _testing.value = false
-        }
-    }
+    /** 「测试连接」（3.1 第五批拆出，实现见 [ConnectionProbe]）。 */
+    override fun testConnection(baseUrl: String, apiKey: String, model: String, providerId: String) =
+        connectionProbe.test(baseUrl, apiKey, model, providerId)
 
     // —— 模型列表拉取（模型配置页「选择模型」弹窗）—— 3.1 拆出 ModelListFacade ——
 

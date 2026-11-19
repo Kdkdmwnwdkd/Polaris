@@ -17,6 +17,8 @@
 | 新增（3.1 第三批） | — | `SettingsFacade` 70 / `AppearanceFacade` 38 |
 | `ChatViewModel.kt`（3.1 第四批，2026-11-08） | 3527 行，仍混着权限探测 / 调试通道 / 能力就绪度 | 3439 行（守卫上限同步从 3527 降到 3439） |
 | 新增（3.1 第四批） | — | `PermissionFacade` 200 / `CapabilityReadiness` 39 |
+| `ChatViewModel.kt`（3.1 第五批，2026-11-20） | 3723 行（**已顶格**，加一行就红），仍混着数据契约 / 工具组开关 / 测试连接 | 3415 行（守卫上限同步从 3723 降到 3415） |
+| 新增（3.1 第五批） | — | `ChatUiTypes` 103 / `ToolGroupsFacade` 166 / `ConnectionProbe` 169 |
 
 ## 谁拥有什么
 
@@ -37,6 +39,16 @@
 | 本地模型参数 / 文件 / 下载 / GPU 结论 | `ModelSettings` | 只与 `LocalLlamaSetting` + `GgufModelStore` 打交道，唯一外部动作是「切到本地供应商」 |
 | 备份包怎么组装、恢复后谁来刷新 UI | `BackupUseCase` | 六个 store 的快照 ↔ SAF 文件；UI 重载通过 `onRestored` 回调回宿主 |
 | 工具属于哪个能力组、暴露面怎么裁、工具表按什么顺序排 | `CapabilityManifest` + `KernelExposure` | 分组 / 成员 / **顺序**都在清单（P3-5）；裁剪算法仍在 KernelExposure（它只读清单） |
+| 「本任务开过哪些组」的落盘 / 设置页行 / 用户点击增删 | `ToolGroupsFacade` | 集合实例**在 VM**（loop 的 `activeGroups` 要同一个对象），facade 只借它干活 |
+| 这次配置通不通、端点长什么样、失败归哪一类 | `ConnectionProbe` | 只依赖 ProviderManager + 本地模型名，产物是一条 `TestResult` |
+| 审批弹窗 / 测试卡片 / 附件回执的形状 | `ChatUiTypes` | 六个零逻辑类型；谁都能用，谁都不该再往 ViewModel 里塞新类型 |
+
+## 第五批的两条新不变量（守卫 [G] 钉住）
+
+1. **共享集合靠注入**：`ToolGroupsFacade` 不许 `mutableSetOf()` / `ToolActivationStore.load()`。
+   自己造一个集合的后果是「设置页显示已关闭，实际每轮仍把 ui 组发给模型」——不报错、不崩溃。
+2. **写点唯一**：激活组落盘只剩 facade 一处，测试连接探测只剩 `ConnectionProbe` 一处。
+   回到宿主里再写一份，两处顺序/口径迟早打架。
 
 ## 三条不变量（改动时别破坏）
 
