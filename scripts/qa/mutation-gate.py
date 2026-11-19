@@ -46,6 +46,12 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# JUnit 运行超时（秒）。runtime 组引入了协程并发测试，一个死锁的变异（比如把
+# 两级并发压成全局一把锁）会让某个 await 永远挂起——不设超时，门禁自己卡死，
+# 结论出不来，比假绿更糟。120 秒对「最多 delay 200ms + withTimeout 5s」的断言
+# 绰绰有余，死锁变异会以超时形式被判 INVALID（可定位到具体变异），而不是拖垮全量。
+JUNIT_TIMEOUT_SEC = 120
+
 # 按「最小编译闭包」分组：一次变异只重编它自己那条链上的文件。
 # 全放一起编（20+ 文件）会让每条变异都慢一倍，而变异点分布在这两条互不相干的链上。
 GROUPS = {
@@ -151,6 +157,16 @@ GROUPS = {
             "app/src/test/java/com/beichen/polaris/automation/ScreenChangeReceiptTest.kt",
         ],
         "classes": ["com.beichen.polaris.automation.ScreenChangeReceiptTest"],
+    },
+    # 运行时并发原语（P1 第一轮）。零依赖组：只 import kotlinx.coroutines（classpath
+    # 已有），不 import android.*——两级并发（(session,source) 互斥 + backend 许可）
+    # 与代次号都是纯机制，脱离 Android 在 JVM 上逐条验证。这就是 v4 §3.2 的「地基」。
+    "runtime": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/runtime/AgentRuntime.kt",
+            "core/src/test/java/com/beichen/polaris/core/runtime/AgentRuntimeTest.kt",
+        ],
+        "classes": ["com.beichen.polaris.core.runtime.AgentRuntimeTest"],
     },
 }
 
@@ -714,6 +730,67 @@ MUTATIONS = [
         "new": """        val ver = VERSIONS.lastOrNull { v ->""",
         "expect": ["长度一变化就选到能装下的最小版本", "编码结果与参考实现逐格相同"],
     },
+    # —— 运行时并发原语（P1 第一轮）：每条都对应一个「许可/互斥/代次号静默失效」 ——
+    {
+        "id": "R1 同键互斥去掉（同一个人能同时说两句话）",
+        "group": "runtime",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/AgentRuntime.kt",
+        "old": """        val gate = turnGates.computeIfAbsent(key(session, source)) { Semaphore(1) }
+        gate.acquire()  // 同键第二个在这里挂起""",
+        "new": """        val gate = turnGates.computeIfAbsent(key(session, source)) { Semaphore(1) }
+        // gate.acquire() 变异：同键不互斥""",
+        "expect": ["同 session 同 source 的第二个回合挂起"],
+    },
+    {
+        "id": "R2 backend 并发上限改成无限（本地推理可被交错 prefill）",
+        "group": "runtime",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/AgentRuntime.kt",
+        "old": """            permits[backend] = Semaphore(limit)""",
+        "new": """            permits[backend] = Semaphore(Int.MAX_VALUE)""",
+        "expect": ["local 上限 1 第二个挂起", "cloud 上限 2 第三个挂起"],
+    },
+    {
+        "id": "R3 cancel 不自增代次号（旧事件不会过期）",
+        "group": "runtime",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/AgentRuntime.kt",
+        "old": """        gen.incrementAndGet()""",
+        "new": """        gen.get()""",
+        "expect": ["代次号从 0 起 cancel 自增"],
+    },
+    {
+        "id": "R4 未知 backend 静默放行（拼错的 backend 名不报错）",
+        "group": "runtime",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/AgentRuntime.kt",
+        "old": """        val sem = permits[backend]
+            ?: throw IllegalArgumentException(
+                "未知 backend：$backend（已登记：${permits.keys.sorted().joinToString()}）")
+        return sem.withPermit { block() }""",
+        "new": """        val sem = permits[backend] ?: Semaphore(1)
+        return sem.withPermit { block() }""",
+        "expect": ["未知 backend 直接抛异常"],
+    },
+    {
+        "id": "R5 lease 归还时计数漏减（观察面永远以为有回合在跑）",
+        "group": "runtime",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/AgentRuntime.kt",
+        "old": """                if (released.compareAndSet(false, true)) {
+                    active.decrementAndGet()
+                    gate.release()
+                }""",
+        "new": """                if (released.compareAndSet(false, true)) {
+                    // active.decrementAndGet() 变异：归还时计数漏减
+                    gate.release()
+                }""",
+        "expect": ["activeTurns 随 acquire 与 close 增减"],
+    },
+    {
+        "id": "R6 所有键共用一个门（异键也串行，把两级并发压回单线程）",
+        "group": "runtime",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/AgentRuntime.kt",
+        "old": """        val gate = turnGates.computeIfAbsent(key(session, source)) { Semaphore(1) }""",
+        "new": """        val gate = turnGates.computeIfAbsent("__global__") { Semaphore(1) }""",
+        "expect": ["不同 session 不互相阻塞", "同 session 不同 source 也不互相阻塞"],
+    },
 ]
 
 
@@ -913,10 +990,15 @@ def compile_and_run(compiler_cp, lib_cp, plugin, outdir, sources, classes,
         errs = [l for l in (r.stdout + r.stderr).splitlines() if re.search(r"\berror:", l)]
         return ("\n".join(errs[:5]) or (r.stdout + r.stderr)[-500:]), ""
 
-    run = subprocess.run(
-        [java, "-cp", f"{outdir}:{lib_cp}", "org.junit.runner.JUnitCore", *classes],
-        capture_output=True, text=True,
-    )
+    try:
+        run = subprocess.run(
+            [java, "-cp", f"{outdir}:{lib_cp}", "org.junit.runner.JUnitCore", *classes],
+            capture_output=True, text=True, timeout=JUNIT_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired:
+        # 测试死锁（而不是红）：判为 INVALID，报告指向「这条变异让测试挂起」。
+        # 不能让超时拖垮全量门禁——一条死锁变异卡 10 分钟，其余变异全白跑。
+        return "JUnit 超时（测试疑似死锁，见 JUNIT_TIMEOUT_SEC）", ""
     return "", run.stdout + run.stderr
 
 
