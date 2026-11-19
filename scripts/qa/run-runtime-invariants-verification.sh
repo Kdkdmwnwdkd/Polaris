@@ -87,7 +87,7 @@ else
   fail "B2 SubAgentRunner 仍在 chunked 自带并发限制器（行 $sub_chunked）"
 fi
 
-sub_permit=$(awk -v pat='withPermit\("cloud"\)' '
+sub_permit=$(awk -v pat='withPermit[(]"cloud"[)]' '
   {
     line=$0; sub(/^[ \t]+/, "", line)
     if (line ~ /^(\/\/|\*|\/\*)/) next
@@ -110,7 +110,7 @@ fi
 echo ""
 echo "[C] 不变量 1：RealAgentLoop( 生产代码仅 1 处，且位于 runtime/"
 
-loop_sites=$(prod_matches 'RealAgentLoop\(' | grep -v 'class RealAgentLoop')
+loop_sites=$(prod_matches 'RealAgentLoop[(]' | grep -v 'class RealAgentLoop')
 loop_n=$(echo "$loop_sites" | grep -c . || true)
 if [ "$loop_n" = "1" ] && echo "$loop_sites" | grep -q 'runtime/'; then
   pass "C1 RealAgentLoop( 仅 1 处且在 runtime/：$loop_sites"
