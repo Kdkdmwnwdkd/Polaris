@@ -1,5 +1,6 @@
 package com.beichen.polaris.core.runtime
 
+import com.beichen.polaris.core.Consent
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -230,5 +231,37 @@ class AgentRuntimeTest {
         withTimeout(TIMEOUT_MS) { main.join() }
         withTimeout(TIMEOUT_MS) { pet.join() }
         assertEquals(0, rt.activeTurns())
+    }
+
+    // —— 契约层：TaskSpec（v4 不变量 3）——
+
+    @Test
+    fun `TaskSpec 显式携带配额与审批——两个字段都是必填`() {
+        // 不变量 3 的构造面：quota 与 consent 无默认值，任何 TaskSpec(...) 都必须表态。
+        // 这条测试钉住的是「字段真的被塞进 TaskSpec 且原样取出」——类型层的「无默认值」
+        // 由静态门禁（run-runtime-invariants-verification.sh 的 A1/A2）兜，编译期再兜一道。
+        val q = Quota(maxSteps = 3, maxTokens = 1_000, deadlineMs = 9_000L)
+        val c = Consent.Deny("测试通道没有审批界面")
+        val spec = TaskSpec(
+            session = "s",
+            source = RunSource.MAIN,
+            input = "hi",
+            quota = q,
+            consent = c,
+        )
+        assertEquals("s", spec.session)
+        assertEquals(RunSource.MAIN, spec.source)
+        assertEquals(3, spec.quota.maxSteps)
+        assertEquals(1_000, spec.quota.maxTokens)
+        assertEquals(c, spec.consent)
+    }
+
+    @Test
+    fun `Quota 默认值语义——0 表示不限那一项`() {
+        // maxTokens=0 / deadlineMs=0L 都表示「不限」；maxSteps 默认 20 是兜底步数上限。
+        val q = Quota()
+        assertEquals(20, q.maxSteps)
+        assertEquals(0, q.maxTokens)
+        assertEquals(0L, q.deadlineMs)
     }
 }

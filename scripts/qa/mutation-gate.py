@@ -164,6 +164,11 @@ GROUPS = {
     "runtime": {
         "sources": [
             "core/src/main/java/com/beichen/polaris/core/runtime/AgentRuntime.kt",
+            # TaskSpec 的 consent 字段是 Consent 类型，Consent 依赖 AgentTool（AgentContract）
+            # 与 ToolResult——三个文件一起编译，与 run-consent-verification.sh 同一闭包。
+            "core/src/main/java/com/beichen/polaris/core/Consent.kt",
+            "core/src/main/java/com/beichen/polaris/core/AgentContract.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolResult.kt",
             "core/src/test/java/com/beichen/polaris/core/runtime/AgentRuntimeTest.kt",
         ],
         "classes": ["com.beichen.polaris.core.runtime.AgentRuntimeTest"],

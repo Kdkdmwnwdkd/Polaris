@@ -5,6 +5,7 @@ import com.beichen.polaris.core.LLMClient
 import com.beichen.polaris.core.Consent
 import com.beichen.polaris.core.ToolRegistry
 import com.beichen.polaris.core.agent.journal.RunScope
+import com.beichen.polaris.core.runtime.AgentRuntime
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -52,7 +53,19 @@ class SubAgentRunner(
      *
      * 默认 [Consent.unset]：没有显式声明的子代理不会静默执行危险操作，而是拒绝并说明。
      */
-    private val consent: Consent = Consent.unset("SubAgentRunner")
+    private val consent: Consent = Consent.unset("SubAgentRunner"),
+    /**
+     * P1：子代理的并发不再自带限制器，改向运行时**借**许可（v4 §3.2 / 不变量 4）。
+     *
+     * 每跑一个子代理，[runOne] 先 `withPermit("cloud")`——「同时能跑几个子代理」由
+     * 运行时的 cloud 许可（默认 2）说了算，而不是 [SubAgentRunner] 自己 `chunked`。
+     * 前者是进程级单一真源（主界面、桌宠、子代理共用同一份闸），后者是各写各的。
+     *
+     * 默认 [AgentRuntime.of] 是过渡：它让现有调用方（未传 runtime）仍能编译运行，
+     * 但会各建一个独立闸。三入口接线轮次会把**进程级单例**传进来，届时此默认值
+     * 与不变量 4「进程内仅一个 Semaphore」一起收口。
+     */
+    private val runtime: AgentRuntime = AgentRuntime.of()
 ) {
 
     /**
@@ -60,16 +73,16 @@ class SubAgentRunner(
      * 外层协程取消（用户点停止）会传播进来，正在跑的子代理一起取消。
      */
     suspend fun run(
-        tasks: List<SubTask>,
-        concurrency: Int = SubAgentLogic.MAX_TASKS
+        tasks: List<SubTask>
     ): List<SubAgentOutcome> = coroutineScope {
-        val limit = SubAgentLogic.clampConcurrency(concurrency, tasks.size)
-        if (limit == 0) return@coroutineScope emptyList()
-        tasks.chunked(limit).flatMap { batch ->
-            batch.map { task ->
-                async(Dispatchers.IO) { runOne(task) }
-            }.awaitAll()
-        }
+        if (tasks.isEmpty()) return@coroutineScope emptyList()
+        // 全部派出去，不再分批（chunked）。并发上限由 runOne 里的许可层约束：
+        // 谁先 withPermit("cloud") 拿到额度谁先跑，拿不到就挂起排队。429 退避
+        // 与 Key 池在许可层之上兜底（v4 §3.2：子代理保留 N 路，但每一路都必须
+        // 借许可）。
+        tasks.map { task ->
+            async(Dispatchers.IO) { runOne(task) }
+        }.awaitAll()
     }
 
     /**
@@ -95,23 +108,25 @@ class SubAgentRunner(
             val parent = currentAgentScope()
             val subScope = RunScope.subagent(task.title)
             val subTurn = parent?.turn?.scoped(subScope)
-            val history = withTimeout(timeoutMs) {
-                RealAgentLoop(
-                    llmProvider = llmProvider,
-                    registry = buildRegistry(),
-                    systemPrompt = SubAgentLogic.systemPrompt(task.title),
-                    maxSteps = maxSteps,
-                    maxParallelTools = 2,
-                    contextBudgetTokens = budgetTokens,
-                    // R4：审批必须穿过子代理边界——见构造参数注释
-                    consent = consent,
-                    // 白名单只有十几个工具，不能被「小模型核心集」再裁掉——
-                    // 子代理拿不到 read_file 就等于瞎了
-                    forceFullTools = true,
-                    // R7：写进主回合日志，事件带 scope=sub:<标题>
-                    journalTurn = subTurn,
-                    scope = subScope
-                ).send(SubAgentLogic.userPrompt(task.instruction), emptyList(), emptyList())
+            val history = runtime.withPermit("cloud") {
+                withTimeout(timeoutMs) {
+                    RealAgentLoop(
+                        llmProvider = llmProvider,
+                        registry = buildRegistry(),
+                        systemPrompt = SubAgentLogic.systemPrompt(task.title),
+                        maxSteps = maxSteps,
+                        maxParallelTools = 2,
+                        contextBudgetTokens = budgetTokens,
+                        // R4：审批必须穿过子代理边界——见构造参数注释
+                        consent = consent,
+                        // 白名单只有十几个工具，不能被「小模型核心集」再裁掉——
+                        // 子代理拿不到 read_file 就等于瞎了
+                        forceFullTools = true,
+                        // R7：写进主回合日志，事件带 scope=sub:<标题>
+                        journalTurn = subTurn,
+                        scope = subScope
+                    ).send(SubAgentLogic.userPrompt(task.instruction), emptyList(), emptyList())
+                }
             }
             val texts = history.mapNotNull { (it as? AssistantMessage)?.content }
             SubAgentOutcome(

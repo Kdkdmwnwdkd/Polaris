@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# P1 `AgentRuntime` 四条硬不变量验证（v4 §3.2 / §4 不变量 1–4）。
+#
+# 四条不变量都能 grep 验证，所以本 harness 是纯静态段，不需要编译器、不 exit 3。
+#
+# 分层判定（不是「全绿才过」，而是「已达标项硬断言、待收口项显式挂账」）：
+#   PASS    已达标的不变量，源码里这条线必须在；破了就是真红。
+#   PENDING 已知违例、属「下一轮接线」的活，不阻塞构建，但必须在这里可见、
+#           可勾对——让「还剩几条」不再是一句口头的估计。
+#
+# 三入口接线轮次（把 ChatViewModel / PetAgentSession / SubAgentRunner 的三个
+# RealAgentLoop( 收进 runtime 唯一构造点）完成后，PENDING 项应改为 PASS 硬断言，
+# 本门禁随之收紧。
+set -uo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$ROOT"
+
+CORE=core/src/main/java/com/beichen/polaris/core
+APP=app/src/main/java/com/beichen/polaris
+RT="$CORE/runtime/AgentRuntime.kt"
+SUB="$CORE/agent/SubAgentRunner.kt"
+VM="$APP/ui/ChatViewModel.kt"
+PET="$APP/pet/PetAgentSession.kt"
+
+p=0; f=0; pending=0
+pass() { echo "  PASS  $*"; p=$((p + 1)); }
+fail() { echo "  FAIL  $*"; f=$((f + 1)); }
+pend() { echo "  PENDING $*"; pending=$((pending + 1)); }
+
+# 生产代码里的一行「字面量出现次数」，跳过 build 与 test。
+prod_count() { # $1=pattern
+  grep -rE "$1" core/src/main/java app/src/main/java --include="*.kt" 2>/dev/null \
+    | grep -v '/build/' | wc -l | tr -d ' '
+}
+
+# 生产代码里「跳过注释行」后的匹配行（文件:行号:内容）。
+# 注释里的字面量（如 Consent.kt 那句「96 处 RealAgentLoop(」）不算——grep 语义只看代码。
+prod_matches() { # $1=pattern
+  for f in $(grep -rlE "$1" core/src/main/java app/src/main/java --include="*.kt" 2>/dev/null | grep -v '/build/'); do
+    awk -v pat="$1" '
+      {
+        line=$0
+        sub(/^[ \t]+/, "", line)
+        if (line ~ /^(\/\/|\*|\/\*)/) next
+        sub(/\/\/.*/, "", line)
+        if (line ~ pat) printf "%s:%d:%s\n", FILENAME, NR, $0
+      }
+    ' "$f"
+  done
+}
+
+echo "[A] 不变量 3：TaskSpec 必含 quota 与 consent（无默认值，类型强制）"
+
+if grep -qE 'val quota: Quota[,$]' "$RT" && ! grep -qE 'val quota: Quota\s*=' "$RT"; then
+  pass "A1 TaskSpec.quota 无默认值——任何 TaskSpec(...) 都必须显式给配额"
+else
+  fail "A1 TaskSpec.quota 给了默认值——「忘写配额」会静默退成「不限量」"
+fi
+
+if grep -qE 'val consent: Consent[,$]' "$RT" && ! grep -qE 'val consent: Consent\s*=' "$RT"; then
+  pass "A2 TaskSpec.consent 无默认值——任何 TaskSpec(...) 都必须显式表态审批"
+else
+  fail "A2 TaskSpec.consent 给了默认值——「忘写审批」会静默退成默认拒绝/放行"
+fi
+
+echo ""
+echo "[B] 不变量 4：进程内仅一个 Semaphore；SubAgentRunner 不自带并发限制器"
+
+sem_files=$(grep -rEl 'Semaphore\(' core/src/main/java app/src/main/java --include="*.kt" 2>/dev/null | grep -v '/build/')
+if [ "$(echo "$sem_files" | grep -c .)" = "1" ] && echo "$sem_files" | grep -q 'runtime/AgentRuntime.kt'; then
+  pass "B1 Semaphore( 构造只出现在 runtime/AgentRuntime.kt（$sem_files）"
+else
+  fail "B1 Semaphore( 出现在多处：$(echo "$sem_files" | tr '\n' ' ')——并发闸的真源不止一个"
+fi
+
+sub_chunked=$(awk -v pat='chunked' '
+  {
+    line=$0; sub(/^[ \t]+/, "", line)
+    if (line ~ /^(\/\/|\*|\/\*)/) next
+    sub(/\/\/.*/, "", line)
+    if (line ~ pat) print NR
+  }
+' "$SUB")
+if [ -z "$sub_chunked" ]; then
+  pass "B2 SubAgentRunner 不再 chunked 分批——并发上限不在这里自决"
+else
+  fail "B2 SubAgentRunner 仍在 chunked 自带并发限制器（行 $sub_chunked）"
+fi
+
+sub_permit=$(awk -v pat='withPermit\("cloud"\)' '
+  {
+    line=$0; sub(/^[ \t]+/, "", line)
+    if (line ~ /^(\/\/|\*|\/\*)/) next
+    sub(/\/\/.*/, "", line)
+    if (line ~ pat) print NR
+  }
+' "$SUB")
+if [ -n "$sub_permit" ]; then
+  pass "B3 SubAgentRunner 每一路借 runtime.withPermit(\"cloud\")——上限由许可层定"
+else
+  fail "B3 SubAgentRunner 没借许可——并发上限没有单一真源"
+fi
+
+if grep -qE 'runtime: AgentRuntime = AgentRuntime\.of\(\)' "$SUB"; then
+  pend "B4 SubAgentRunner 的 runtime 仍是默认独立实例（进程级单例待三入口接线注入）"
+else
+  pass "B4 SubAgentRunner 已注入进程级 runtime（不变量 4 前半收口）"
+fi
+
+echo ""
+echo "[C] 不变量 1：RealAgentLoop( 生产代码仅 1 处，且位于 runtime/"
+
+loop_sites=$(prod_matches 'RealAgentLoop\(' | grep -v 'class RealAgentLoop')
+loop_n=$(echo "$loop_sites" | grep -c . || true)
+if [ "$loop_n" = "1" ] && echo "$loop_sites" | grep -q 'runtime/'; then
+  pass "C1 RealAgentLoop( 仅 1 处且在 runtime/：$loop_sites"
+else
+  pend "C1 RealAgentLoop( 现 $loop_n 处、0 处在 runtime/（待三入口接线收口）"
+  echo "$loop_sites" | sed 's/^/        /'
+fi
+
+echo ""
+echo "[D] 不变量 2：ui / pet / entry 不 import RealAgentLoop / ToolRegistry"
+
+bad_imports=""
+for src in "$VM" "$PET"; do
+  if grep -qE 'import .*\.(agent\.RealAgentLoop|ToolRegistry)' "$src" 2>/dev/null; then
+    bad_imports="$bad_imports $(basename "$src")"
+  fi
+done
+if [ -z "$bad_imports" ]; then
+  pass "D1 ui/pet 不再 import RealAgentLoop / ToolRegistry"
+else
+  pend "D1 仍有 import：$bad_imports（待 loop 构造收进 runtime 后移除）"
+fi
+
+echo ""
+echo "$p 通过 / $f 失败 / $pending 待收口"
+[ "$f" -eq 0 ] || exit 1

@@ -1,5 +1,6 @@
 package com.beichen.polaris.core.runtime
 
+import com.beichen.polaris.core.Consent
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.util.concurrent.ConcurrentHashMap
@@ -15,9 +16,9 @@ enum class RunSource { MAIN, PET, SUBAGENT, AUTO_RESUME, MCP }
 /**
  * 一个回合的配额。
  *
- * 三个字段全部有默认值，但语义上都**不允许「真的不限」**：调用方必须显式表态。
- * 这里给默认值只是为了让第一版（不接 loop 执行体）的 [TaskSpec] 能先落地，
- * 等 loop 接线时会把「无默认值」这条约束提上来（v4 §3.2 的不变量 3）。
+ * 字段默认值表示「不设上限」的那一项（0 / 0L 都是「不限」），但 [TaskSpec] 要求
+ * **显式给出一个 [Quota] 实例**——不能在构造 TaskSpec 时把配额整个省掉。省掉就是
+ * 「这个回合没有资源边界」，与 v4 不变量 3 直接冲突。
  */
 data class Quota(
     val maxSteps: Int = 20,
@@ -26,15 +27,23 @@ data class Quota(
 )
 
 /**
- * 一个回合任务的描述。第一版只承载「谁、什么来源、跑什么、多少配额」，
- * 不承载执行体——执行体（loop 工厂）在接线轮次接入，这里先把互斥/许可/代次号
- * 这三样**纯机制**立起来，让它们能脱离 Android 在 JVM 上逐条验证。
+ * 一个回合任务的描述。承载「谁、什么来源、跑什么、多少配额、怎么审批」，
+ * 不承载执行体——执行体（loop 工厂）在接线轮次接入。
+ *
+ * ## 不变量 3（v4 §3.2）：`quota` 与 `consent` **无默认值**
+ *
+ * 这两个字段刻意不给默认值：任何 `TaskSpec(...)` 字面量都必须显式表态
+ * 「给多少资源」「有审批通道吗」。给了默认值，`quota` 会退化成「不限量」、
+ * `consent` 会退化成「默认拒绝」，两者都是把「忘写」悄悄变成「某种行为」——
+ * 前者是资源失控，后者是功能静默不可用。类型层先把它钉死，门禁层（静态断言）
+ * 再兜一道 grep。
  */
 data class TaskSpec(
     val session: String,
     val source: RunSource,
     val input: String,
-    val quota: Quota = Quota(),
+    val quota: Quota,
+    val consent: Consent,
 )
 
 /**
