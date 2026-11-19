@@ -677,22 +677,40 @@ jobs:
       - name: Kotlin 编译器与运行时库
         run: |
           set -euo pipefail
-          curl -sSL --retry 3 --max-time 300 -o /tmp/kotlin.zip \
-            "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
+          # `-f` 不是可选项（2026-11-19）：没有它，429/502 的错误页会被原样写进
+          # `.jar` 文件，随后编译器报的是
+          #     AgentContract.kt:3:16: error: unresolved reference: serialization
+          # ——一条看着像**源码写错**的报错，实际是下载失败。第一次遇到时从头查到尾，
+          # 先怀疑测试、再怀疑 classpath 顺序，最后才发现那个「jar」是 1KB 的 HTML。
+          fetch() { curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --max-time 300 -o "$2" "$1"; }
+
+          fetch "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip" /tmp/kotlin.zip
           unzip -q /tmp/kotlin.zip -d /tmp
           # 发行版里的 annotations 带版本号，而 mutation-gate 的兜底路径不带；
           # 补一份同名副本，避免 K2 后端在代码生成阶段报 NoClassDefFoundError: NotNull
           cp /tmp/kotlinc/lib/annotations-13.0.jar /tmp/kotlinc/lib/annotations.jar || true
           # mutation-gate 的兜底文件名不带版本号（find_classpath 的 KC_HOME 分支），这里对齐
-          curl -sSL --retry 3 -o /tmp/kotlinc/lib/kotlinx-serialization-json-jvm.jar \
-            "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-serialization-json-jvm/${SER_VERSION}/kotlinx-serialization-json-jvm-${SER_VERSION}.jar"
-          curl -sSL --retry 3 -o /tmp/kotlinc/lib/kotlinx-serialization-core-jvm.jar \
-            "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-serialization-core-jvm/${SER_VERSION}/kotlinx-serialization-core-jvm-${SER_VERSION}.jar"
+          fetch "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-serialization-json-jvm/${SER_VERSION}/kotlinx-serialization-json-jvm-${SER_VERSION}.jar" \
+            /tmp/kotlinc/lib/kotlinx-serialization-json-jvm.jar
+          fetch "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-serialization-core-jvm/${SER_VERSION}/kotlinx-serialization-core-jvm-${SER_VERSION}.jar" \
+            /tmp/kotlinc/lib/kotlinx-serialization-core-jvm.jar
           mkdir -p /tmp/junit
-          curl -sSL --retry 3 -o /tmp/junit/junit-4.13.2.jar \
-            https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar
-          curl -sSL --retry 3 -o /tmp/junit/hamcrest-core-1.3.jar \
-            https://repo1.maven.org/maven2/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar
+          fetch https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar /tmp/junit/junit-4.13.2.jar
+          fetch https://repo1.maven.org/maven2/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar /tmp/junit/hamcrest-core-1.3.jar
+
+          # 「下载成功」不等于「内容对」：200 也可能是错误页。逐个过一遍 zip 头。
+          python3 - <<'PY'
+          import glob, os, sys, zipfile
+          jars = glob.glob('/tmp/kotlinc/lib/*.jar') + glob.glob('/tmp/junit/*.jar')
+          bad = [p for p in jars if not zipfile.is_zipfile(p)]
+          if bad:
+              for p in bad:
+                  with open(p, 'rb') as f:
+                      head = f.read(16)
+                  print(f"损坏构件：{p}（{os.path.getsize(p)} 字节，开头 {head!r}）")
+              sys.exit(1)
+          print(f"构件校验通过：{len(jars)} 个 jar")
+          PY
         env:
           # 必须与 build.gradle.kts 的 `org.jetbrains.kotlin.android` 版本一致：
           # 用 2.x 编 1.9 的源码虽然能过，但 K2 与 K1 的推断差异会让「变异是否被捕获」
@@ -700,7 +718,9 @@ jobs:
           KOTLIN_VERSION: "1.9.25"
           SER_VERSION: "1.6.3"
 
-      - name: 变异门禁（27 条）
+      # 名字不带条数：条数只增不减，写死在名字里必然过期（上一版写着「27 条」，
+      # 实际已经 34 条）。跑几条由脚本自己打印。
+      - name: 变异门禁（基线 + 全量变异）
         env:
           KOTLINC_HOME: /tmp/kotlinc
           # 强制走 KOTLINC_HOME：runner 上可能残留别的 Gradle 缓存，混版本会让

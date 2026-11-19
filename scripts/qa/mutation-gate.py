@@ -42,6 +42,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -445,15 +446,47 @@ def _glob_jar(*patterns):
     coroutines-1.10（元数据 2.2），用 1.9 编译器去读就报
     `module was compiled with an incompatible version of Kotlin`——
     错误文本以 jar 路径开头，截断后看起来像「文件不存在」，极难定位。
+
+    ## 为什么要验「这真的是个 jar」（2026-11-19）
+
+    CI 上 `curl -sSL` 少了 `-f`：HTTP 429/502 的错误页照样被写进 `.jar` 文件，
+    于是「文件在、内容不是 jar」。编译器不会说「jar 坏了」，它说
+
+        AgentContract.kt:3:16: error: unresolved reference: serialization
+
+    ——一条看着像**源码写错了**的报错。实测代价：一次 CI 失败从头查到尾，
+    先怀疑测试、再怀疑 classpath 顺序，最后才发现那个「jar」是 1KB 的 HTML。
+
+    所以候选必须先过 `is_zipfile`；不合格的记进 [_BROKEN_JARS]，
+    由 [find_classpath] 统一打出来——**跳过它但说出原因**，不静默。
     """
     for pat in patterns:
         hits = [
             p for p in glob.glob(pat, recursive=True)
             if os.path.isfile(p) and "-sources" not in p
         ]
-        if hits:
-            return sorted(hits)[-1]
+        good = [p for p in hits if zipfile.is_zipfile(p)]
+        _BROKEN_JARS.extend(p for p in hits if p not in good)
+        if good:
+            return sorted(good)[-1]
     return None
+
+
+# 候选里「文件存在、但不是合法 zip」的路径。见 [_glob_jar] 的说明。
+_BROKEN_JARS: list[str] = []
+
+
+def _describe_broken(path):
+    """给坏构件一句能直接定位的话：多大、开头几个字节像什么。"""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            head = f.read(24)
+    except OSError as e:
+        return f"{path}（读不了：{e}）"
+    sniff = head[:5].decode("utf-8", "replace").replace("\n", " ")
+    hint = "看起来是 HTML/错误页（下载时没加 -f）" if sniff.lstrip().startswith("<") else "不是 zip"
+    return f"{path}（{size} 字节，开头 {sniff!r}，{hint}）"
 
 
 def find_classpath():
@@ -530,6 +563,13 @@ def find_classpath():
     ]
     if missing:
         print(f"SKIP  缺少构件：{', '.join(missing)}")
+        if _BROKEN_JARS:
+            # 这一档最容易被误诊：文件在、路径对，报错却是「unresolved reference: serialization」，
+            # 看着像源码写错。所以坏构件必须点名。
+            print("      其中以下候选**文件在但不是合法 jar**（已跳过）：")
+            for p in _BROKEN_JARS:
+                print(f"        - {_describe_broken(p)}")
+            print("      → 重新下载（用 `curl -fL`，别让错误页冒充 jar）。")
         print("      → 本脚本什么都没验证。装好 kotlinc 或用 KOTLINC_HOME/QA_GRADLE_CACHE 指路后重跑。")
         return None
 
@@ -538,6 +578,12 @@ def find_classpath():
     # 被测代码的一部分，只在编译器 classpath 上会让 JUnit 报 NoClassDefFoundError。
     lib_cp = ":".join(x for x in [stdlib, coro, ser_core, ser_json, junit, hamcrest] if x)
     plugin = ["-Xplugin=" + ser_plugin] if ser_plugin else []
+    # 把「这一轮到底用的哪几个 jar」打出来。CI 日志里没有这一行时，任何失败都要
+    # 从头猜 classpath；有这一行，跨版本串档 / 少一个 jar 一眼可见。
+    print("构件：" + " ".join(
+        f"{os.path.basename(p)}({os.path.getsize(p) // 1024}KB)"
+        for p in [compiler, stdlib, ser_json, ser_core, coro, junit, ser_plugin] if p
+    ))
     return compiler_cp, lib_cp, plugin
 
 
