@@ -58,21 +58,23 @@ object DiagnosticsExporter {
         }
         val config = runCatching { ConfigStore(context).load() }.getOrNull()
         val key = config?.apiKey.orEmpty()
-        val maskedKey = maskKey(key)
+        val maskedKey = DiagnosticsRedaction.maskKey(key)
 
         // W-22 修：备用 Key 也必须脱敏——日志里可能出现备用 Key（401 回显、切换日志）。
         // 只替换主 Key 会让诊断包泄露备用池里的全部 Key。
         val profileId = runCatching { ConfigStore(context).loadActiveId() }.getOrNull() ?: "default"
         val backupKeys = runCatching { KeyPoolStore(context).list(profileId) }
             .getOrDefault(emptyList())
-        val allKeys = (listOf(key) + backupKeys.map { it.key })
-            .map { it.trim() }
-            .filter { it.length >= 8 }
-            .distinct()
-        var safeLog = logText
-        allKeys.forEach { k -> safeLog = safeLog.replace(k, maskKey(k)) }
-
-        val tail = safeLog.lineSequence().toList().takeLast(MAX_LOG_LINES).joinToString("\n")
+        // 汇集与替换顺序（长的在前）都在 [DiagnosticsRedaction] 里，有断言守（M35）。
+        // 原先这段是就地写的：`listOf(主) + 备用` 的顺序下，主 Key 若是某把备用 Key 的
+        // 前缀，先替换短的会让长 Key 剩尾部明文——诊断包里留下 12 位可用的 Key。
+        val secrets = DiagnosticsRedaction.secretsOf(key, backupKeys.map { it.key })
+        // 先按行截断，再脱敏：`takeLast` 按整行取，不会把一把 Key 切成两半；
+        // 反过来（先脱敏全文）要给几 MB 日志多复制一份，而这一步在 UI 线程上。
+        val tail = DiagnosticsRedaction.redact(
+            logText.lineSequence().toList().takeLast(MAX_LOG_LINES).joinToString("\n"),
+            secrets,
+        )
         val text = buildString {
             appendLine("北辰诊断包")
             appendLine("时间：${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
@@ -82,16 +84,18 @@ object DiagnosticsExporter {
             appendLine()
             appendLine("—— 模型配置（已脱敏）——")
             appendLine("供应商：${config?.providerId ?: "?"}")
-            appendLine("端点：${config?.baseUrl ?: "?"}")
+            // 端点也要过一遍：用户把 Key 塞在自建代理的 query 里（`?key=…`）时，
+            // 配置区是另行拼的字符串，不走日志那条替换路径——原来它原样写进文件。
+            appendLine("端点：${DiagnosticsRedaction.redact(config?.baseUrl ?: "?", secrets)}")
             appendLine("模型：${config?.model ?: "?"}")
             appendLine("Key：$maskedKey")
             if (backupKeys.isNotEmpty()) {
                 appendLine("备用 Key（${backupKeys.size} 把）：" +
-                    backupKeys.joinToString("、") { "${it.label}=${maskKey(it.key)}" })
+                    backupKeys.joinToString("、") { "${it.label}=${DiagnosticsRedaction.maskKey(it.key)}" })
             }
             appendLine()
             appendLine("—— 原生崩溃现场 ——")
-            appendLine(crashSnapshot(context))
+            appendLine(crashSnapshot(context, secrets))
             appendLine()
             appendLine("—— 最近 $MAX_LOG_LINES 行日志 ——")
             appendLine(tail.ifBlank { "(无日志)" })
@@ -113,8 +117,9 @@ object DiagnosticsExporter {
      * 而嵌在 .txt 里就只剩人眼 grep。R7 把导出函数写好了，但一直没人调，
      * 等于不存在；这里补上唯一的消费方。
      *
-     * 不含任何脱敏负担：[RunEventJson] 只编码 seq/at/turn/scope/type/step/call/status，
-     * **不落工具入参与输出**，因此不存在「事件里夹了 Key」的可能。
+     * 这一份**不含**工具入参：`RunEventJson` 只编码
+     * seq/at/turn/scope/type/step/call/status。（下面 [traceOf] 那一份含 `args`，
+     * 两者的脱敏负担不同，2026-11-19 之前被混为一谈。）
      *
      * @return 文件；没有回合日志时返回 null（调用方只发诊断文本，不报错）。
      */
@@ -131,12 +136,29 @@ object DiagnosticsExporter {
      *
      * 与 [ndjsonOf] 的区别（名字不像，内容完全不同，别混）：
      * - [ndjsonOf]：`RunEvent`——崩溃恢复日志，回答「哪些调用可能已生效」；
-     * - 本函数：[TurnEvent](core/agent/TurnObserver.kt) + `store.*`——执行流水，
-     *   回答「这一回合慢在哪、写了多少字节」。两份都是 NDJSON，但事件族毫无重叠。
+     * - 本函数：`TurnEvent`——执行流水，回答「这一回合慢在哪、写了多少字节」。
      *
      * 先 flush：流水是攒批写的（400ms / 32KB），用户点「导出」的瞬间队列里
      * 可能还躺着最后几条——不 flush 就会导出到「刚好缺个尾巴」的版本，
      * 而缺的往往正是最关键的 turn.end。
+     *
+     * ## 必须脱敏（2026-11-19 修）
+     *
+     * 原来的注释写的是「不含任何脱敏负担：不落工具入参与输出，因此不存在
+     * 『事件里夹了 Key』的可能」。**这句话是错的**，而且错得很具体：
+     *
+     * - 本函数导出的是 `TurnEvent` 流水，不是上面那个 `RunEvent` 崩溃日志；
+     * - `TurnEventNdjson` 的 `tool.start` 行有 `"args"` 字段；
+     * - `RealAgentLoop` 传的是 `call.arguments.toString().take(120)`——**原始参数**的前 120 字符。
+     *
+     * 120 字符足够装下一整条 `curl -H 'Authorization: Bearer sk-…'`。于是用户点
+     * 「导出诊断包 → 发出去」时，文件里带着自己的 Key，而两个文件的 KDoc 都写着「不含」。
+     *
+     * 修法不是「不写 args」（排障要靠它认出是哪次调用），而是**在出口脱敏**：
+     * 出口是唯一能同时覆盖「日志里那把 Key」与「配置里没有、但日志里出现的 Key」的位置。
+     * 判据在 [DiagnosticsRedaction.redactLines]，行为断言在 `DiagnosticsRedactionTest`。
+     *
+     * @return 文件；没有回合日志时返回 null（调用方只发诊断文本，不报错）。
      */
     fun traceOf(context: Context): File? = runCatching {
         TraceSink.flush()
@@ -145,10 +167,29 @@ object DiagnosticsExporter {
             ?.filter { it.length() > 0 }
             ?.maxByOrNull { it.lastModified() }
             ?: return null
+        val secrets = secretsOf(context)
         val out = File(context.cacheDir, "exports").apply { mkdirs() }
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date())
-        File(out, "polaris-events-$stamp.ndjson").apply { src.copyTo(this, overwrite = true) }
+        val dst = File(out, "polaris-events-$stamp.ndjson")
+        // 逐行读写而不是 readText：单个流水文件上限 4MB，readText 会同时占住
+        // 原文与副本两份，而这一步发生在用户点「导出」的主线程附近。
+        src.bufferedReader().use { r ->
+            dst.bufferedWriter().use { w ->
+                DiagnosticsRedaction.redactLines(r.lineSequence(), secrets).forEach {
+                    w.append(it).append('\n')
+                }
+            }
+        }
+        dst
     }.getOrNull()
+
+    /** 当前配置下「可能出现在文本里」的凭据集合（主 Key + 备用池，长的在前）。 */
+    private fun secretsOf(context: Context): List<String> {
+        val key = runCatching { ConfigStore(context).load() }.getOrNull()?.apiKey.orEmpty()
+        val profileId = runCatching { ConfigStore(context).loadActiveId() }.getOrNull() ?: "default"
+        val backups = runCatching { KeyPoolStore(context).list(profileId) }.getOrDefault(emptyList())
+        return DiagnosticsRedaction.secretsOf(key, backups.map { it.key })
+    }
 
     /**
      * 生成诊断包：文本摘要 + 可选的事件流，**一次分享带两个文件**。
@@ -175,8 +216,11 @@ object DiagnosticsExporter {
      *  - 归档现场：上次崩在哪个阶段、什么信号、什么参数；
      *  - 待处理现场：本次启动还没消费的那份（正常情况下上一行就能覆盖它）；
      *  - stderr：ggml 的断言行，**唯一能一句话定性「OOM 还是断言」的证据**。
+     *
+     * @param secrets 崩溃现场也要过脱敏：`native-stderr.txt` 是推理库自己写的，
+     *   我们决定不了它写什么（下载地址、代理、鉴权头的回显都出现过）。
      */
-    private fun crashSnapshot(context: Context): String {
+    private fun crashSnapshot(context: Context, secrets: List<String>): String {
         val dir = File(context.filesDir, CrashLogger.DIR_NAME)
         val candidates = listOf(
             NativeCrashMemory.archiveFile(context) to "上次崩溃（已归档）",
@@ -189,7 +233,7 @@ object DiagnosticsExporter {
             out.append("\u25b8 ").append(label).append("：").append(file.name)
                 .append("（").append(file.length()).append(" 字节）\n")
             val body = runCatching { file.readText() }.getOrDefault("")
-            out.append(body.take(MAX_CRASH_CHARS))
+            out.append(DiagnosticsRedaction.redact(body.take(MAX_CRASH_CHARS), secrets))
             if (!body.endsWith("\n")) out.append('\n')
         }
         return if (out.isEmpty()) "(无——本机还没发生过 native 崩溃，或已被「清空」删掉)" else out.toString()
@@ -235,10 +279,12 @@ object DiagnosticsExporter {
             .onFailure { AgentLogger.w("Diagnostics", "分享失败：${it.message}") }
     }
 
-    /** Key 脱敏：前 4 + 后 4，中间固定 4 个星号（短 Key 直接全遮）。 */
-    internal fun maskKey(key: String): String = when {
-        key.isBlank() -> "(未配置)"
-        key.length <= 8 -> "****"
-        else -> "${key.take(4)}****${key.takeLast(4)}"
-    }
+    /**
+     * Key 脱敏。判据整体搬到 [DiagnosticsRedaction.maskKey]（纯 Kotlin、JVM 可测），
+     * 这里只留一个转发，避免调用点改名。
+     *
+     * 搬走的原因：这个类 import 了 `android.content.Context`，JVM 上编不过——
+     * 判据留在这里就等于**没有任何断言**（第十轮之前它一行测试都没有）。
+     */
+    internal fun maskKey(key: String): String = DiagnosticsRedaction.maskKey(key)
 }

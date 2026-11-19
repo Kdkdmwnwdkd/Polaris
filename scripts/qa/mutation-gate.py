@@ -79,6 +79,24 @@ GROUPS = {
             "com.beichen.polaris.core.tool.ToolCatalogTest",
         ],
     },
+    # 脱敏判据（第十一轮）。单独成组是因为它的源码闭包与审批组几乎不重叠：
+    # 它要 TurnEvent/toNdjson/TraceSink 才能断言「流水行里的 Key 被抹掉」，
+    # 而这三个文件不该拖进审批组（那会让每次跑 approval 多编 1500 行）。
+    "redaction": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/DiagnosticsRedaction.kt",
+            "core/src/main/java/com/beichen/polaris/core/AgentContract.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolResult.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/TurnObserver.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/TurnEventNdjson.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/journal/RunScope.kt",
+            "core/src/main/java/com/beichen/polaris/core/telemetry/TraceSink.kt",
+            "core/src/test/java/com/beichen/polaris/core/DiagnosticsRedactionTest.kt",
+        ],
+        "classes": [
+            "com.beichen.polaris.core.DiagnosticsRedactionTest",
+        ],
+    },
     "storage": {
         "sources": [
             "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
@@ -427,6 +445,74 @@ MUTATIONS = [
         "new": """        if (name in sensitiveTools && wasTainted) return GuardDecision.Deny(code = "over", message = "over")
         if (name !in egressTools) return GuardDecision.Abstain""",
         "expect": ["污染之后继续读文件不被拦"],
+    },
+    {
+        "id": "M35 替换不按长度降序（短 Key 是长 Key 前缀时漏尾巴）",
+        "group": "redaction",
+        "file": "core/src/main/java/com/beichen/polaris/core/DiagnosticsRedaction.kt",
+        "old": "            .sortedByDescending { it.length }",
+        "new": "            .sortedBy { it.length }",
+        "expect": ["按长度降序排列", "短 Key 是长 Key 前缀时不留尾巴"],
+    },
+    {
+        "id": "M36 去掉形状兜底（只认配置里那几把）",
+        "group": "redaction",
+        "file": "core/src/main/java/com/beichen/polaris/core/DiagnosticsRedaction.kt",
+        "old": "    private val PATTERNS: List<Rule> = listOf(",
+        "new": """    private val PATTERNS: List<Rule> = emptyList()
+
+    private val UNUSED_PATTERNS: List<Rule> = listOf(""",
+        "expect": ["OpenAI 形状的 Key 被抹掉", "URL query 里的 token 被抹掉"],
+    },
+    {
+        "id": "M37 八位 Key 不整体抹（take4+takeLast4 等于原样输出）",
+        "group": "redaction",
+        "file": "core/src/main/java/com/beichen/polaris/core/DiagnosticsRedaction.kt",
+        "old": "        if (k.length <= MIN_SECRET_LEN) return MASK",
+        "new": "        if (k.length < MIN_SECRET_LEN) return MASK",
+        "expect": ["八位及以下整体抹掉"],
+    },
+    {
+        "id": "M38 不 trim（空白参与首尾截取）",
+        "group": "redaction",
+        "file": "core/src/main/java/com/beichen/polaris/core/DiagnosticsRedaction.kt",
+        "old": "        val k = key.trim()",
+        "new": "        val k = key",
+        "expect": ["首尾空白不参与遮蔽", "空 Key 显示为未配置"],
+    },
+    {
+        "id": "M39 短值也当凭据（把「short」这种普通词一起抹）",
+        "group": "redaction",
+        "file": "core/src/main/java/com/beichen/polaris/core/DiagnosticsRedaction.kt",
+        "old": "            .filter { it.length >= MIN_SECRET_LEN }",
+        "new": "            .filter { it.isNotEmpty() }",
+        "expect": ["短值不当作凭据"],
+    },
+    {
+        "id": "M40 只替换第一次出现（同一把 Key 的后续出现漏掉）",
+        "group": "redaction",
+        "file": "core/src/main/java/com/beichen/polaris/core/DiagnosticsRedaction.kt",
+        "old": "            if (s.isNotEmpty() && out.contains(s)) out = out.replace(s, maskKey(s))",
+        "new": "            if (s.isNotEmpty() && out.contains(s)) out = out.replaceFirst(s, maskKey(s))",
+        "expect": ["同一把 Key 出现多次全部替换"],
+    },
+    {
+        "id": "M41 JSON 字段连名一起抹（排障看不出往哪带了 token）",
+        "group": "redaction",
+        "file": "core/src/main/java/com/beichen/polaris/core/DiagnosticsRedaction.kt",
+        "old": "        ) { it.groupValues[1] + MASK + it.groupValues[3] },",
+        "new": "        ) { MASK },",
+        "expect": ["JSON 字段只抹值不抹名"],
+    },
+    {
+        # 反向变异：只防「抹不干净」会让实现越来越宽，最后把诊断包抹成一片星号。
+        # 排障时最需要的恰是参数——过度脱敏与不脱敏一样让这件工具失去意义。
+        "id": "M42 形状放宽到「任何 8 位字母数字」（过度脱敏）",
+        "group": "redaction",
+        "file": "core/src/main/java/com/beichen/polaris/core/DiagnosticsRedaction.kt",
+        "old": '''        Rule(Regex("""\\bsk-[A-Za-z0-9_\\-]{16,}""")) { MASK },''',
+        "new": '''        Rule(Regex("""[A-Za-z0-9]{8,}""")) { MASK },''',
+        "expect": ["UUID 与时间戳不被误伤", "普通 JSON 参数不被误伤"],
     },
 ]
 

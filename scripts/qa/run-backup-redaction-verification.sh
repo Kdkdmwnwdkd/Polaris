@@ -118,6 +118,44 @@ else
   g_good "G5 没有把档案原样写进备份的残留"
 fi
 
+# —— 诊断包脱敏的**接线**（第十一轮）——————————————————————
+#
+# 判据本身搬到了 DiagnosticsRedaction（JVM 26 条断言 + 变异 M35–M42）。
+# 这里只验「Android 壳有没有调它」：DiagnosticsExporter import 了
+# `android.content.Context`，JVM 上编不过，所以只能静态断言。
+#
+# 这一段存在的理由就是上一轮那条教训：判据写得再对，没人调它也白写。
+DIAG="$SRC_CORE/core/DiagnosticsExporter.kt"
+
+# G6：流水导出必须逐行过脱敏（tool.start 行带 args）。
+if grep -Fq 'DiagnosticsRedaction.redactLines' "$DIAG"; then
+  g_good "G6 流水导出过脱敏（traceOf → redactLines）"
+else
+  g_bad "G6 流水没有脱敏 —— tool.start 的 args 会带着 Key 一起出门"
+fi
+
+# G7：反向——原样复制不许回来（那是 2026-11-19 之前的写法）。
+if grep -Fq 'src.copyTo(' "$DIAG"; then
+  g_bad "G7 流水又变回原样复制（traceOf 里还有 src.copyTo）"
+else
+  g_good "G7 没有原样复制流水的残留"
+fi
+
+# G8：配置区的端点也要过——它不走日志那条替换路径，是另行拼的字符串。
+if grep -Fq 'DiagnosticsRedaction.redact(config?.baseUrl' "$DIAG"; then
+  g_good "G8 端点已过脱敏（自建代理把 Key 塞进 query 的兜底）"
+else
+  g_bad "G8 端点原样写进诊断包"
+fi
+
+# G9：原生崩溃现场（stderr 由推理库自己写，内容不可控）也要过。
+if grep -Fq 'crashSnapshot(context, secrets)' "$DIAG" \
+   && grep -Fq 'DiagnosticsRedaction.redact(body.take(MAX_CRASH_CHARS), secrets)' "$DIAG"; then
+  g_good "G9 崩溃现场（native-stderr）过脱敏"
+else
+  g_bad "G9 崩溃现场原样写进诊断包"
+fi
+
 total_pass=$((jp + gp))
 total_fail=$((jf + gf))
 echo ""

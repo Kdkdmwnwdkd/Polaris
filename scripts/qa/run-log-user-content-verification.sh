@@ -126,8 +126,14 @@ else
 fi
 
 # W7：既有的 Key 替换不能因为这次改动被删掉（诊断包里主 Key 与备用 Key 都要脱敏）。
-if grep -q 'safeLog = safeLog.replace(k, maskKey(k))' "$DIAG"; then
-  w_good "W7 诊断导出仍对日志做 Key 替换"
+#
+# 第十一轮把判据搬到 DiagnosticsRedaction（JVM 26 条断言 + 变异 M35–M42），
+# 这里改盯**新接线**。原来这条 grep 的是 `safeLog = safeLog.replace(k, maskKey(k))`——
+# 一行业务实现。判据搬家它立刻报红，而语义（日志里的 Key 被替换）其实还在。
+# 这是 grep 型断言的固有脆弱：它守的是「那行代码」，不是「那个行为」。
+if grep -Fq 'DiagnosticsRedaction.redact(' "$DIAG" \
+   && grep -Fq 'DiagnosticsRedaction.secretsOf(' "$DIAG"; then
+  w_good "W7 诊断导出仍对日志做 Key 替换（判据在 DiagnosticsRedaction）"
 else
   w_bad "W7 诊断导出的 Key 替换没了 —— 日志里的 Key 会原样进诊断包"
 fi
