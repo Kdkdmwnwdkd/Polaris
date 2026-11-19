@@ -5,12 +5,12 @@
 #
 # 分层判定（不是「全绿才过」，而是「已达标项硬断言、待收口项显式挂账」）：
 #   PASS    已达标的不变量，源码里这条线必须在；破了就是真红。
-#   PENDING 已知违例、属「下一轮接线」的活，不阻塞构建，但必须在这里可见、
+#   PENDING 已知违例、属后续轮次的活，不阻塞构建，但必须在这里可见、
 #           可勾对——让「还剩几条」不再是一句口头的估计。
 #
-# 三入口接线轮次（把 ChatViewModel / PetAgentSession / SubAgentRunner 的三个
-# RealAgentLoop( 收进 runtime 唯一构造点）完成后，PENDING 项应改为 PASS 硬断言，
-# 本门禁随之收紧。
+# 三入口 loop 收口（P1 第三轮）已把 C1 / B4 / D1a 收成 PASS 硬断言；
+# 当前唯一 PENDING 是 D1b（ui/pet 仍 import ToolRegistry），要等 ToolAssembler
+# （工具装配收口，v4 §3.3）落地后才关。
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -115,23 +115,36 @@ loop_n=$(echo "$loop_sites" | grep -c . || true)
 if [ "$loop_n" = "1" ] && echo "$loop_sites" | grep -q 'runtime/'; then
   pass "C1 RealAgentLoop( 仅 1 处且在 runtime/：$loop_sites"
 else
-  pend "C1 RealAgentLoop( 现 $loop_n 处、0 处在 runtime/（待三入口接线收口）"
+  fail "C1 RealAgentLoop( 现 $loop_n 处，唯一构造点必须只在 runtime/AgentLoopFactory.kt"
   echo "$loop_sites" | sed 's/^/        /'
 fi
 
 echo ""
 echo "[D] 不变量 2：ui / pet / entry 不 import RealAgentLoop / ToolRegistry"
 
-bad_imports=""
+# 拆成两半，因为收口是分两步的：
+#   D1a（RealAgentLoop）随 loop 构造收口本轮关闭——ui/pet 已改走 AgentLoopFactory；
+#   D1b（ToolRegistry）要等 ToolAssembler（工具装配收口，v4 §3.3）才关——ui 层仍要
+#   持有 registry 字段去 register 工具。所以 D1a 是硬断言、D1b 是 PENDING。
+bad_loop_imports=""
+bad_registry_imports=""
 for src in "$VM" "$PET"; do
-  if grep -qE 'import .*\.(agent\.RealAgentLoop|ToolRegistry)' "$src" 2>/dev/null; then
-    bad_imports="$bad_imports $(basename "$src")"
+  if grep -qE 'import .*agent\.RealAgentLoop' "$src" 2>/dev/null; then
+    bad_loop_imports="$bad_loop_imports $(basename "$src")"
+  fi
+  if grep -qE 'import .*ToolRegistry' "$src" 2>/dev/null; then
+    bad_registry_imports="$bad_registry_imports $(basename "$src")"
   fi
 done
-if [ -z "$bad_imports" ]; then
-  pass "D1 ui/pet 不再 import RealAgentLoop / ToolRegistry"
+if [ -z "$bad_loop_imports" ]; then
+  pass "D1a ui/pet 不再 import RealAgentLoop（已走 AgentLoopFactory）"
 else
-  pend "D1 仍有 import：$bad_imports（待 loop 构造收进 runtime 后移除）"
+  fail "D1a 仍 import RealAgentLoop：$bad_loop_imports"
+fi
+if [ -z "$bad_registry_imports" ]; then
+  pass "D1b ui/pet 不再 import ToolRegistry（工具装配已收口）"
+else
+  pend "D1b 仍 import ToolRegistry：$bad_registry_imports（待 ToolAssembler，v4 §3.3）"
 fi
 
 echo ""

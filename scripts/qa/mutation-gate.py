@@ -796,6 +796,18 @@ MUTATIONS = [
         "new": """        val gate = turnGates.computeIfAbsent("__global__") { Semaphore(1) }""",
         "expect": ["不同 session 不互相阻塞", "同 session 不同 source 也不互相阻塞"],
     },
+    {
+        "id": "R7 shared 每次都 new（进程级单例被拆成各自为政）",
+        "group": "runtime",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/AgentRuntime.kt",
+        "old": """        fun shared(): AgentRuntime = shared
+
+        private val shared: AgentRuntime by lazy { of() }""",
+        "new": """        fun shared(): AgentRuntime = of()
+
+        private val shared: AgentRuntime by lazy { of() }""",
+        "expect": ["shared 返回同一实例——进程内许可池只有一个真源"],
+    },
 ]
 
 

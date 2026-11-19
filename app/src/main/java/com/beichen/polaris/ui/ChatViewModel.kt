@@ -32,7 +32,7 @@ import com.beichen.polaris.automation.UiScreenshotTool
 import com.beichen.polaris.automation.UiSwipeTool
 import com.beichen.polaris.automation.UiTapTool
 import com.beichen.polaris.automation.UiTreeTool
-import com.beichen.polaris.core.agent.RealAgentLoop
+import com.beichen.polaris.core.runtime.AgentLoopFactory
 import com.beichen.polaris.core.agent.TurnObservers
 import com.beichen.polaris.core.capability.CapabilityAuditReporter
 import com.beichen.polaris.core.capability.ToolActivationStore
@@ -2029,7 +2029,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             ok
         }
 
-    private val loop = RealAgentLoop(
+    private val loop = AgentLoopFactory.create(
         llmProvider = { buildMainClient() },
         registry = registry,
         consent = Consent.ask { tool, args -> approvalHandler(tool, args) },

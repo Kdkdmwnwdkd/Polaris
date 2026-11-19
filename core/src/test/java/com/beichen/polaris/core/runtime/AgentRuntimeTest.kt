@@ -8,6 +8,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -263,5 +265,27 @@ class AgentRuntimeTest {
         assertEquals(20, q.maxSteps)
         assertEquals(0, q.maxTokens)
         assertEquals(0L, q.deadlineMs)
+    }
+
+    // —— 单例层：shared 是进程级唯一闸，of 是显式 fresh（v4 不变量 4 前半）——
+
+    @Test
+    fun `shared 返回同一实例——进程内许可池只有一个真源`() {
+        val a = AgentRuntime.shared()
+        val b = AgentRuntime.shared()
+        assertSame("shared() 必须返回进程级单例", a, b)
+    }
+
+    @Test
+    fun `of 每次返回独立实例——测试与显式隔离用`() {
+        val a = AgentRuntime.of()
+        val b = AgentRuntime.of()
+        assertNotSame("of() 必须每次 fresh，否则测试之间会串状态", a, b)
+        // fresh 实例之间互不影响：先让 "s" 进入 a 的代次表（generation 首次访问才建档），
+        // 再 cancel 自增——b 是独立实例，它的 "s" 必须仍是 0。
+        assertEquals(0L, a.generation("s"))
+        a.cancel("s")
+        assertEquals(1L, a.generation("s"))
+        assertEquals(0L, b.generation("s"))
     }
 }

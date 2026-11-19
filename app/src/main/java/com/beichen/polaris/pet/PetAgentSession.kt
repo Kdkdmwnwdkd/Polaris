@@ -13,7 +13,7 @@ import com.beichen.polaris.core.SystemMessage
 import com.beichen.polaris.core.ToolRegistry
 import com.beichen.polaris.core.UserMessage
 import com.beichen.polaris.core.agent.EgressGuard
-import com.beichen.polaris.core.agent.RealAgentLoop
+import com.beichen.polaris.core.runtime.AgentLoopFactory
 import com.beichen.polaris.core.agent.productionSeams
 import com.beichen.polaris.core.workspace.WorkspaceStore
 import com.beichen.polaris.memory.MemorySearchTool
@@ -43,7 +43,7 @@ import java.util.Locale
  * 那个类三千多行、绑 Activity 生命周期、二十来个 Contract。悬浮窗活在 Service 里，
  * 没有 Activity，也拿不到它的 ViewModel——就算硬塞进去，一个「随手问一句」的入口
  * 也不该把整个对话页的状态机拉起来。`SubAgentRunner` 早就证明过这条路的可行性：
- * 无 UI 场景直接 `RealAgentLoop(...)` 即可。
+ * 无 UI 场景也走 `AgentLoopFactory.create(...)` 即可（`RealAgentLoop` 的唯一生产构造点）。
  *
  * ## 工具集为什么这么小
  *
@@ -148,7 +148,7 @@ class PetAgentSession(context: Context) {
     }
 
     private val loop by lazy {
-        RealAgentLoop(
+        AgentLoopFactory.create(
             llmProvider = { createClient() },
             registry = registry,
             systemPrompt = SYSTEM_PROMPT,

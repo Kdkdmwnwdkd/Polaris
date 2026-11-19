@@ -120,6 +120,17 @@ interface AgentRuntime {
 
         fun of(backends: Map<String, Int> = defaultBackends()): AgentRuntime =
             DefaultAgentRuntime(backends)
+
+        /**
+         * 进程级单例（v4 §3.2 不变量 4 前半）。
+         *
+         * 生产默认走这个：主界面 / 桌宠 / 子代理共享**同一个**许可池与代次号表，
+         * 否则「local=1」这种上限只在各自实例内生效，两个实例之间互不知情，
+         * 并发闸就形同虚设。测试不要用它（测试需要 fresh 状态），用 [of]。
+         */
+        fun shared(): AgentRuntime = shared
+
+        private val shared: AgentRuntime by lazy { of() }
     }
 }
 

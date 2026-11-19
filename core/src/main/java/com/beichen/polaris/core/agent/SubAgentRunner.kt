@@ -5,6 +5,7 @@ import com.beichen.polaris.core.LLMClient
 import com.beichen.polaris.core.Consent
 import com.beichen.polaris.core.ToolRegistry
 import com.beichen.polaris.core.agent.journal.RunScope
+import com.beichen.polaris.core.runtime.AgentLoopFactory
 import com.beichen.polaris.core.runtime.AgentRuntime
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -61,11 +62,10 @@ class SubAgentRunner(
      * 运行时的 cloud 许可（默认 2）说了算，而不是 [SubAgentRunner] 自己 `chunked`。
      * 前者是进程级单一真源（主界面、桌宠、子代理共用同一份闸），后者是各写各的。
      *
-     * 默认 [AgentRuntime.of] 是过渡：它让现有调用方（未传 runtime）仍能编译运行，
-     * 但会各建一个独立闸。三入口接线轮次会把**进程级单例**传进来，届时此默认值
-     * 与不变量 4「进程内仅一个 Semaphore」一起收口。
+     * 默认 [AgentRuntime.shared]（进程级单例）：与主界面 / 桌宠共享同一份许可池与
+     * 代次号表（不变量 4 前半）。测试需要 fresh 状态时显式注入 [AgentRuntime.of]。
      */
-    private val runtime: AgentRuntime = AgentRuntime.of()
+    private val runtime: AgentRuntime = AgentRuntime.shared()
 ) {
 
     /**
@@ -110,7 +110,7 @@ class SubAgentRunner(
             val subTurn = parent?.turn?.scoped(subScope)
             val history = runtime.withPermit("cloud") {
                 withTimeout(timeoutMs) {
-                    RealAgentLoop(
+                    AgentLoopFactory.create(
                         llmProvider = llmProvider,
                         registry = buildRegistry(),
                         systemPrompt = SubAgentLogic.systemPrompt(task.title),
