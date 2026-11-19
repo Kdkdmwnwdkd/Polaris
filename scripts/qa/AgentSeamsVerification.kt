@@ -387,6 +387,20 @@ fun main() {
             "链没有用守卫自己的 timeoutMs（结果=$d）")
     }
 
+    // D1–D7 只走了 web_search 一条通道。而 DEFAULT_EGRESS_TOOLS 有五条，
+    // 其中四条同时也是「敏感工具」——两条集合一旦重叠，实现里任何一处提前返回
+    // 都会把重叠的那几条静默架空（2026-11-19 实测：四条全被架空，D1–D7 依然全绿）。
+    // 所以这一条按**整个集合**走，以后往集合里加工具不用改这里。
+    case("D8 外发集合里的每一条通道都要真的拦得住") {
+        val leaked = mutableListOf<String>()
+        for (tool in EgressGuard.DEFAULT_EGRESS_TOOLS) {
+            val guard = EgressGuard(consent = { _, _ -> false })
+            guard.check(ctxOf("read_file"))
+            if (guard.check(ctxOf(tool)) !is GuardDecision.Deny) leaked += tool
+        }
+        expect(leaked.isEmpty(), "这些通道读完私有内容后仍能外发：$leaked")
+    }
+
     // —— 审批预览（ApprovalPreview）—————————————————————————————
     //
     // 它不是接缝，但和守卫是同一件事的两面：守卫决定「拦不拦」，预览决定

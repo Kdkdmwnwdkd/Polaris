@@ -34,6 +34,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 用户想要的搜索也不会因此消失：主界面在 [consent] 上接了审批弹窗，点「允许」就放行。
  * 桌宠没有弹窗，它的 [consent] 恒为 false——**没有审批界面的入口，按拒绝处理**，
  * 与「缺审批就不给写工具」同一条规矩。
+ *
+ * ## 双身份工具：标脏与拦住它自己，是两件事（2026-11-19）
+ *
+ * `web_open` 这类工具同时在 [DEFAULT_SENSITIVE_TOOLS] 与 [DEFAULT_EGRESS_TOOLS] 里。
+ * 「敏感」不等于「先返回」：它要标脏（页面内容是不可信内容），也要在**回合已脏时被拦**。
+ * 判据用「进入本次调用之前」的状态，见 [check] 的注释与 `EgressGuardTest`。
  */
 class EgressGuard(
     /**
@@ -76,14 +82,22 @@ class EgressGuard(
 
     override suspend fun check(ctx: GuardContext): GuardDecision {
         val name = ctx.call.name
+        // 外发判据只看「进入本次调用**之前**」是否已脏（2026-11-19）。
+        //
+        // 双身份工具（`web_open` / `web_eval` / `web_click` / `web_type`）既能把外部内容
+        // 带进来、也能把内容带出去。原实现是「敏感即 return Abstain」，于是这四条外发
+        // 通道从来走不到下面的外发分支——2026-11-17 为它们写的那段注释在代码里
+        // **没有对应实现**，`read_file → web_open(?d=…)` 仍然零弹窗。
+        // 用「进入前」而不是「当前」判，两件事才能同时成立：自己带进来的内容不拦自己，
+        // 但会拦住之后的外发（见 `EgressGuardTest` 里成对的两条断言）。
+        val wasTainted = tainted.get()
         if (name in sensitiveTools) {
-            // 先标记再放行：读本身不是危险动作，危险的是读完之后的那一次外发。
+            // 先标记再判：读本身不是危险动作，危险的是读完之后的那一次外发。
             tainted.set(true)
-            return GuardDecision.Abstain
         }
         if (name !in egressTools) return GuardDecision.Abstain
         // 没读过东西的搜索是正常用法（「查一下今天的汇率」），不该弹窗。
-        if (!tainted.get()) return GuardDecision.Abstain
+        if (!wasTainted) return GuardDecision.Abstain
         if (consent(name, ctx.call.arguments)) return GuardDecision.Abstain
         return GuardDecision.Deny(
             code = "egress_blocked",
@@ -161,6 +175,12 @@ class EgressGuard(
          * 它们**不**进审批归组是有道理的（浏览网页是高频正常操作，每次都问会把
          * 浏览器工具废掉）；但「读完私有内容之后再用浏览器」完全是另一件事，
          * 那正是本守卫的判据，两件事不冲突。
+         *
+         * **注意（2026-11-19）**：这四个名字同时也在 [DEFAULT_SENSITIVE_TOOLS] 里，
+         * 而当时 `check` 是「敏感即提前返回」——上面这段注释描述的行为**两天没有实现**
+         * （`read_file → web_open` 仍然零弹窗），直到求值顺序改成「进入前是否已脏」才真正生效。
+         * 教训不在这一处：往集合里加名字时，断言必须按**整个集合**走一遍，
+         * 否则「加进去了」和「起作用了」看起来一样绿。
          *
          * `web_snapshot` 不加：它只读当前页，不把新内容送出（页面发什么请求由
          * 打开时的 URL 决定，那一刻已经问过了）。

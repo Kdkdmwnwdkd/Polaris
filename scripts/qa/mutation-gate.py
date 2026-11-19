@@ -8,7 +8,7 @@
 5 个关键守卫的变异全部存活（或整段 SKIP）。
 
 本脚本用最原始也最可靠的办法回答「断言有没有判别力」：**把缺陷注入回去，看测试红不红**。
-只覆盖已经迁到 JVM 的审批判定（`ShellCommandRulesTest`），因为变异测试的前提是
+只覆盖已经迁到 JVM 的判定（审批 / 存储 / 动作回执 / 出站守卫），因为变异测试的前提是
 「有能在 30 秒内跑完的真断言」——grep 型断言参与变异只会得到噪声。
 
 ## 与 run-*.sh 的关系
@@ -27,7 +27,10 @@
   什么都没跑的 job 显示绿色，正是本项目最忌讳的那种绿。
 
 用法：
-    python3 scripts/qa/mutation-gate.py [--verbose] [--strict]
+    python3 scripts/qa/mutation-gate.py [--verbose] [--strict] [--only <id 子串>]
+
+先跑基线（三个组的未变异断言必须全绿），再逐条注入变异。基线红时直接退出：
+基线红的时候每一条变异都会「CAUGHT」，那是假报告。
 """
 
 from __future__ import annotations
@@ -58,9 +61,11 @@ GROUPS = {
             "core/src/main/java/com/beichen/polaris/core/ToolResult.kt",
             "core/src/main/java/com/beichen/polaris/core/agent/ToolDescriptor.kt",
             "core/src/main/java/com/beichen/polaris/core/agent/ToolGuard.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/EgressGuard.kt",
             "core/src/test/java/com/beichen/polaris/core/agent/ShellCommandRulesTest.kt",
             "core/src/test/java/com/beichen/polaris/core/agent/ApprovalTierTest.kt",
             "core/src/test/java/com/beichen/polaris/core/agent/EgressDowngradeTest.kt",
+            "core/src/test/java/com/beichen/polaris/core/agent/EgressGuardTest.kt",
             "core/src/test/java/com/beichen/polaris/core/agent/ToolGuardChainTest.kt",
             "core/src/test/java/com/beichen/polaris/core/tool/ToolCatalogTest.kt",
         ],
@@ -68,6 +73,7 @@ GROUPS = {
             "com.beichen.polaris.core.agent.ShellCommandRulesTest",
             "com.beichen.polaris.core.agent.ApprovalTierTest",
             "com.beichen.polaris.core.agent.EgressDowngradeTest",
+            "com.beichen.polaris.core.agent.EgressGuardTest",
             "com.beichen.polaris.core.agent.ToolGuardChainTest",
             "com.beichen.polaris.core.tool.ToolCatalogTest",
         ],
@@ -348,6 +354,79 @@ MUTATIONS = [
         "new": "    if (timeoutMs <= 0) return true",
         "expect": ["超时窗口为零时直接判没变化且不取指纹", "负超时按零处理"],
     },
+    # ---------------- 出站守卫（2026-11-19）：这批变异是为了钉住「求值顺序」 ----------------
+    {
+        # 恢复 2026-11-17 之前的写法的等价物：敏感分支先返回。
+        # 后果不是「多拦」也不是「少拦」，而是四条 web_* 外发通道**整段架空**——
+        # 而 11-17 那版的注释仍然写着「比 web_search 更静默」，读代码的人不会怀疑。
+        "id": "M28 双身份工具被敏感分支提前返回（架空的 web_open）",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/EgressGuard.kt",
+        "old": "        if (name !in egressTools) return GuardDecision.Abstain",
+        "new": "        if (name !in egressTools || name in sensitiveTools) return GuardDecision.Abstain",
+        "expect": ["读过文件之后打开网页也会被拦下", "双身份的外发工具一个都不能被敏感分支架空"],
+    },
+    {
+        # 用「当前」而不是「进入前」判：干净回合里 web_open 先把自己标脏，
+        # 于是被自己拦住——浏览网页需要点一次「允许」，之后每次都要点。
+        "id": "M29 用当前污染状态判外发（自己拦自己）",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/EgressGuard.kt",
+        "old": "        if (!wasTainted) return GuardDecision.Abstain",
+        "new": "        if (!tainted.get()) return GuardDecision.Abstain",
+        "expect": ["干净回合里打开网页不算外发"],
+    },
+    {
+        # 忘记标脏：读完文件再搜索照旧放行。这是原 bug 的反面——
+        # 修了「拦不住 web_open」却把「read_file → web_search」放掉了。
+        "id": "M30 敏感工具不标脏（整条守卫失效）",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/EgressGuard.kt",
+        "old": """        if (name in sensitiveTools) {
+            // 先标记再判：读本身不是危险动作，危险的是读完之后的那一次外发。
+            tainted.set(true)
+        }""",
+        "new": """        if (name in sensitiveTools) {
+            // 变异：忘记标脏
+        }""",
+        "expect": ["读过文件之后搜索会被拦下", "敏感工具一个都不能漏标"],
+    },
+    {
+        # 用户点了「允许」也照拦：弹窗变成摆设，用户会以为按钮坏了。
+        "id": "M31 忽略用户同意（永远拒绝）",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/EgressGuard.kt",
+        "old": "        if (consent(name, ctx.call.arguments)) return GuardDecision.Abstain",
+        "new": "        if (consent(name, ctx.call.arguments) && false) return GuardDecision.Abstain",
+        "expect": ["用户同意后放行且拿到原始参数"],
+    },
+    {
+        # 新回合不清账：上个回合读过的东西会一路拦到会话结束。
+        # 用户重新发一句「查一下天气」也被拦，且原因完全不可见。
+        "id": "M32 新回合不清账",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/EgressGuard.kt",
+        "old": """    override fun onTurnStart() {
+        tainted.set(false)
+    }""",
+        "new": """    override fun onTurnStart() {
+        // 变异：新回合不清账
+    }""",
+        "expect": ["新回合清账"],
+    },
+    {
+        # 用链默认的 3 秒：弹窗还在、守卫先超时，用户点「允许」却拿到 guard_timeout。
+        "id": "M33 问人的守卫沿用链默认超时",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/EgressGuard.kt",
+        "old": "    override val timeoutMs: Long get() = CONSENT_TIMEOUT_MS",
+        "new": "    override val timeoutMs: Long get() = ToolGuardChain.GUARD_TIMEOUT_MS",
+        "expect": ["守卫自己的超时不能被链的 3 秒掐掉"],
+    },
+    {
+        # 反向错法：污染之后连「继续读」也拦。看着更保守，实际让模型无法取证——
+        # 而「保守」是最容易被当成正确的错法，所以要有一条断言专门钉它。
+        "id": "M34 污染后连敏感工具一起拦（过度拦截）",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/EgressGuard.kt",
+        "old": "        if (name !in egressTools) return GuardDecision.Abstain",
+        "new": """        if (name in sensitiveTools && wasTainted) return GuardDecision.Deny(code = "over", message = "over")
+        if (name !in egressTools) return GuardDecision.Abstain""",
+        "expect": ["污染之后继续读文件不被拦"],
+    },
 ]
 
 
@@ -510,16 +589,31 @@ def compile_and_run(compiler_cp, lib_cp, plugin, outdir, sources, classes,
 
 
 def parse_failures(out: str) -> tuple[int, int, list[str]]:
+    """解析 JUnitCore 输出。全绿时**没有** `Tests run:` 行，只有 `OK (N tests)`。
+
+    这个区别曾经让「变异存活」被报成 `INVALID: JUnit 没有输出 Tests run 行`——
+    结论同样是失败，但理由指向「测试没跑起来」，而真相是「测试跑了、全绿、
+    所以没人抓到缺陷」。看报告的人会去修环境，而不是去补断言。
+    """
     m = re.search(r"Tests run:\s*(\d+),\s*Failures:\s*(\d+)", out)
-    if not m:
-        return (-1, -1, [])
-    names = re.findall(r"^\d+\)\s+(.+?)\(com\.", out, re.MULTILINE)
-    return int(m.group(1)), int(m.group(2)), names
+    if m:
+        names = re.findall(r"^\d+\)\s+(.+?)\(com\.", out, re.MULTILINE)
+        return int(m.group(1)), int(m.group(2)), names
+    ok = re.search(r"^OK \((\d+) tests?\)", out, re.MULTILINE)
+    if ok:
+        return int(ok.group(1)), 0, []
+    return (-1, -1, [])
 
 
 def main() -> int:
     verbose = "--verbose" in sys.argv
     strict = "--strict" in sys.argv
+    # --only <子串>：只跑 id 命中的变异。改一条变异定义时不必等全量六分钟，
+    # 但**基线照跑**——只挑一条跑的时候更容易忘记「基线红 = 结论全假」。
+    only = None
+    if "--only" in sys.argv:
+        idx = sys.argv.index("--only")
+        only = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else ""
     deps = find_classpath()
     if deps is None:
         if strict:
@@ -528,8 +622,39 @@ def main() -> int:
         return 0  # SKIP 不失败：缺环境不该阻塞本地开发，但输出已明确说「什么都没验证」
     compiler_cp, lib_cp, plugin = deps
 
+    # ---------------------------------------------------------------- 基线
+    #
+    # 必须先跑一遍**未变异**的代码，且必须全绿。
+    #
+    # 没有这一步时，一条本来就会红的断言（编译通过、跑起来失败）会让**每一条**变异
+    # 都显示 CAUGHT——门禁报「34/34 全部被捕获」，而结论在撒谎。它比不跑更坏：
+    # 给出的是一份看起来可信的假报告。这与 `--strict` 是同一件事的两面：
+    # 缺环境不装绿，坏基线也不装绿。
+    for name in sorted(GROUPS):
+        group = GROUPS[name]
+        outdir = tempfile.mkdtemp(prefix="mut-base-")
+        try:
+            err, out = compile_and_run(compiler_cp, lib_cp, plugin, outdir, group["sources"], group["classes"])
+        finally:
+            shutil.rmtree(outdir, ignore_errors=True)
+        if err:
+            print(f"基线编译失败（{name} 组）—— 什么都没验证：")
+            print(err)
+            return 1
+        total, nfail, names = parse_failures(out)
+        if total < 0:
+            print(f"基线没有输出 Tests run 行（{name} 组）—— 什么都没验证")
+            return 1
+        if nfail:
+            print(f"基线就是红的（{name} 组：{nfail}/{total} 失败）：{', '.join(names[:5])}")
+            print("先修红再看变异结论——基线红时每一条变异都会「CAUGHT」，那是假的。")
+            return 1
+        print(f"基线 OK（{name}）：{total} 条断言全绿")
+
     rows, failed = [], 0
     for mut in MUTATIONS:
+        if only is not None and only not in mut["id"]:
+            continue
         target = os.path.join(ROOT, mut["file"])
         original = open(target, encoding="utf-8").read()
         if original.count(mut["old"]) != 1:
