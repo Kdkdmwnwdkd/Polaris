@@ -162,13 +162,17 @@ fun main() {
         fieldsAt > 0 && skillsAt > fieldsAt,
         "fields@$fieldsAt skills@$skillsAt"
     )
+    // 3.1 第六批：工具装配搬进了 tools/ToolAssembler（52 个 register + 计时打点）。
+    // 断言读装配器——守的是「装配期被切成 preRegistry / registry 两段、且接上了 profiler」，
+    // 不是「这两行写在哪个文件」。
+    val asm = File("app/src/main/java/com/beichen/polaris/tools/ToolAssembler.kt").readText()
     check(
-        "registry 之前单独切出 preRegistry（ToolRegistry() 构造极轻，重的是 45 个 register）",
-        vm.indexOf("startup.mark(\"preRegistry\")") > 0
+        "registry 之前单独切出 preRegistry（ToolRegistry() 构造极轻，重的是 52 个 register）",
+        asm.indexOf("startup.mark(\"preRegistry\")") > 0
     )
     check(
         "registry 接到启动 profiler（不接则工具装配永远「无样本」）",
-        "ToolRegistry(startup.toolProfiler)" in vm
+        "ToolRegistry(deps.startup.toolProfiler)" in asm
     )
     check(
         "ToolRegistry.register 真的打点（实参先求值，故此处间隔 = 构造+类加载耗时）",

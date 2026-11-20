@@ -218,11 +218,15 @@ fun main() {
         assertTrue("应存在 WriteBackupHook 接口", "fun interface WriteBackupHook" in src)
     }
 
-    check("B2-7 ChatViewModel 注入备份仓") {
+    check("B2-7 宿主注入备份仓，装配器把它接到写工具") {
         val src = read("app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt")
+        // 3.1 第六批：注册点搬进 tools/ToolAssembler。备份仓仍由宿主构造（它要 app 的 filesDir），
+        // 装配器只负责把它接到 write_file / edit_file 上——两截都要在，缺哪截都不算「注入了」。
+        val asm = read("app/src/main/java/com/beichen/polaris/tools/ToolAssembler.kt")
         assertTrue("应注入 FileBackupStore", "FileBackupStoreFactory.default(app)" in src)
-        assertTrue("WriteFileTool 应传入备份钩子", "WriteFileTool(workspace, WriteBackupHook" in src)
-        assertTrue("EditFileTool 应传入备份钩子", "EditFileTool(workspace, WriteBackupHook" in src)
+        assertTrue("宿主应把备份仓交给装配器", "fileBackupStore = fileBackupStore" in src)
+        assertTrue("WriteFileTool 应传入备份钩子", "WriteFileTool(deps.workspace, WriteBackupHook" in asm)
+        assertTrue("EditFileTool 应传入备份钩子", "EditFileTool(deps.workspace, WriteBackupHook" in asm)
     }
 
     /* ------------------------- B3 前台服务与运行态 ------------------------- */
@@ -401,8 +405,9 @@ fun main() {
     }
 
     check("B4-10 容器工具已注册进 registry") {
-        val vm = read("app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt")
-        assertTrue("应注册 ContainerToolchainTool", "register(ContainerToolchainTool(app))" in vm)
+        // 3.1 第六批：注册清单在 tools/ToolAssembler。
+        val asm = read("app/src/main/java/com/beichen/polaris/tools/ToolAssembler.kt")
+        assertTrue("应注册 ContainerToolchainTool", "register(ContainerToolchainTool(deps.app))" in asm)
     }
 
     check("B4-11 一次性命令执行器存在且走独立进程通道") {
