@@ -682,7 +682,19 @@ jobs:
           #     AgentContract.kt:3:16: error: unresolved reference: serialization
           # ——一条看着像**源码写错**的报错，实际是下载失败。第一次遇到时从头查到尾，
           # 先怀疑测试、再怀疑 classpath 顺序，最后才发现那个「jar」是 1KB 的 HTML。
-          fetch() { curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --max-time 300 -o "$2" "$1"; }
+          # `-w '%{http_code}'` + 失败时打印 URL 是 2026-11-20 加的：上一轮这个步骤
+          # 以 exit 22 红了 26 秒，日志里**一个字都没有**（-f 把响应体吞了，-S 只对
+          # 连接错误生效）。要判定是 429 限流还是 404 路径写错，只能靠重跑碰运气。
+          # 重跑确实是绿的（Maven 侧限流），但「重跑一次看看」不该是唯一的诊断手段。
+          fetch() {
+            local url="$1" out="$2" code=""
+            if ! code=$(curl -fsSL -w '%{http_code}' --retry 5 --retry-delay 5 \
+                        --retry-all-errors --max-time 300 -o "$out" "$url"); then
+              echo "::error::下载失败：$url（HTTP ${code:-无响应}）"
+              echo "  429/502 是 Maven Central / GitHub Releases 侧限流，重跑即可；404 是路径或版本号写错。"
+              return 1
+            fi
+          }
 
           fetch "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip" /tmp/kotlin.zip
           unzip -q /tmp/kotlin.zip -d /tmp
