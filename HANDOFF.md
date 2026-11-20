@@ -631,6 +631,30 @@ exec java -cp "$CP" "$MAIN" -kotlin-home "$BASE" "$@"
 - 注意：用 API 重建提交会让 SHA 变化。**判断「有没有传上去」要比对树对象**
   （`git rev-parse HEAD^{tree}` vs `origin/main^{tree}`），不要看 SHA。
 
+### 5.5.1 坑五：Maven Central 429（2026-11-20 连踩两次）
+
+症状：CI 的 `build` job 红在 **`Unit tests (core: ...)`** 这一步，但日志里没有任何测试失败——
+反而是 `Could not resolve org.jetbrains.kotlin:kotlin-reflect:1.9.23 ... 429 Too Many Requests`，
+23 秒就 BUILD FAILED。
+
+根因：短时间连推/连 rerun 时，runner 要从 Maven Central 重新解析 gradle 插件 classpath，
+被限流。**步骤名会把人骗去查测试**，实际是环境。
+
+判据：日志里搜 `429` 或 `Could not resolve`；若是，等几分钟 rerun，不要改代码。
+缓解：一轮把改动攒够再推（这轮 1 小时内推了 4 次，撞了两次）。
+
+### 5.5.2 已知偶发：`ConversationShardRecoveryTest.主索引丢失时按分片重建全部会话`
+
+现象：`core:testDebugUnitTest` 偶发 `AssertionError at ConversationShardRecoveryTest.kt:126`
+（4 tests / 1 failed），rerun 即过。已见三次：2026-11-19 23:36、11-20 05:10、05:18。
+
+已排除：与本轮改动无关（那三批都没碰 `ConversationStore`）；本地按同样步骤循环 300 轮未复现
+（真实落盘 + `awaitPersist`；复现程序是一次性的，没有入库——它依赖的正是「沙箱里编不了的那套」。）
+
+**未定位**：无法在无 Android SDK 的环境里复现，判断与 CI 机器 IO 时序有关。下次红时先看
+`shards=` 与 `indexExists=`——若分片文件缺失，是真 bug（写失败被吞），要查 `AtomicJsonFile`；
+若分片都在，是「恢复后 ids 少一个」，要查 `readShard(stem)` 的 id 映射。
+
 ### 5.6 坑四：沙箱清理后 45 个 runner 集体 SKIP
 
 症状：`run-all.sh` 汇总变成 `PASS=97 SKIP=45`（当时基线是 `PASS=104 SKIP=38`；

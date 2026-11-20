@@ -143,9 +143,17 @@ fun main() {
         // R10：次数真源从「RealAgentLoop 的构造参数默认值」搬到 RetryProfile。
         // 默认 -1 表示「跟随档位」，档位默认 3——仍然只有一处定义次数，
         // 只是那处现在住在档位里（35 家供应商可以各自覆盖，不用改循环）。
+        // 2026-11-20：默认值搬进 LoopDefaults（第八批「单一真源」），断言跟着改。
+        // 两处都查：loop 必须**引用**那个常量，常量本身必须是 -1（哨兵值改了，
+        // 「跟随档位」这条语义就没了，而代码照样编译）。
         assertTrue(
-            "providerRetry 默认不是 -1（应跟随档位）",
-            "private val providerRetry: Int = -1" in loop
+            "providerRetry 不再跟随档位（默认值没指向 LoopDefaults）",
+            "private val providerRetry: Int = LoopDefaults.PROVIDER_RETRY" in loop
+        )
+        val loopDefaults = read("core/src/main/java/com/beichen/polaris/core/agent/LoopDefaults.kt")
+        assertTrue(
+            "PROVIDER_RETRY 不再是 -1 哨兵（会退成「所有供应商都重试 N 次」）",
+            "const val PROVIDER_RETRY = -1" in loopDefaults
         )
         val retry = read("core/src/main/java/com/beichen/polaris/core/llm/RetryProfile.kt")
         assertTrue("官方档 maxRetries 不是 3", "maxRetries = 3" in retry)

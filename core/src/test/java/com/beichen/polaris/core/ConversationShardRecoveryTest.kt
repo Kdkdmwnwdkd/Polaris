@@ -126,8 +126,12 @@ class ConversationShardRecoveryTest {
         assertTrue("删索引备份", File(root, indexFile().name + AtomicJsonFile.BACKUP_SUFFIX).delete())
 
         val reopened = openAndSettle()
+        // 断言消息里带上现场：这条在 CI 上偶发红过三次（本地循环 300 轮不复现），
+        // 没有分片清单就只能看到「expected [a,b] but was []」，分不清「分片没写出来」
+        // （写失败被吞，是真 bug）与「分片在但读不回来」（id 映射问题）。
+        val shards = shardDir().listFiles()?.map { it.name }?.sorted() ?: emptyList()
         assertEquals(
-            "两个会话都要从分片回来（id 集合，不依赖顺序）",
+            "两个会话都要从分片回来（id 集合，不依赖顺序）；分片=$shards",
             setOf(a, b),
             reopened.list().map { it.id }.toSet()
         )
