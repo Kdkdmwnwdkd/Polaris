@@ -870,6 +870,56 @@ Debian 13 / 4 核 / 7G 内存 / JDK 21 / 持久卷 `/data/home`。**SDK 已装�
 
 ---
 
+### 5.11 权限：清单 29 条、日常零弹窗，以及两个真死路
+
+用户的原话是「我们的应用好像都没向手机要过权限」。核查后这个观察成立，但它不是缺陷——
+是 `targetSdk = 28` + 全走系统选择器的结果。真正的问题是另外两件。
+
+**先看事实**（云端模拟器 API 30，`dumpsys package com.beichen.polaris`）：
+
+| 层 | 内容 | 装完的状态 |
+|---|---|---|
+| 运行时危险权限 | `RECORD_AUDIO`、`POST_NOTIFICATIONS` | 全 `granted=false`，启动流程一次都不申请 |
+| 特殊权限 | 悬浮窗 / 无障碍 / 通知监听 / 使用情况 / 电池优化 / 安装未知应用 / Shizuku | 不弹窗，全是「跳系统设置页」 |
+| normal | INTERNET、前台服务系列、QUERY_ALL_PACKAGES 等 | 安装即授予 |
+
+运行时申请点只有 3 处，全部在「用户主动打开某功能」那一刻：开完成提醒要通知
+（`SettingsScreen.kt:256`）、开桌面助手要麦克风（`SettingsScreen.kt:480`）、声音克隆点录音
+（`VoiceCloneScreen.kt:230`）。
+
+**死路一：聊天页语音永远拿不到授权。** `ChatScreen.startVoiceInput` 只判断
+`AsrDirectory.isInstalled()`，装了模型就直接开面板；面板里 `LocalSpeechInput.start`
+发现没权限只回报一行红字，没有按钮也没有跳转，而本应用设置页里根本没有「麦克风」这一项。
+从聊天页进来的用户被卡死在这里。同一仓库里 `VoiceCloneScreen` 的写法是对的（先 `launch`），
+所以这是漏改。修法：闸门前移到入口——模型未装给下载指引，未授权先弹系统框，已问过还被拒
+则送应用详情页（`ACTION_APPLICATION_DETAILS_SETTINGS`）。实现落在新文件
+`ui/VoiceInputGate.kt`（`rememberVoiceInputGate`），`ChatScreen` 只留一行调用
+（3235 → 3194，顺带把 arch-baseline 收紧）；不抽出去的话，ChatScreen 的 1500 行上限
+当场就红。
+
+**死路二：11 条声明在代码里零使用。** `CAMERA`、`READ/WRITE_EXTERNAL_STORAGE`、
+`READ_MEDIA_IMAGES/VIDEO/AUDIO`、`MANAGE_EXTERNAL_STORAGE`、`WRITE_SETTINGS`、
+`SCHEDULE_EXACT_ALARM`、`SET_ALARM`、`KILL_BACKGROUND_PROCESSES`。存储那 6 条尤其没必要：
+图片/文件/备份全走 `GetContent` / `OpenDocument` / `PickVisualMedia`，`contentResolver`
+拿到的是用户当场授予的单个 uri；`MANAGE_EXTERNAL_STORAGE` 在 targetSdk 28 上被系统直接忽略。
+`CAMERA` 更糟——它是危险权限，会在系统「权限」页里摆出一个用不上的「相机」条目。
+清单 29 条 → 18 条。
+
+**顺带核实的一件事**：`ProotRunner` 用 `-b /sdcard` 把外存挂进容器，但 App uid 读不到。
+模拟器上 `run-as com.beichen.polaris ls /sdcard` → `Permission denied`（uid 10130）。
+这条绑定只对 uid 2000 的调试通道（Shizuku / adb shell）有效——`ShellCommandRules` 的注释
+本来就是这么写的。删掉存储权限**不改变**这个现状：App 从未申请过它，也从未以自身 uid
+读过外存。
+
+判据 `scripts/qa/run-permission-gate-verification.sh`（24 条）：五个入口要素 + 11 条死声明
+必须不在 + 9 条保留项不许误删 + 危险权限必须有 `launch` 点 + 反向自检（把旧实现喂进去必须红）。
+变异验证：加回 `CAMERA`、替换 `ACTION_APPLICATION_DETAILS_SETTINGS` → 3 条红，恢复后全绿。
+
+**未验证的**：真机上点语音按钮是否真弹系统框（模拟器缺 ASR 原生库，`isInstalled()` 过不去，
+入口走到「先下模型」那一支）。这一条留给真机清单。
+
+---
+
 ## 6. 未决事项
 
 | 事项 | 状态 | 怎么办 |

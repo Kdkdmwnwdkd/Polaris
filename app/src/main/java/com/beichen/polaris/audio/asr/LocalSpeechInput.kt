@@ -70,7 +70,7 @@ class LocalSpeechInput(
             return false
         }
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            onEvent(Event.Failed("没有麦克风权限：到设置里允许「录音」再试"))
+            onEvent(Event.Failed("没有麦克风权限：到 系统设置 → 应用 → 北辰 → 权限 里打开「麦克风」"))
             return false
         }
         when (val claim = arbiter.beginCapture("离线语音输入")) {

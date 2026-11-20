@@ -264,27 +264,8 @@ fun ChatScreen(
     var showAttachMenu by remember { mutableStateOf(false) }
     var localVoice by remember { mutableStateOf(false) }
     val inputScope = rememberCoroutineScope()
-    /**
-     * 语音输入：只用自带的离线识别。
-     *
-     * 以前这里会弹系统识别页（`RecognizerIntent` 的 Activity 版）：录音与识别都在
-     * 系统进程里，看起来省事。但这台真机上两个系统引擎都出不了中文（Google 的服务
-     * 国内不可达、高通引擎没有中文包），弹出来只会是「说什么都没字」。
-     *
-     * 2026-11-16 起系统那条路整条删掉：装了模型就在我们自己的录音层里说
-     * （[LocalVoiceSheet]），没装就明确告诉用户去哪儿下——不留一条注定失败的入口。
-     */
-    val startVoiceInput: () -> Unit = {
-        if (AsrDirectory.of(ctx).isInstalled()) {
-            localVoice = true
-        } else {
-            Toast.makeText(
-                ctx,
-                "还没下载离线识别模型。到 设置 → 语音识别 里下「更准识别」（约 74MB），下完就能说话",
-                Toast.LENGTH_LONG,
-            ).show()
-        }
-    }
+    // 语音入口的权限闸门（模型 / 授权 / 永久拒绝三条出路）：实现与理由见 VoiceInputGate.kt
+    val startVoiceInput = rememberVoiceInputGate { localVoice = true }
 
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {

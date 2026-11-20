@@ -10,37 +10,41 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- ===== L2 前台服务 / 截图 / 录音 / 相机 / 语音（截图视觉通道） ===== -->
+    <!-- ===== L2 前台服务 / 截图 / 录音 / 语音（截图视觉通道） ===== -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SHORT_SERVICE" />
+    <!-- MICROPHONE 类型目前没有 service 声明使用（桌宠在前台 Activity 侧录音），
+         属 normal 权限、不弹窗，先留着等 targetSdk 升级时给 PetOverlayService 补上类型。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- CAMERA 于 2026-11-20 移除：全工程无相机代码（无 CameraX、无拍照 Intent），
+         声明它只会在系统「权限」页里摆出一个用不上的「相机」条目。 -->
 
-    <!-- ===== L3 存储（存截图 / 跨 App 读写） ===== -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
+    <!-- ===== L3 存储 =====
+         2026-11-20 整段移除（READ/WRITE_EXTERNAL_STORAGE、READ_MEDIA_IMAGES/VIDEO/AUDIO、
+         MANAGE_EXTERNAL_STORAGE）。核查依据：
+           · 图片/文件/备份一律走系统选择器（GetContent / OpenDocument / PickVisualMedia），
+             contentResolver 拿到的是用户当场授予的单个 uri，不需要任何存储权限；
+           · 其余读写都在应用私有目录（getExternalFilesDir / filesDir），同样不需要；
+           · MANAGE_EXTERNAL_STORAGE 在 targetSdk 28 上被系统直接忽略，纯占位。
+         将来若真要做「最近照片」自绘相册，再加 READ_MEDIA_IMAGES——并接受它的代价。 -->
 
-    <!-- ===== L4 系统级特殊授权（均需在设置中手动授予） ===== -->
+    <!-- ===== L4 系统级特殊授权（均需在设置中手动授予） =====
+         WRITE_SETTINGS 于 2026-11-20 移除：全工程无 Settings.System.put* 调用。 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
 
     <!-- ===== L9 构建链路：拉起系统安装器安装 CI 产出的 APK ===== -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
     <!-- REQUEST_INSTALL_PACKAGES：W-13 起用于「一键安装内置 Shizuku」（拉起系统安装器，非静默安装）。 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- RECEIVE_BOOT_COMPLETED / WAKE_LOCK 是 WorkManager 的硬依赖（2.9.1 的 manifest 会自行合入），
+         这里显式保留是为了 merged manifest 可读，不是本应用代码直接用。
+         SCHEDULE_EXACT_ALARM / SET_ALARM 于 2026-11-20 移除：全工程无 AlarmManager。 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
 
     <!-- ===== L5 Shizuku / ADB 提权通道（需先安装 Shizuku 并授权） ===== -->

@@ -89,7 +89,7 @@ Termux 至今保持 targetSdk 28，正是同一原因。证据注释在 `app/bui
 
 | 红利（28 才有） | 升级到 34+ 后 | 要补的 |
 |---|---|---|
-| 自由读写 `/sdcard` | 失效 | `READ_MEDIA_*` 按需 + `MANAGE_EXTERNAL_STORAGE` 权衡（Manifest:25-28 已声明前三个，`:28` 是全文件访问） |
+| 自由读写 `/sdcard` | 失效 | 2026-11-20 已按最小权限移除存储 6 条声明（当时全工程零使用）；升级时按需重新声明 `READ_MEDIA_*` 或 `MANAGE_EXTERNAL_STORAGE` |
 | `requestLegacyExternalStorage` | 失效 | Manifest:59-68 该属性只为 28 服务，升级后删 |
 | WebView 旧默认 | 变新默认 | 检查自定义 scheme / 文件访问是否受影响 |
 | 包可见性 | 收紧 | 若 `queryIntentActivities` 依赖旧默认，需 `queries` 声明 |

@@ -200,7 +200,11 @@ lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3207
 # 只用聊天页、从没开过桌宠的用户，否则永远拿不到「默认引擎不认中文」这个结论——
 # 点麦克风 → 系统识别页弹出 → 说完什么都没发生，而 App 侧一切检查都是绿的。
 # 4 行里 3 行是注释，真正的新逻辑只有一句 LaunchedEffect 调 probeEngines。
-lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3235
+# 2026-11-20 收紧（ChatScreen 3235 → 3194）：语音入口的权限闸门抽到 VoiceInputGate.kt。
+# 不是「顺手拆文件」——是修死路：旧实现只查模型装没装，没权限时面板里只有一行红字，
+# 而本应用设置页里根本没有「麦克风」可点。拆出去后 ChatScreen 只留一行调用，
+# 闸门本身（模型 / 授权 / 永久拒绝三条出路）可独立判据。
+lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3194
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1532
 # 2026-11-14 上调（AppScaffold +13）：语音引擎子页。
