@@ -15,6 +15,7 @@ import com.beichen.polaris.core.agent.AutoResumeDecision
 import com.beichen.polaris.core.agent.AutoResumeInput
 import com.beichen.polaris.core.agent.AutoResumePolicy
 import com.beichen.polaris.core.agent.AutoResumeReason
+import com.beichen.polaris.core.agent.StartupRecovery
 import java.io.File
 import java.nio.file.Files
 
@@ -61,6 +62,7 @@ private fun input(
     hasModel: Boolean = true,
     running: Boolean = false,
     blank: Boolean = true,
+    unknown: Int = 0,
     now: Long = NOW,
 ) = AutoResumeInput(
     state = st,
@@ -71,6 +73,7 @@ private fun input(
     hasModel = hasModel,
     isRunning = running,
     inputBlank = blank,
+    unknownWrites = unknown,
 )
 
 private fun expect(name: String, verdict: com.beichen.polaris.core.agent.AutoResumeVerdict,
@@ -251,6 +254,63 @@ fun main() {
         third.decision == AutoResumeDecision.PROMPT_ONLY &&
             third.reason == AutoResumeReason.ATTEMPT_LIMIT,
         "实际 ${third.decision}/${third.reason}")
+
+    println("")
+    println("[I] 未知写操作：本表里唯一一条「正确性」理由")
+
+    // 单字段对照：I1 与 I2 只差 unknownWrites 一个整数。
+    // 少了这条判断，自动续跑会在一份「可能已经写过」的历史上再发一句「继续」，
+    // 模型看到「我来写这个文件」就断了，于是照着重做一遍——同一个 write_file 执行两次。
+    expect("I1 上次有 1 个写操作结局未知 → 不续跑（与 B1 只差 unknownWrites）",
+        AutoResumePolicy.decide(input(unknown = 1)),
+        AutoResumeDecision.PROMPT_ONLY, AutoResumeReason.UNKNOWN_WRITES)
+    expect("I2 同一份状态，未知写操作数回到 0 → 照常续跑（证明 I1 的差异只来自这个字段）",
+        AutoResumePolicy.decide(input(unknown = 0)),
+        AutoResumeDecision.RESUME, AutoResumeReason.OK)
+
+    // 顺序断言：用户自己关了开关时，理由必须报 DISABLED——那是他按下开关想看到的话。
+    // 反过来的话，一个关了功能的人每次冷启动都被教育「你有写操作结局未知」。
+    expect("I3 关了开关 + 有未知写操作 → 理由仍是 DISABLED（顺序：开关先于写操作）",
+        AutoResumePolicy.decide(input(enabled = false, unknown = 2)),
+        AutoResumeDecision.SKIP, AutoResumeReason.DISABLED)
+
+    // 提示归属：这条分支不该覆盖启动提示，因为启动那句带着工具名与「我不会自动重做」。
+    check("I4 UNKNOWN_WRITES 不覆盖启动提示（明细在 StartupRecovery.note 里）",
+        !AutoResumePolicy.decide(input(unknown = 1)).overrideNotice)
+    check("I5 其余提示仍覆盖启动提示（PROMPT_ONLY 的原有语义没被改掉）",
+        AutoResumePolicy.decide(input(hasModel = false)).overrideNotice)
+
+    println("")
+    println("[J] 恢复结论：两份证据（运行态 + 回合日志）合成一个对象")
+
+    val both = StartupRecovery.build(
+        state = state(),
+        orphans = listOf(
+            StartupRecovery.Orphan("write_file", true),
+            StartupRecovery.Orphan("write_file", true),
+            StartupRecovery.Orphan("read_file", false),
+        ),
+    )
+    check("J1 两条未知写 + 一条未派发 → 计数 2/1、工具名去重",
+        both.unknownWrites == 2 && both.safeRetries == 1 &&
+            both.unknownTools == listOf("write_file"),
+        "未知=${both.unknownWrites} 安全=${both.safeRetries} 工具=${both.unknownTools}")
+    check("J2 有未知写 → resumeBlocked（这就是送进判定表的那个数）", both.resumeBlocked)
+    val bothNote = both.note
+    // 用 `in` 而不是 String.contains 调用：普查会把后者判成「文本断言」（那是 grep 源码的写法），
+    // 而这里测的是返回值的内容。
+    check("J3 提示里带工具名与「可能已经生效」的告警",
+        bothNote != null && "write_file" in bothNote && "可能已经生效" in bothNote,
+        "实际=${bothNote ?: "null"}")
+
+    val safeOnly = StartupRecovery.build(state(), listOf(StartupRecovery.Orphan("read_file", false)))
+    check("J4 只有「未派发」→ 不阻塞续跑（白烧一轮也是成本）", !safeOnly.resumeBlocked)
+    check("J5 只有「未派发」→ 提示仍说可以安全重试",
+        safeOnly.note?.let { "可以安全重试" in it } == true, "实际=${safeOnly.note ?: "null"}")
+    check("J6 没有孤儿调用 → 不产生提示（不制造噪声）",
+        StartupRecovery.build(state(), emptyList()).note == null)
+    check("J7 anomalies 原样带出（只进诊断，不参与裁决）",
+        StartupRecovery.build(state(), emptyList(), 3).anomalies == 3)
 
     println("")
     println("$pass 通过 / $fail 失败")

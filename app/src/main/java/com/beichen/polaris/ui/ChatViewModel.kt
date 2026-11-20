@@ -114,6 +114,7 @@ import com.beichen.polaris.core.agent.AskUserBroker
 import com.beichen.polaris.core.agent.AgentRunService
 import com.beichen.polaris.core.agent.AgentRunState
 import com.beichen.polaris.core.agent.AgentRunStateStore
+import com.beichen.polaris.core.agent.StartupRecovery
 import com.beichen.polaris.core.agent.AutoResumeDecision
 import com.beichen.polaris.core.agent.AutoResumeInput
 import com.beichen.polaris.core.agent.AutoResumePolicy
@@ -235,9 +236,13 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 直接跑，低端机上 IO 协程会抢在属性初始化之前执行——2026-11-09 模拟器上
      * 就是这么 NPE 的。用一个 Deferred 把「结果」和「执行」拆开，时序问题就没了。
      *
+     * 类型是 [StartupRecovery] 而不是单个运行态：自动续跑必须同时知道「日志里有没有
+     * 结局未知的写操作」，否则它会在一份「可能已经写过」的历史上再发一句「继续」。
+     * 两件事在同一条 IO 链上先后完成，Deferred 一 complete 就代表**两份证据都到齐**。
+     *
      * 必定 complete（含异常路径），否则末尾的 await 会永远挂着，功能静默失效。
      */
-    private val runStateReady = CompletableDeferred<AgentRunState?>()
+    private val runStateReady = CompletableDeferred<StartupRecovery?>()
 
     /**
      * R1：回合日志。目录 `filesDir/run-journal`，只保留最近 20 个回合。
@@ -304,30 +309,39 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      *
      * 代价是界面上会多一条用户气泡「继续」。它确实是应用替用户表达的意思，
      * 而且上面那条提示会同时写着「已自动继续」，不会被误认为是自己打的。
+     *
+     * 入参是 [StartupRecovery]，不是单个运行态：`unknownWrites` 必须一起送进裁决，
+     * 否则「上次那个 write_file 可能已经生效」这件事到不了判定表里（见该类的注释）。
      */
-    private fun autoResumeIfPossible(state: AgentRunState) {
+    private fun autoResumeIfPossible(recovery: StartupRecovery) {
+        val state = recovery.state
         val verdict = AutoResumePolicy.decide(
             AutoResumeInput(
                 state = state,
                 nowMs = System.currentTimeMillis(),
                 activeSessionId = _activeConversationId.value,
-                sessionExists = runCatching { conversationStore.load(state.sessionId) != null }
-                    .getOrDefault(false),
+                sessionExists = state != null &&
+                    runCatching { conversationStore.load(state.sessionId) != null }.getOrDefault(false),
                 enabled = settingsFacade.autoResume.value,
                 hasModel = modelReady.value,
                 isRunning = isRunning.value,
                 // 输入框非空 = 用户正在打字。自动续跑要往输入框写「继续」，
                 // 那会把敲了一半的字清掉——宁可这一轮不跑。
                 inputBlank = input.value.isBlank(),
+                // 结局未知的写操作数。不传这个字段，判定表就看不见「可能已经写过」，
+                // 自动续跑会把同一件事做第二遍——不报错，但用户的文件被改了两次。
+                unknownWrites = recovery.unknownWrites,
             )
         )
-        if (verdict.message.isNotBlank()) _interruptedNotice.value = verdict.message
+        if (verdict.message.isNotBlank() && verdict.overrideNotice) {
+            _interruptedNotice.value = verdict.message
+        }
         if (verdict.decision != AutoResumeDecision.RESUME) {
             AgentLogger.i("Chat", "自动续跑未执行：${verdict.reason}")
             return
         }
         agentRunStateStore.markAutoResumeAttempt()
-        AgentLogger.i("Chat", "自动续跑：会话 ${state.sessionId.take(8)} 第 ${state.stepIndex} 步")
+        AgentLogger.i("Chat", "自动续跑：会话 ${state?.sessionId?.take(8)} 第 ${state?.stepIndex} 步")
         input.value = AUTO_RESUME_TEXT
         send()
     }
@@ -810,12 +824,21 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // 结果只用于一条中断提示。原来同步跑在构造线程上，冷启动首帧要等这几份 JSON 读完。
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { jobStore.reconcile(System.currentTimeMillis()) }
-            // 结论一定要交出去（异常也算交），否则末尾那个 await 会挂死，自动续跑永远不触发。
-            val interrupted = runCatching {
-                agentRunStateStore.reconcile()?.also { _interruptedNotice.value = it.note }
-            }.getOrNull()
-            runStateReady.complete(interrupted)
-            runCatching { recoverInterruptedJournal() }
+            // 两份证据（运行态 + 回合日志）在 recoveryFor 里串行取，全部到手才 complete。
+            val state = runCatching { agentRunStateStore.reconcile() }.getOrNull()
+            // 扫描 + 合成在 core（输出可被纯 JVM 断言）。异常也不能跳过 complete——
+            // 跳过等于 await 永久挂起、自动续跑静默失效。
+            val recovery = runCatching { turnJournal.recoveryFor(state) }
+                .getOrDefault(StartupRecovery.EMPTY)
+            pendingRecoveryNote = recovery.note
+            // 提示优先级：有写操作结局未知时以日志那句为准（它带工具名与「不会自动重做」），
+            // 否则用运行态那句（「中断在第 N 步」）——它对用户下一步最有指导性。
+            _interruptedNotice.value = when {
+                recovery.resumeBlocked -> recovery.note
+                !state?.note.isNullOrBlank() -> state?.note
+                else -> recovery.note
+            }
+            runStateReady.complete(recovery)
         }
         // 技能工具是第二阶段装配：SkillExecutor 构造时要一张**已建好**的工具表
         // （技能脚本通过它调工具），所以不可能和 52 个内建工具一起注册。
@@ -850,58 +873,6 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // L8/L9：首屏即有内容可看。200 条日志的 format() 实测占 600ms+（SimpleDateFormat 加锁），挪到 IO
         viewModelScope.launch(Dispatchers.IO) { refreshLogs(); refreshMemories() }
         startup.finish("refresh", "ViewModel 初始化分段")
-    }
-
-    /**
-     * R1：启动对账——扫描上次进程被杀留下的未闭合回合，把孤儿调用变成可读的提示。
-     *
-     * 判据来自日志事实而非猜测：`OUTCOME_UNKNOWN` = 已越过执行边界但没记到结果，
-     * 说明工具**可能已经生效**；`NOT_DISPATCHED` = 声明了但没派发，重试绝对安全。
-     * 这个两轴区分是本次改造的核心——只按「工具有没有副作用」判，会让一个根本没启动的
-     * `rm` 也走一遍「先核对」，白烧一轮；只按「日志有没有记录」判，又会让已生效的写操作被重放。
-     *
-     * 全部包在 runCatching 里：启动阶段任何异常都不该阻止 App 起来（日志坏了就退化成旧行为）。
-     */
-    private fun recoverInterruptedJournal() {
-        viewModelScope.launch {
-            val results = turnJournal.scanAndRepair()
-            if (results.isEmpty()) return@launch
-            val orphans = results.flatMap { it.orphans }
-            val anomalies = results.flatMap { it.anomalies }
-            if (anomalies.isNotEmpty()) {
-                AgentLogger.w(
-                    "Recovery",
-                    "回合日志不一致 ${anomalies.size} 条：" + anomalies.joinToString("；")
-                )
-            }
-            if (orphans.isEmpty()) return@launch
-            val unknown = orphans.filter { it.mayHaveTakenEffect }
-            val safe = orphans.filterNot { it.mayHaveTakenEffect }
-            AgentLogger.w(
-                "Recovery",
-                "上次回合被中止：${unknown.size} 个写操作结局未知，${safe.size} 个未派发。明细=" +
-                    orphans.joinToString { "${it.toolName}:${it.status}" }
-            )
-            val note = buildString {
-                append("上次执行被系统中止。")
-                if (unknown.isNotEmpty()) {
-                    append("其中 ${unknown.size} 个写操作（")
-                    append(unknown.map { it.toolName }.distinct().joinToString("、"))
-                    append("）可能已经生效——继续之前建议先核对结果，我不会自动重做。")
-                }
-                if (safe.isNotEmpty()) {
-                    if (unknown.isNotEmpty()) append(" 另有 ")
-                    append("${safe.size} 个调用还没开始执行，可以安全重试。")
-                }
-            }
-            pendingRecoveryNote = note
-            // 提示优先级：**有写操作结局未知时，以这一句为准**。实测的坑：运行态那句
-            // 「上次任务已被系统中断」先到把这里挡住，用户只看到「可以直接说继续」——
-            // 而这恰恰是最不能直接继续的情况；没有未知写操作时才让位给运行态那句。
-            if (unknown.isNotEmpty() || _interruptedNotice.value == null) {
-                _interruptedNotice.value = note
-            }
-        }
     }
 
     /**
@@ -3246,8 +3217,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // 挂在这一段而不是前面那个 init：这里所有字段都已初始化，读 _activeConversationId /
         // modelReady / configStore 才是安全的。
         viewModelScope.launch {
-            val interrupted = runStateReady.await() ?: return@launch
-            autoResumeIfPossible(interrupted)
+            val recovery = runStateReady.await() ?: return@launch
+            autoResumeIfPossible(recovery)
         }
     }
 }

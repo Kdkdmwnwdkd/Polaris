@@ -168,7 +168,14 @@
 # 52 个内联 register(...) 与整段依赖接线搬进 tools/ToolAssembler（295 行，含 ToolDeps
 # 与桌宠/技能两条支线）。这是这个文件里最后一片「整块搬走、且搬走不改行为」的区域。
 # 顺带清掉 72 个因搬移而失效的 import（工具类、备份、本地推理等，均已无人引用）。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3253
+# 2026-11-20 **再次下调**（3253 → 3224，第七批：冷启动恢复两条路径合并）：
+# 运行态对账与回合日志扫描原来是两个协程，自动续跑只等前者——于是「有写操作可能已生效」
+# 赶不上裁决，应用照样发「继续」，模型把同一件事做第二遍（用户的文件被写两次）。
+# 合并点放在 core：TurnJournal.recoveryFor(state) 串行扫描 + 合成 StartupRecovery，
+# 界面层只剩「取结论 → 落提示 → complete」四行。文案与计数在 StartupRecovery（纯数据），
+# 判定在 AutoResumePolicy（新增 UNKNOWN_WRITES 一档），两者都能被 JVM harness 真跑。
+# 净减 29 行不是省出来的：删了 41 行的旧函数与 20 行 KDoc，换回 12 行接线。
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3224
 # 2026-11-14 重记（ChatScreen +45）：语音输入的能力预检与编排。
 # 增量分布：
 #   ① 能力预检：约 12 行（含 8 行注释）。系统识别页一旦弹出，用户就进入了一个

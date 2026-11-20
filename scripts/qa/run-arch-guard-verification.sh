@@ -11,6 +11,9 @@
 #   C 单点：工具 schema 序列化只允许 ToolSchemaJson 一处实现
 #   D 自检：白名单条目必须仍然命中（文件改名/删掉后残留条目会让守卫变成摆设）
 #   E 单点：读文件 / 读响应体必须经 BoundedBody 限长（「读完再截断」已犯五次）
+#   G 拆分后的所有权：共享状态靠注入，写点唯一
+#   H 工具装配单点：清单只在 ToolAssembler
+#   I 冷启动恢复单入口：运行态与回合日志在裁决前合流
 #
 # 退出码：0 通过 / 1 有违规 / 3 环境不具备（这里不用 3，纯静态检查总是可跑）。
 set -uo pipefail
@@ -256,6 +259,55 @@ if grep -q 'val activeConversationId: () -> String?' "$ASM" && grep -q 'val plan
   good "[H] 运行期会变的依赖（会话 id / 计划模式）是函数，不是快照"
 else
   bad "[H] 会话 id / 计划模式变成了快照——todo 会写错会话且无任何报错"
+fi
+
+say ""
+say "[I] 冷启动恢复单入口：两份证据必须在裁决之前合流"
+
+POLICY=core/src/main/java/com/beichen/polaris/core/agent/AutoResumePolicy.kt
+
+# 3.2 的坑是**两个恢复协程各跑各的**：运行态先 complete，日志扫描后到，
+# 于是「有写操作可能已生效」赶不上自动续跑的裁决——应用照样发「继续」，
+# 模型把同一件事做第二遍。表现不是崩溃，是用户的文件被改了两次。
+# 判据：扫描点唯一（在 TurnJournal）、合成点唯一（recoveryFor）、且先于 complete。
+if grep -q 'scanAndRepair(' app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt; then
+  bad "[I] ChatViewModel 又自己扫回合日志——恢复逻辑回到界面层，两份证据会再次分叉"
+else
+  good "[I] 回合日志只在 TurnJournal 扫描（界面层不再持扫描点）"
+fi
+
+if grep -q 'turnJournal.recoveryFor(' app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt; then
+  good "[I] 运行态与日志在 recoveryFor 一处合流"
+else
+  bad "[I] 找不到 turnJournal.recoveryFor —— 两份证据又变成两条路径"
+fi
+
+# 构造函数是 private 的：只能经 build() 造。这一条钉住 TurnJournal 真的调了 build
+# （而不是拿一份空结论充数——那样会把「有写操作已生效」整个吞掉，且不报错）。
+TJ=core/src/main/java/com/beichen/polaris/core/agent/journal/TurnJournal.kt
+if awk '/suspend fun recoveryFor[(]/,/^    }/' "$TJ" | grep -q 'StartupRecovery.build(state, orphans'; then
+  good "[I] recoveryFor 把扫描结果真的合成了（build(state, orphans)）"
+else
+  bad "[I] recoveryFor 没有调用 StartupRecovery.build —— 日志结论被吞，写操作会被重做"
+fi
+
+# 顺序：判断「该不该跑」的开关必须先于「写操作结局未知」。
+# 反过来，一个已经关掉自动续跑的用户每次冷启动都会被告知「你有写操作结局未知」。
+EN_LINE=$(grep -n 'if (!input.enabled) return skip' "$POLICY" | head -1 | cut -d: -f1)
+UNK_LINE=$(grep -n 'if (input.unknownWrites > 0)' "$POLICY" | head -1 | cut -d: -f1)
+if [ -n "$EN_LINE" ] && [ -n "$UNK_LINE" ] && [ "$EN_LINE" -lt "$UNK_LINE" ]; then
+  good "[I] 开关判定先于写操作判定（关掉功能的用户不会被反复教育）"
+else
+  bad "[I] 写操作判定跑到了开关前面（enabled=${EN_LINE:-无} unknown=${UNK_LINE:-无}）"
+fi
+
+# 未知写操作那条的提示**不许**覆盖启动提示：后者带着工具名与「我不会自动重做」。
+# 这一行被改成 true 的话，用户只会看到一句笼统的「上次被中断」，细节全丢。
+N_FALSE=$(grep -c 'overrideNotice = false' "$POLICY" || true)
+if [ "${N_FALSE:-0}" -eq 1 ] && awk '/UNKNOWN_WRITES,/{f=1} f&&/overrideNotice = false/{found=1} END{exit !found}' "$POLICY"; then
+  good "[I] 只有「写操作结局未知」不覆盖启动提示（明细由 note 提供）"
+else
+  bad "[I] overrideNotice=false 的位置不对（count=${N_FALSE:-0}）——细节提示会被笼统句盖掉"
 fi
 
 say ""

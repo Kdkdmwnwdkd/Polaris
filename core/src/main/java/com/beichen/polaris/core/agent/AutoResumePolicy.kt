@@ -24,9 +24,13 @@ package com.beichen.polaris.core.agent
  *
  * ## 判定顺序是有讲究的
  *
- * 先判「能不能跑」（状态存在 / 未完成 / 不忙），再判「该不该跑」（开关 / 熔断 / 时效），
- * 最后判「跑得成吗」（会话在不在、是不是当前会话、有没有模型）。
+ * 先判「能不能跑」（状态存在 / 未完成 / 不忙），再判「该不该跑」（开关 / 写操作是否
+ * 结局未知 / 熔断 / 时效），最后判「跑得成吗」（会话在不在、是不是当前会话、有没有模型）。
  * 顺序反了会出现「明明正在跑别的任务，却弹一句『上次任务已过期』」这种噪声。
+ *
+ * 其中「写操作结局未知」排在开关之后、熔断之前：它是**正确性**判断（会把同一件事做两遍），
+ * 比任何成本理由都靠前；但用户自己关了开关时，理由仍应报 [AutoResumeReason.DISABLED]——
+ * 那才是他按下开关时想看到的那句话。
  */
 enum class AutoResumeDecision {
     /** 自动发起一轮续跑。 */
@@ -64,6 +68,16 @@ enum class AutoResumeReason {
 
     /** 用户关掉了「自动续跑」。 */
     DISABLED,
+
+    /**
+     * 上次回合有写操作「越过了执行边界但没记到结果」。
+     *
+     * 这是本表里唯一一条**正确性**理由，不是成本理由：发一句「继续」出去，模型
+     * 看到的历史里是「我来写这个文件」然后断掉——它会照着再做一遍，于是同一个
+     * `write_file` 执行两次。启动提示里已经说了「N 个写操作可能已生效」，
+     * 所以这里不再重复造一句话（见 [AutoResumeVerdict.overrideNotice]）。
+     */
+    UNKNOWN_WRITES,
 
     /**
      * 有中断状态，但没记下原始请求（`prompt` 为空）。
@@ -109,6 +123,13 @@ data class AutoResumeInput(
     val isRunning: Boolean,
     /** 输入框是否为空。为 false 时不续跑——自动续跑要往输入框写「继续」，会覆盖用户正在打的字。 */
     val inputBlank: Boolean = true,
+    /**
+     * 上次回合里「可能已经生效」的写操作数（来自 [StartupRecovery.resumeBlocked]）。
+     *
+     * 默认 0 是为了让不关心恢复细节的调用方（与旧 harness）不受影响；
+     * 但**生产接线必须传**——不传等于把「写了两遍」这个洞留着。
+     */
+    val unknownWrites: Int = 0,
     /** 同一任务允许自动续跑的次数上限。 */
     val maxAttempts: Int = AutoResumePolicy.DEFAULT_MAX_ATTEMPTS,
     /** 中断超过多久就不再自动续跑。 */
@@ -121,6 +142,14 @@ data class AutoResumeVerdict(
     val reason: AutoResumeReason,
     /** 给用户看的一句话；`SKIP` 时为空串。 */
     val message: String = "",
+    /**
+     * 是否用 [message] 覆盖启动时已有的提示。
+     *
+     * `false` 只出现在 [AutoResumeReason.UNKNOWN_WRITES]：那条分支的细节（哪个工具、
+     * 几个调用未派发）由 [StartupRecovery.note] 给得更准，用一句笼统的话盖掉它
+     * 等于把最该给用户看的信息换成「上次被中断」。
+     */
+    val overrideNotice: Boolean = true,
 )
 
 object AutoResumePolicy {
@@ -158,6 +187,19 @@ object AutoResumePolicy {
         if (!input.inputBlank) return skip(AutoResumeReason.INPUT_BUSY)
         // 用户自己关的开关。原中断提示（「可以说继续」）已经够用，不必再补一句。
         if (!input.enabled) return skip(AutoResumeReason.DISABLED)
+
+        // 上次有写操作可能已生效：续跑会让模型把同一件事再做一遍，是数据损坏。
+        // 这里不给 message 覆盖权——启动时的恢复提示里已经带着工具名与「我不会自动重做」，
+        // 那句比这句具体得多（见 StartupRecovery.note）。
+        if (input.unknownWrites > 0) {
+            return AutoResumeVerdict(
+                decision = AutoResumeDecision.PROMPT_ONLY,
+                reason = AutoResumeReason.UNKNOWN_WRITES,
+                message = "上次有 ${input.unknownWrites} 个写操作结局未知，已跳过自动继续；" +
+                    "核对结果后可以说「继续」。",
+                overrideNotice = false,
+            )
+        }
 
         // 没有原始请求就无从续起：续跑上下文是空的，模型只会看到一句「继续」。
         if (state.prompt.isBlank()) {

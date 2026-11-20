@@ -2,6 +2,8 @@ package com.beichen.polaris.core.agent.journal
 
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.ToolCall
+import com.beichen.polaris.core.agent.AgentRunState
+import com.beichen.polaris.core.agent.StartupRecovery
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -101,6 +103,36 @@ class TurnJournal(
                 .onFailure { AgentLogger.w(TAG, "启动扫描回合日志失败：${it.message}") }
                 .getOrDefault(emptyList())
         }
+
+    /**
+     * 冷启动恢复：扫描未闭合回合，把日志事实合成 [StartupRecovery]。
+     *
+     * 为什么放在这里而不是 ViewModel：输出要能进纯 JVM 断言（ViewModel 编不了），
+     * 而输入（扫描结果）只有本类拿得到。ViewModel 那边于是只剩「把结果交出去」。
+     *
+     * 两轴判据来自日志事实：`OUTCOME_UNKNOWN` = 已越过执行边界但没记到结果，
+     * 工具**可能已经生效**；`NOT_DISPATCHED` = 声明了但没派发，重试绝对安全。
+     * 只按「工具有没有副作用」判，会让一个根本没启动的 `rm` 也走「先核对」，白烧一轮；
+     * 只按「日志有没有记录」判，又会让已生效的写操作被重放。
+     */
+    suspend fun recoveryFor(state: AgentRunState?): StartupRecovery {
+        val results = scanAndRepair()
+        val orphans = results.flatMap { it.orphans }
+            .map { StartupRecovery.Orphan(it.toolName, it.mayHaveTakenEffect) }
+        val anomalies = results.flatMap { it.anomalies }
+        if (anomalies.isNotEmpty()) {
+            AgentLogger.w(TAG, "回合日志不一致 ${anomalies.size} 条：" + anomalies.joinToString("；"))
+        }
+        if (orphans.isNotEmpty()) {
+            val unknown = orphans.count { it.mayHaveTakenEffect }
+            AgentLogger.w(
+                TAG,
+                "上次回合被中止：$unknown 个写操作结局未知，${orphans.size - unknown} 个未派发。明细=" +
+                    orphans.joinToString { "${it.toolName}:${it.mayHaveTakenEffect}" }
+            )
+        }
+        return StartupRecovery.build(state, orphans, anomalies.size)
+    }
 
     /** 只保留最近 [keep] 个回合的日志。回合结束时调用，失败无所谓。 */
     suspend fun prune(keep: Int = 20) {

@@ -16,6 +16,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 POLICY=core/src/main/java/com/beichen/polaris/core/agent/AutoResumePolicy.kt
+RECOVERY=core/src/main/java/com/beichen/polaris/core/agent/StartupRecovery.kt
 STORE=core/src/main/java/com/beichen/polaris/core/agent/AgentRunStateStore.kt
 VM=app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt
 CFG=core/src/main/java/com/beichen/polaris/core/ConfigStore.kt
@@ -27,10 +28,10 @@ fail() { echo "  FAIL  $*"; f=$((f + 1)); }
 
 echo "[A] 结构：接线、顺序、默认值"
 
-for src in "$POLICY" "$STORE" "$VM" "$CFG" "$VERIFY"; do
+for src in "$POLICY" "$RECOVERY" "$STORE" "$VM" "$CFG" "$VERIFY"; do
   [ -f "$src" ] || { fail "找不到 $src —— 文件改名了？本 harness 失效"; echo ""; echo "$p 通过 / $f 失败"; exit 1; }
 done
-pass "A1 五个文件都在位"
+pass "A1 六个文件都在位"
 
 # core 必须零 Android 依赖，否则这条策略不能被 JVM harness 真跑（只能 grep，等于假绿）。
 if grep -qE '^import android\.' "$POLICY"; then
@@ -82,7 +83,7 @@ else
   fail "A8 没有 await runStateReady —— 可能在字段初始化前执行"
 fi
 
-if grep -q 'runStateReady.complete(interrupted)' "$VM"; then
+if grep -q 'runStateReady.complete(' "$VM"; then
   pass "A9 对账结论必定 complete（异常路径也算，否则 await 永久挂起）"
 else
   fail "A9 runStateReady 没有无条件 complete —— 异常时功能静默失效"
@@ -108,6 +109,33 @@ if grep -q 'inputBlank = input.value.isBlank()' "$VM"; then
   pass "A12 判定了输入框是否为空（否则会清掉用户正在打的字）"
 else
   fail "A12 没有传 inputBlank —— 用户输入到一半的字会被自动续跑清空"
+fi
+
+# A13 两条恢复路径必须合成一条链：原来日志扫描在**另一个** launch 里，
+# 自动续跑只等运行态，于是「有写操作可能已生效」赶不上裁决——应用照样发「继续」，
+# 模型把同一件事做第二遍。判据不是「有没有这个函数」，而是**顺序**：
+# 日志扫描必须发生在 runStateReady.complete 之前。
+if grep -q 'recoverInterruptedJournal' "$VM"; then
+  fail "A13 仍有独立的 recoverInterruptedJournal —— 日志扫描又变成旁路协程，赶不上裁决"
+else
+  grep -q 'turnJournal.recoveryFor(' "$VM" \
+    && pass "A13 日志扫描与合成收成一个 suspend 调用（不再自起协程）" \
+    || fail "A13 找不到 turnJournal.recoveryFor —— 合并结构被改回"
+fi
+
+SCAN_LINE=$(grep -n 'turnJournal.recoveryFor(' "$VM" | head -1 | cut -d: -f1)
+DONE_LINE=$(grep -n 'runStateReady.complete(' "$VM" | head -1 | cut -d: -f1)
+if [ -n "$SCAN_LINE" ] && [ -n "$DONE_LINE" ] && [ "$SCAN_LINE" -lt "$DONE_LINE" ]; then
+  pass "A14 先扫日志再 complete（顺序反了等于没合并：续跑仍先于证据）"
+else
+  fail "A14 scan(${SCAN_LINE:-无}) 不在 complete(${DONE_LINE:-无}) 之前 —— 证据到得比裁决晚"
+fi
+
+# 这一行是整批改动的落点：不传 unknownWrites，判定表就看不见「可能已经写过」。
+if grep -q 'unknownWrites = recovery.unknownWrites' "$VM"; then
+  pass "A15 未知写操作数真的送进裁决（不传则 I1 那条保护形同虚设）"
+else
+  fail "A15 ChatViewModel 没把 unknownWrites 传给 AutoResumeInput"
 fi
 
 echo ""
@@ -151,6 +179,7 @@ java -cp "$COMPILER_CP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   "core/src/main/java/com/beichen/polaris/core/io/AtomicJsonFile.kt" \
   "$STORE" \
   "$POLICY" \
+  "$RECOVERY" \
   "$VERIFY" \
   2>&1 | grep -v '^warning:' | head -25
 
