@@ -11,6 +11,7 @@ import com.beichen.polaris.core.agent.AgentSeams
 import com.beichen.polaris.core.agent.AttemptOutputTracker
 import com.beichen.polaris.core.agent.ContextBudget
 import com.beichen.polaris.core.agent.Hooks
+import com.beichen.polaris.core.agent.LoopDefaults
 import com.beichen.polaris.core.agent.NetworkRecoveryWaiter
 import com.beichen.polaris.core.agent.NoopHooks
 import com.beichen.polaris.core.agent.NoopTurnObserver
@@ -79,14 +80,14 @@ object AgentLoopFactory {
          */
         runtime: AgentRuntime = AgentRuntime.shared(),
         systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
-        maxSteps: Int = 60,
-        maxParallelTools: Int = 5,
-        providerRetry: Int = -1,
+        maxSteps: Int = LoopDefaults.MAX_STEPS,
+        maxParallelTools: Int = LoopDefaults.MAX_PARALLEL_TOOLS,
+        providerRetry: Int = LoopDefaults.PROVIDER_RETRY,
         retryProfileProvider: () -> RetryProfile = { RetryProfile.DEFAULT },
-        maxHistoryMessages: Int = 40,
+        maxHistoryMessages: Int = LoopDefaults.MAX_HISTORY_MESSAGES,
         contextBudgetTokens: Int = ContextBudget.DEFAULT_BUDGET_TOKENS,
         keepRecentImages: Int = ContextBudget.DEFAULT_KEEP_IMAGES,
-        consent: Consent = Consent.unset("RealAgentLoop"),
+        consent: Consent = LoopDefaults.CONSENT,
         checkpoint: ((List<ChatMessage>) -> Unit)? = null,
         journal: TurnJournal? = null,
         journalTurn: TurnJournal.Turn? = null,
@@ -111,8 +112,8 @@ object AgentLoopFactory {
             RetryBackoffPolicy.networkAwareRateLimit(rateLimitPlan, networkRecovery),
         retryBackoff: suspend (attempt: Int) -> Unit =
             RetryBackoffPolicy.networkAware(backoffPlan, networkRecovery),
-        llmCallTimeoutMs: Long = 300_000L,
-        turnBudgetMs: Long = 30 * 60 * 1000L,
+        llmCallTimeoutMs: Long = LoopDefaults.LLM_CALL_TIMEOUT_MS,
+        turnBudgetMs: Long = LoopDefaults.TURN_BUDGET_MS,
     ): AgentLoop {
         // 事件闸门必须先于 loop 存在：RealAgentLoop 的 onEvent 是构造参数，
         // 而闸门要用「send 期间才存在的租约」做判断——所以闸门是共享的可变单元，

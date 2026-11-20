@@ -139,8 +139,8 @@ class RealAgentLoop(
     private val llmProvider: () -> LLMClient,
     registry: ToolRegistry,
     systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
-    maxSteps: Int = 60,
-    private val maxParallelTools: Int = 5,
+    maxSteps: Int = LoopDefaults.MAX_STEPS,
+    private val maxParallelTools: Int = LoopDefaults.MAX_PARALLEL_TOOLS,
     /**
      * 供应商瞬时失败重试次数（不含首次）。
      *
@@ -152,13 +152,13 @@ class RealAgentLoop(
      * 用 -1 表示「没意见」，比用 3 表示「没意见」诚实：3 是一个具体主张，会被误读成
      * 「所有供应商都该重试 3 次」。
      */
-    private val providerRetry: Int = -1,
+    private val providerRetry: Int = LoopDefaults.PROVIDER_RETRY,
     /**
      * 当前供应商的重试档位（R10）。lambda 而非值：模型配置可在运行时切换，
      * 档位必须跟着变，否则切到聚合商之后还在用官方档的次数。
      */
     private val retryProfileProvider: () -> RetryProfile = { RetryProfile.DEFAULT },
-    private val maxHistoryMessages: Int = 40,
+    private val maxHistoryMessages: Int = LoopDefaults.MAX_HISTORY_MESSAGES,
     /**
      * W-10 上下文预算（估算 token）。每轮请求前按此预算构建**请求视图**：
      * 超预算时从最老的完整步开始丢（保留任务锚点与当前步），UI/落盘历史不动。
@@ -169,7 +169,7 @@ class RealAgentLoop(
     private val contextBudgetTokens: Int = ContextBudget.DEFAULT_BUDGET_TOKENS,
     /** W-10：请求视图里最多保留最近几条工具截图的 base64（更早的剥成文字标记）。 */
     private val keepRecentImages: Int = ContextBudget.DEFAULT_KEEP_IMAGES,
-    private val consent: Consent = Consent.unset("RealAgentLoop"),
+    private val consent: Consent = LoopDefaults.CONSENT,
     private val checkpoint: ((List<ChatMessage>) -> Unit)? = null,
     /** R1：回合日志（null = 不留恢复依据，harness 与无状态调用走这条）。 */
     private val journal: TurnJournal? = null,
@@ -257,7 +257,7 @@ class RealAgentLoop(
      * 端侧模型（provider id 以 `local-` 开头）自动放宽到 3 倍：手机上跑 7B 生成
      * 两千 token 确实要几分钟，用云端的尺子量它会天天误杀。
      */
-    private val llmCallTimeoutMs: Long = 300_000L,
+    private val llmCallTimeoutMs: Long = LoopDefaults.LLM_CALL_TIMEOUT_MS,
     /**
      * R2 第三层：单个回合的总预算（毫秒，默认 30 分钟）。
      *
@@ -269,7 +269,7 @@ class RealAgentLoop(
      * 那是 `CancellationException` 的子类，会被当成「用户点停止」走树尾闭合，
      * 用户看到的是一堆「已取消」而不是一句人话。
      */
-    private val turnBudgetMs: Long = 30 * 60 * 1000L
+    private val turnBudgetMs: Long = LoopDefaults.TURN_BUDGET_MS
 ) : AgentLoop {
 
     /**

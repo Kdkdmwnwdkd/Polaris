@@ -213,5 +213,69 @@ else
 fi
 
 echo ""
+echo "[F] 默认值单一真源：工厂与 loop 不许各写一份字面量"
+
+LOOP="$CORE/agent/RealAgentLoop.kt"
+DEFAULTS="$CORE/agent/LoopDefaults.kt"
+
+# 债的来源（§18.7）：不变量 1 只保证「只有一处 new」，不保证两处默认值一样。
+# 历史上 maxSteps=16 截断长任务、providerRetry=2 让 429 第三档退避永不触发，
+# 两次都编译通过、单测通过，只在真机上表现为「任务莫名停住」。
+missing=""
+for k in MAX_STEPS MAX_PARALLEL_TOOLS PROVIDER_RETRY MAX_HISTORY_MESSAGES LLM_CALL_TIMEOUT_MS TURN_BUDGET_MS CONSENT; do
+  grep -qE "(const )?val $k" "$DEFAULTS" 2>/dev/null || missing="$missing $k"
+done
+if [ -f "$DEFAULTS" ] && [ -z "$missing" ]; then
+  pass "F1 LoopDefaults 在位且七个常量齐全（纯常量默认值的唯一出处）"
+else
+  fail "F1 LoopDefaults 缺项：${missing:-文件不存在} —— 默认值又变成两处人肉复刻"
+fi
+
+# 判据是「两处右侧表达式逐字相同、且都以 LoopDefaults. 开头」。
+# 只查「有没有引用」不够：两边都写成 `= 61` 也能过，而那正是漂移。
+DRIFT=$(python3 - "$LOOP" "$FACTORY" <<'PY'
+import re, sys
+loop = open(sys.argv[1], encoding="utf-8").read()
+fac = open(sys.argv[2], encoding="utf-8").read()
+names = ["maxSteps: Int", "maxParallelTools: Int", "providerRetry: Int",
+         "maxHistoryMessages: Int", "consent: Consent", "llmCallTimeoutMs: Long",
+         "turnBudgetMs: Long"]
+def rhs(src, name):
+    m = re.search(re.escape(name) + r"\s*=\s*([^,\n]+)", src)
+    return m.group(1).strip() if m else "<未找到>"
+bad = []
+for n in names:
+    a, b = rhs(loop, n), rhs(fac, n)
+    if a != b or not a.startswith("LoopDefaults."):
+        bad.append("{}（loop={} / 工厂={}）".format(n, a, b))
+print("; ".join(bad))
+PY
+)
+if [ -z "$DRIFT" ]; then
+  pass "F2 七个默认值两处逐字相同且都指向 LoopDefaults"
+else
+  fail "F2 默认值漂移：$DRIFT —— 改一处不改另一处，真机上会莫名截断或永不重试"
+fi
+
+# 有状态的实例不许进 LoopDefaults：共享一份会让两个 loop 的「已上屏字符数」互相污染。
+# 只看**代码行**：KDoc 里必须能写出「为什么它不该进来」，那几行注释不算违规。
+STATE_HIT=$(grep -n 'AttemptOutputTracker' "$DEFAULTS" 2>/dev/null \
+  | grep -vE '^[0-9]+:[[:space:]]*(\*|//|/\*)' || true)
+if [ -n "$STATE_HIT" ]; then
+  fail "F3 LoopDefaults 里出现了有状态实例（AttemptOutputTracker）——必须每次 new"
+else
+  pass "F3 有状态默认值没被抽走（AttemptOutputTracker 仍每处 new）"
+fi
+
+# 默认审批值也只能有一份：别处再写一次 Consent.unset("RealAgentLoop")，
+# 改语义时就会漏掉一处，表现为「某个入口突然开始拒一切工具」。
+N_CONSENT=$(grep -rn 'Consent\.unset("RealAgentLoop")' core/src/main/java --include="*.kt" 2>/dev/null | grep -vc 'LoopDefaults.kt' || true)
+if [ "${N_CONSENT:-0}" -eq 0 ]; then
+  pass "F4 默认审批值只由 LoopDefaults 提供"
+else
+  fail "F4 还有 ${N_CONSENT} 处硬写默认审批值 —— 改语义会漏"
+fi
+
+echo ""
 echo "$p 通过 / $f 失败 / $pending 待收口"
 [ "$f" -eq 0 ] || exit 1
