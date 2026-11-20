@@ -401,12 +401,16 @@ private fun testFileAttachment() {
     val vm = readSource("ui/ChatViewModel.kt")
     val chat = readSource("ui/ChatScreen.kt")
 
+    // 3.1 第五批：六个零逻辑契约（含 PendingFile / FileAttachResult）搬到了 ui/ChatUiTypes.kt。
+    // 断言跟着搬读点，理由同下面 F23–F27：守的是「类型齐备」而不是「类型写在哪个文件」。
+    val uiTypes = readSource("ui/ChatUiTypes.kt")
+
     check("N1 文件附件类型与结果类型齐备（三成功路径 + 一失败路径）") {
-        assertContains("N1", vm, "data class PendingFile(val name: String, val text: String)")
-        assertContains("N1", vm, "sealed interface FileAttachResult")
-        assertContains("N1", vm, "data class Text(val name: String, val chars: Int)")
-        assertContains("N1", vm, "data class Images(val name: String, val pages: Int)")
-        assertContains("N1", vm, "data class Failed(val reason: String)")
+        assertContains("N1", uiTypes, "data class PendingFile(val name: String, val text: String)")
+        assertContains("N1", uiTypes, "sealed interface FileAttachResult")
+        assertContains("N1", uiTypes, "data class Text(val name: String, val chars: Int)")
+        assertContains("N1", uiTypes, "data class Images(val name: String, val pages: Int)")
+        assertContains("N1", uiTypes, "data class Failed(val reason: String)")
     }
     // F23–F27：附件的 URI→对象 逻辑已抽到 ui/AttachmentIo.kt（架构守卫的行数冻结所迫），
     // 结构断言跟着搬到新文件读，否则守的是「代码在哪个文件」而不是「行为在不在」。
