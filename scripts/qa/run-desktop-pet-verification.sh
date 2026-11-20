@@ -185,7 +185,12 @@ say ""
 say "[D] 工具边界（无审批 ⇒ 只能只读）"
 
 allowed="CalculatorTool WebSearchTool ReadFileTool MemorySearchTool ConfirmRequiredTool"
-registered=$(grep -oE 'register\([A-Za-z]+Tool\(' "$SESSION" | sed 's/register(//; s/($//' | sort -u)
+# 3.1 第六批：桌宠的工具表装配搬进 tools/ToolAssembler 的 pet 分支。
+# 断言读那一段而不是读 PetAgentSession——守的是「桌宠拿到了哪些工具」，
+# 不是「register 这一行写在哪个文件」。
+ASM=app/src/main/java/com/beichen/polaris/tools/ToolAssembler.kt
+pet_body=$(awk '/fun pet\(/,/fun attachSkillTools\(/' "$ASM")
+registered=$(printf '%s' "$pet_body" | grep -oE 'register\([A-Za-z]+Tool\(' | sed 's/register(//; s/($//' | sort -u)
 if [ -z "$registered" ]; then
   bad "D1 没解析到任何 register(...) —— 桌宠拿不到任何工具"
 else

@@ -18,7 +18,10 @@ APPROVAL="$APP/pet/PetApproval.kt"
 PET="$APP/pet/PetAgentSession.kt"
 OVERLAY="$APP/pet/PetOverlay.kt"
 PANEL="$APP/pet/PetPanel.kt"
-WRAP="$APP/pet/ConfirmRequiredTool.kt"
+# 3.1 第六批：ConfirmRequiredTool 从 pet/ 迁到 tools/（它是对任意工具的通用装饰，
+# 放在 pet 会让装配器反向依赖界面入口）。
+WRAP="$APP/tools/ConfirmRequiredTool.kt"
+ASM="$APP/tools/ToolAssembler.kt"
 
 p=0; f=0
 pass() { echo "  PASS  $*"; p=$((p + 1)); }
@@ -45,7 +48,9 @@ echo "[A] 接线：卡片有人画、气泡会自动弹开、销毁会解除等�
 
 # 有副作用的工具必须经确认才能进桌宠的工具表。直接 register(AppLaunchTool(...))
 # 等于给桌宠开了一条免确认的写路径。
-if code_has "$PET" "ConfirmRequiredTool(AppLaunchTool"; then
+# 注册点随装配收口搬进了 tools/ToolAssembler 的 pet 分支（3.1 第六批）。
+# 守的是「app_launch 这个写工具进桌宠时必须带确认」，不是「这一行写在哪个文件」。
+if code_has "$ASM" "ConfirmRequiredTool(AppLaunchTool"; then
   pass "A2 桌宠的 app_launch 包了 ConfirmRequiredTool（不是直接注册）"
 else
   fail "A2 桌宠直接注册了写工具 —— 它有副作用却不问用户"

@@ -11,8 +11,8 @@
 # 三入口 loop 收口（P1 第三轮）已把 C1 / B4 / D1a 收成 PASS 硬断言；
 # 执行权收口（P1 第四轮）新增 [E] 段——构造点收拢之后，回合必须真的向 runtime
 # 登记（acquireTurn / close）、事件必须按代次过滤，否则队列层只是库里的死代码。
-# 当前唯一 PENDING 仍是 D1b（ui/pet 仍 import ToolRegistry），要等 ToolAssembler
-# （工具装配收口，v4 §3.3）落地后才关。
+# 工具装配收口（P1 第六轮）把 D1b 也收成硬断言：ui / pet 不再 import ToolRegistry，
+# 装配清单搬进 tools/ToolAssembler。四条不变量至此全部 PASS，无 PENDING。
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -127,10 +127,10 @@ fi
 echo ""
 echo "[D] 不变量 2：ui / pet / entry 不 import RealAgentLoop / ToolRegistry"
 
-# 拆成两半，因为收口是分两步的：
-#   D1a（RealAgentLoop）随 loop 构造收口本轮关闭——ui/pet 已改走 AgentLoopFactory；
-#   D1b（ToolRegistry）要等 ToolAssembler（工具装配收口，v4 §3.3）才关——ui 层仍要
-#   持有 registry 字段去 register 工具。所以 D1a 是硬断言、D1b 是 PENDING。
+# 两半都已收成硬断言：
+#   D1a（RealAgentLoop）随 loop 构造收口（P1 第三轮）关闭，ui/pet 改走 AgentLoopFactory；
+#   D1b（ToolRegistry）随工具装配收口（P1 第六轮）关闭，52 个 register 搬进
+#   tools/ToolAssembler，ui/pet 只剩「持有」不再「决定」。
 bad_loop_imports=""
 bad_registry_imports=""
 for src in "$VM" "$PET"; do
@@ -147,9 +147,9 @@ else
   fail "D1a 仍 import RealAgentLoop：$bad_loop_imports"
 fi
 if [ -z "$bad_registry_imports" ]; then
-  pass "D1b ui/pet 不再 import ToolRegistry（工具装配已收口）"
+  pass "D1b ui/pet 不再 import ToolRegistry（装配清单在 tools/ToolAssembler）"
 else
-  pend "D1b 仍 import ToolRegistry：$bad_registry_imports（待 ToolAssembler，v4 §3.3）"
+  fail "D1b 仍 import ToolRegistry：$bad_registry_imports——工具集重新由界面层决定"
 fi
 
 echo ""

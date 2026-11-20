@@ -208,6 +208,57 @@ else
 fi
 
 say ""
+say "[H] 工具装配单点：清单只在 ToolAssembler，能力边界可对照"
+
+ASM="app/src/main/java/com/beichen/polaris/tools/ToolAssembler.kt"
+
+# H1 装配知识不许回到界面层。原来 ui 里有 52 个内联 register(...)，pet 里另有一份 5 个的
+# 迷你版——「能不能让模型用某个能力」实际由这两个界面文件决定。收口后判据很硬：
+# ui/ 与 pet/ 目录下一个 register( 都不该有。MCP 的动态注册走 ToolRegistry 自己的 API，
+# 不在这些目录里。
+leak=$(grep -rl 'register(' app/src/main/java/com/beichen/polaris/ui app/src/main/java/com/beichen/polaris/pet 2>/dev/null || true)
+if [ -z "$leak" ]; then
+  good "[H] ui / pet 目录内零 register(——装配清单不再由界面层决定"
+else
+  bad "[H] 界面层又出现 register(：$leak——工具集重新变成「界面文件决定」"
+fi
+
+# H2 工具数只增不减。装配搬家的典型事故不是编译错，而是**搬漏一行**：少注册一个
+# read_file，模型就会说「我没有读取文件的能力」，而代码、日志、测试全绿。
+# 52 是 2026-11-20 的实际条目数；只允许往上。
+n_main=$(awk '/fun assemble[(]/,/fun pet[(]/' "$ASM" | grep -cE '^[[:space:]]*register[(]')
+if [ "$n_main" -ge 52 ]; then
+  good "[H] 主装配 $n_main 个 register 条目（下限 52，只增不减）"
+else
+  bad "[H] 主装配只有 $n_main 个 register 条目（下限 52）——搬移时漏了工具，模型会静默失去能力"
+fi
+
+# H3 桌宠的能力边界。复用的是「图省事让桌宠直接调 assemble()」这条错路：
+# 那会给悬浮球 52 个工具（含 shell、写文件、装应用）。它没有界面让人确认，
+# 用户说完就走——这条边界一旦破了，表现只是「桌宠偶尔会自己干点什么」。
+pet_body=$(awk '/fun pet[(]/,/fun attachSkillTools[(]/' "$ASM")
+if printf '%s' "$pet_body" | grep -qE 'WriteFileTool|EditFileTool|ShellRunTool|ShellBackgroundTool|AppInstallTool'; then
+  bad "[H] 桌宠装配里出现写文件 / shell / 装应用——悬浮球没有确认界面，这条边界不能靠自觉"
+else
+  good "[H] 桌宠只拿只读工具 + 一个带确认的 app_launch"
+fi
+
+# H4 装配器不得反向依赖界面层：它要能被任何入口（含无 UI 的后台服务）调用。
+if grep -qE '^import com[.]beichen[.]polaris[.](ui|pet)[.]' "$ASM"; then
+  bad "[H] ToolAssembler 反向 import 了 ui / pet——装配器不再是入口无关的"
+else
+  good "[H] 装配器不依赖 ui / pet（任何入口都能用）"
+fi
+
+# H5 会变的依赖必须是函数。activeConversationId 若被写成快照字符串，todo 工具会永远
+# 写进「启动时那个会话」——不报错，用户只看到待办莫名跑到别的对话里。
+if grep -q 'val activeConversationId: () -> String?' "$ASM" && grep -q 'val planModeEnabled: () -> Boolean' "$ASM"; then
+  good "[H] 运行期会变的依赖（会话 id / 计划模式）是函数，不是快照"
+else
+  bad "[H] 会话 id / 计划模式变成了快照——todo 会写错会话且无任何报错"
+fi
+
+say ""
 if [ "$fail" -eq 0 ]; then
   echo "架构守卫：$npass 通过 / 0 失败"
   echo "FAIL=0"

@@ -15,6 +15,10 @@ cd "$(dirname "$0")/../.." || exit 1
 INDEX="core/src/main/java/com/beichen/polaris/core/knowledge/KnowledgeIndex.kt"
 TOOL="app/src/main/java/com/beichen/polaris/tools/KnowledgeSearchTool.kt"
 VM="app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt"
+# 3.1 第六批把工具装配搬进了 tools/ToolAssembler：注册点与目录常量都在那儿。
+# 断言读装配器而不是 ViewModel —— 守的是「这个工具被注册、目录固定」，
+# 不是「注册这一行写在哪个文件」。
+ASM="app/src/main/java/com/beichen/polaris/tools/ToolAssembler.kt"
 CATALOG="core/src/main/java/com/beichen/polaris/core/tool/ToolCatalog.kt"
 
 PASS=0
@@ -28,8 +32,8 @@ echo "== 静态：结构与接线 =="
 
 has "纯函数层存在" "$INDEX" "object KnowledgeIndex"
 hasnt "纯函数层无 Android 导入" "$INDEX" "import android."
-has "工具注册进会话" "$VM" "register(KnowledgeSearchTool("
-has "知识库目录固定 files/knowledge" "$VM" "java.io.File(app.filesDir, \"knowledge\")"
+has "工具注册进会话" "$ASM" "register(KnowledgeSearchTool("
+has "知识库目录固定 files/knowledge" "$ASM" "File(deps.app.filesDir, \"knowledge\")"
 has "工具声明只读（可并行）" "$TOOL" "override val readOnly = true"
 has "空库给出可执行指引" "$TOOL" "no_docs"
 has "与对话检索划清分工" "$TOOL" "conversation_search"

@@ -19,19 +19,8 @@ import com.beichen.polaris.automation.adb.AdbBackendProvider
 import com.beichen.polaris.automation.shizuku.ShizukuBackendProvider
 import com.beichen.polaris.automation.AutomationBridge
 import com.beichen.polaris.automation.AutomationPrefs
-import com.beichen.polaris.automation.DeviceForegroundAppTool
 import com.beichen.polaris.automation.DeviceContext
 import com.beichen.polaris.automation.DeviceContextStore
-import com.beichen.polaris.automation.DeviceNotificationsTool
-import com.beichen.polaris.automation.UiClickTool
-import com.beichen.polaris.automation.UiInputTool
-import com.beichen.polaris.automation.UiKeyTool
-import com.beichen.polaris.automation.UiLongPressTool
-import com.beichen.polaris.automation.OcrTool
-import com.beichen.polaris.automation.UiScreenshotTool
-import com.beichen.polaris.automation.UiSwipeTool
-import com.beichen.polaris.automation.UiTapTool
-import com.beichen.polaris.automation.UiTreeTool
 import com.beichen.polaris.core.runtime.AgentLoopFactory
 import com.beichen.polaris.core.runtime.AgentRuntime
 import com.beichen.polaris.core.runtime.RunSource
@@ -46,17 +35,12 @@ import com.beichen.polaris.core.ConfigSanitizer
 import com.beichen.polaris.core.ConfigStore
 import com.beichen.polaris.core.CompletionNotifier
 import com.beichen.polaris.core.Consent
-import com.beichen.polaris.core.BackupArchive
-import com.beichen.polaris.core.BackupManifest
-import com.beichen.polaris.core.ConfigBackup
 import com.beichen.polaris.core.ConversationRecord
 import com.beichen.polaris.core.DraftStore
 import com.beichen.polaris.core.PromptDeleteResult
 import com.beichen.polaris.core.llm.ProviderCatalog
 import com.beichen.polaris.core.llm.objOrNull
 import com.beichen.polaris.core.llm.primOrNull
-import com.beichen.polaris.core.llm.diagnoseException
-import com.beichen.polaris.core.llm.diagnoseHttpFailure
 import com.beichen.polaris.core.PromptItem
 import com.beichen.polaris.core.PromptStore
 import com.beichen.polaris.core.PromptUpsertResult
@@ -80,20 +64,15 @@ import com.beichen.polaris.core.ToolCall
 import com.beichen.polaris.core.UiItem
 import com.beichen.polaris.core.ToolMessage
 import com.beichen.polaris.core.ToolApproval
-import com.beichen.polaris.core.ToolRegistry
 import com.beichen.polaris.core.TokenUsage
 import com.beichen.polaris.core.UserMessage
 import com.beichen.polaris.core.toMsgRecord
 import com.beichen.polaris.core.toUiItems
-import com.beichen.polaris.core.llm.local.AndroidDeviceProbe
 import com.beichen.polaris.core.llm.local.DownloadedModel
 import com.beichen.polaris.core.llm.local.GgufCatalogEntry
 import com.beichen.polaris.core.llm.local.GgufModelStore
 import com.beichen.polaris.core.llm.local.GpuMode
-import com.beichen.polaris.core.llm.local.LlamaJni
-import com.beichen.polaris.core.llm.local.LocalDeviceRules
 import com.beichen.polaris.runtime.wrapLocalLlm
-import com.beichen.polaris.runtime.lease.LeaseRegistry
 import com.beichen.polaris.runtime.lease.TerminalLeases
 import com.beichen.polaris.core.llm.local.LocalLlamaClient
 import com.beichen.polaris.core.llm.local.LocalLlamaEngine
@@ -107,25 +86,11 @@ import com.beichen.polaris.skill.SkillLoader
 import com.beichen.polaris.skill.ImportedSkillRepository
 import com.beichen.polaris.skill.SkillManifest
 import com.beichen.polaris.skill.SkillPackage
-import com.beichen.polaris.skill.createUseSkillTool
-import com.beichen.polaris.tools.AppInstallTool
-import com.beichen.polaris.tools.AppUninstallTool
-import com.beichen.polaris.tools.ContainerToolchainTool
 import com.beichen.polaris.core.job.JobNotifier
 import com.beichen.polaris.core.job.JobRunner
 import com.beichen.polaris.core.job.JobStore
-import com.beichen.polaris.tools.ShellBackgroundTool
-import com.beichen.polaris.tools.ShellJobsTool
-import com.beichen.polaris.tools.GitHubCloneTool
-import com.beichen.polaris.tools.GitHubCommitTool
-import com.beichen.polaris.tools.GitHubDiffTool
-import com.beichen.polaris.tools.GitHubLogTool
-import com.beichen.polaris.tools.GitHubStatusTool
 import com.beichen.polaris.tools.LoadSkillLogic
-import com.beichen.polaris.tools.LoadSkillTool
 import java.io.IOException
-import java.util.concurrent.TimeUnit
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import com.beichen.polaris.skill.CapabilityRegistry
 import com.beichen.polaris.skill.policyFor
@@ -141,10 +106,6 @@ import com.beichen.polaris.core.voice.InterruptPolicy
 import com.beichen.polaris.core.voice.RequestSource
 import com.beichen.polaris.memory.MemoryAutoCapture
 import com.beichen.polaris.memory.MemoryStore
-import com.beichen.polaris.memory.MemoryForgetTool
-import com.beichen.polaris.memory.MemoryListTool
-import com.beichen.polaris.memory.MemorySearchTool
-import com.beichen.polaris.memory.MemoryWriteTool
 import com.beichen.polaris.core.container.RootfsManager
 import com.beichen.polaris.core.capability.Capability
 import com.beichen.polaris.core.capability.CapabilityResolution
@@ -165,14 +126,11 @@ import com.beichen.polaris.core.agent.EgressGuard
 import com.beichen.polaris.core.agent.productionSeams
 import com.beichen.polaris.core.agent.awaitApprovalDecision
 import com.beichen.polaris.core.agent.PlanBroker
-import com.beichen.polaris.tools.SubAgentTool
-import com.beichen.polaris.core.agent.SubAgentRunner
 import com.beichen.polaris.core.agent.TitleLogic
 import com.beichen.polaris.core.agent.journal.RunJournal
 import com.beichen.polaris.core.agent.journal.TurnJournal
 import com.beichen.polaris.core.text.MentionLogic
 import com.beichen.polaris.core.text.TranslateLogic
-import com.beichen.polaris.core.workspace.FileBackupStore
 import com.beichen.polaris.core.workspace.FileBackupStoreFactory
 import com.beichen.polaris.core.workspace.WorkspacePaths
 import com.beichen.polaris.core.workspace.WorkspaceStore
@@ -180,30 +138,9 @@ import com.beichen.polaris.core.agent.TodoStore
 import com.beichen.polaris.core.mcp.ClientMcpToolLoader
 import com.beichen.polaris.core.mcp.McpServerStore
 import com.beichen.polaris.core.mcp.McpToolBinder
-import com.beichen.polaris.tools.AskUserTool
-import com.beichen.polaris.tools.PlanTool
-import com.beichen.polaris.tools.CalculatorTool
-import com.beichen.polaris.tools.ConversationSearchTool
-import com.beichen.polaris.tools.KnowledgeSearchTool
-import com.beichen.polaris.tools.EditFileTool
-import com.beichen.polaris.tools.WriteBackupHook
-import com.beichen.polaris.tools.SpeakTool
-import com.beichen.polaris.tools.WorkflowCreateTool
-import com.beichen.polaris.tools.WorkflowDeleteTool
-import com.beichen.polaris.tools.WorkflowListTool
-import com.beichen.polaris.tools.WorkflowToggleTool
 import com.beichen.polaris.workflow.Workflow
 import com.beichen.polaris.workflow.WorkflowScheduler
 import com.beichen.polaris.workflow.WorkflowStore
-import com.beichen.polaris.tools.WebClickTool
-import com.beichen.polaris.tools.WebEvalTool
-import com.beichen.polaris.tools.WebOpenTool
-import com.beichen.polaris.tools.WebSearchTool
-import com.beichen.polaris.tools.WebSnapshotTool
-import com.beichen.polaris.tools.WebTypeTool
-import com.beichen.polaris.tools.PrivilegedShellOut
-import com.beichen.polaris.tools.TodoReadTool
-import com.beichen.polaris.tools.TodoWriteTool
 import com.beichen.polaris.core.capability.shellCapabilitySnapshot
 import com.beichen.polaris.automation.screenCapabilitySnapshot
 import com.beichen.polaris.core.terminal.TerminalSessionPool
@@ -214,15 +151,8 @@ import com.beichen.polaris.core.terminal.backend.SshProfile
 import com.beichen.polaris.core.terminal.backend.SshProfileResult
 import com.beichen.polaris.core.terminal.backend.normalizeSshProfile
 import com.beichen.polaris.core.terminal.backend.createTerminalBackendFactory
-import com.beichen.polaris.tools.ClipboardTool
-import com.beichen.polaris.tools.HttpRequestTool
-import com.beichen.polaris.tools.NotificationTool
-import com.beichen.polaris.tools.ReadFileTool
-import com.beichen.polaris.tools.ShellCloseTool
-import com.beichen.polaris.tools.ShellRunTool
-import com.beichen.polaris.tools.WriteFileTool
-import com.beichen.polaris.tools.registerAppControlTools
-import com.beichen.polaris.tools.terminalShellCommandRunner
+import com.beichen.polaris.tools.ToolAssembler
+import com.beichen.polaris.tools.ToolDeps
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
@@ -236,11 +166,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Dispatchers
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -819,124 +747,41 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private val _translatingIndex = MutableStateFlow<Int?>(null)
     override val translatingIndex: StateFlow<Int?> = _translatingIndex.asStateFlow()
 
-    private val registry = ToolRegistry(startup.toolProfiler).apply {
-        startup.mark("preRegistry") // 口径：ToolRegistry() 构造极轻，重的是下面 45 个 register
-        register(HttpRequestTool())
-        register(ReadFileTool(workspace))
-        register(WriteFileTool(workspace, WriteBackupHook { fileBackupStore.backupBeforeWrite(it) }))
-        // W-20：精确编辑（局部替换，不整文件覆写）+ 网页搜索（实时信息入口）
-        register(EditFileTool(workspace, WriteBackupHook { fileBackupStore.backupBeforeWrite(it) }))
-        register(WebSearchTool())
-        register(ClipboardTool(app))
-        register(NotificationTool(app))
-        // 手机自动化工具组（受总开关 + 无障碍服务连接双重保护）
-        register(UiTreeTool())
-        register(UiTapTool())
-        register(UiLongPressTool())
-        register(UiSwipeTool())
-        register(UiInputTool())
-        register(UiKeyTool())
-        register(UiClickTool())
-        // 截图（无障碍）：喂给视觉模型“看”屏幕
-        register(UiScreenshotTool(workspace))
-        // 设备感知（L3）：通知监听 + 当前前台应用
-        register(DeviceNotificationsTool())
-        register(DeviceForegroundAppTool(app))
-        // 记忆库（L9）：让 Agent 拥有跨会话长期记忆
-        register(MemoryWriteTool(memoryStore))
-        register(MemorySearchTool(memoryStore))
-        register(MemoryListTool(memoryStore))
-        register(MemoryForgetTool(memoryStore))
-        // W-16：系统 TTS 朗读（经仲裁器：用户说话时模型不能插播）
-        register(SpeakTool(voiceArbiter))
-        // W-18：会话检索 + 计算器
-        register(ConversationSearchTool(conversationStore))
-        // W-RT6：本地知识库检索。目录固定 files/knowledge/，用户把 .txt/.md 放进去即可；
-        // 没有独立导入界面——Agent 本身有文件能力，「把这份资料加进知识库」就是一句工具调用。
-        register(KnowledgeSearchTool(java.io.File(app.filesDir, "knowledge")))
-        register(CalculatorTool())
-        // W-17：定时任务（模型可自建/查询/删除/开关）
-        register(WorkflowCreateTool(workflowStore) { refreshWorkflows() })
-        register(WorkflowListTool(workflowStore))
-        register(WorkflowDeleteTool(workflowStore) { refreshWorkflows() })
-        register(WorkflowToggleTool(workflowStore) { refreshWorkflows() })
-        // 终端 shell（T08）：会话池 + 短句柄；shell_run 执行命令、shell_close 释放会话
-        register(
-            ShellRunTool(
-                pool = terminalPool,
-                leases = terminalLeases,
-                privilegedExec = { cmd ->
-                    // W-37：优先 UserService（shell 进程内起本地进程，waitFor 语义正常，进程常驻）；
-                    // 不可用时回落 W-36 的 newProcess 轮询通道；两者都不可用才回落本机 user shell。
-                    val r = ShizukuShell.execViaUserService(cmd) ?: ShizukuShell.exec(cmd)
-                    // 未运行/未授权（通道压根没起来）→ null 让上层回落本机 user shell。
-                    // 其余启动失败（newProcess 抛异常等）必须如实上抛，不能伪装成超时。
-                    if (r.startError != null && r.startError.contains("未运行或未授权")) {
-                        permissionFacade.reprobeShizukuStatus()
-                        null
-                    } else {
-                        PrivilegedShellOut(
-                            exitCode = r.exitCode,
-                            stdout = r.stdout,
-                            stderr = r.stderr,
-                            timedOut = r.timedOut,
-                            startError = r.startError,
-                            elapsedMs = r.elapsedMs
-                        )
-                    }
-                }
-            )
+
+    /**
+     * 工具表。**装配清单不在这里**——52 个工具与它们的依赖面全在 [ToolAssembler]，
+     * 这里只提供依赖并持有结果（3.1 第六批，v4 §3.3）。
+     *
+     * 为什么依赖要一个个具名传：这张表的每一项都指向宿主**已有的那个对象**
+     * （记忆库、会话库、终端池、审批回调）。装配器要是自己 new 一份，主界面与桌宠
+     * 就会各有一份记忆库，两边写入互相看不见——没有报错，只有「它怎么忘了我刚说的」。
+     *
+     * 函数型的几项（`activeConversationId` / `onWorkflowsChanged` / `planModeEnabled` /
+     * `llmProvider` / `approval`）必须是 lambda：它们在运行期会变，快照下来就是错的。
+     */
+    private val registry = ToolAssembler.assemble(
+        ToolDeps(
+            app = app,
+            startup = startup,
+            workspace = workspace,
+            fileBackupStore = fileBackupStore,
+            memoryStore = memoryStore,
+            voiceArbiter = voiceArbiter,
+            conversationStore = conversationStore,
+            workflowStore = workflowStore,
+            onWorkflowsChanged = { refreshWorkflows() },
+            terminalPool = terminalPool,
+            terminalLeases = terminalLeases,
+            onPrivilegedChannelLost = { permissionFacade.reprobeShizukuStatus() },
+            planModeEnabled = { settingsFacade.planMode.value },
+            todoStore = todoStore,
+            activeConversationId = { _activeConversationId.value },
+            llmProvider = { buildMainClient() },
+            approval = { approvalHandler },
+            jobStore = jobStore,
+            jobRunner = jobRunner,
         )
-        register(ShellCloseTool(terminalPool))
-        // W-15：浏览器五件套（真实 WebView，保留登录态、能点能填）
-        register(WebOpenTool())
-        register(WebSnapshotTool())
-        register(WebClickTool())
-        register(WebTypeTool())
-        register(WebEvalTool())
-        // W-14：结构化追问 + 任务清单
-        register(AskUserTool())
-        // W-25：先计划后执行——提交多步计划并等待用户批准
-        register(PlanTool(broker = PlanBroker, planModeEnabled = { settingsFacade.planMode.value }))
-        register(TodoWriteTool(todoStore) { _activeConversationId.value })
-        register(TodoReadTool(todoStore) { _activeConversationId.value })
-        // 应用操控（Phase 1 补口）：列出/启动/停止任意已安装应用——「叫它打开快手就能打开」。
-        // app_launch 走 Intent（零权限）；app_stop 接**真实 shell 通道**（会话池适配，见下），
-        // 通道不可用（池无可用后端）时仍走「诚实降级为需用户手动停止」，绝不静默假装成功。
-        // apply 内传 this（不能传 registry 自身，会触发类型推断递归）
-        registerAppControlTools(this, app, terminalShellCommandRunner(terminalPool))
-        // W-24：离线 OCR（截图/读图 → 文字，任何模型都能读）+ 软件安装/卸载
-        register(OcrTool(workspace))
-        register(AppInstallTool(app, workspace))
-        register(AppUninstallTool(app, terminalShellCommandRunner(terminalPool)))
-        // W-31：并行子代理——只读工具 + 独立上下文，只把结论带回主对话。
-        // baseRegistry 传当前表（apply 内 this）：子代理表由白名单过滤，spawn_agents 自身被排除（防递归）。
-        register(
-            SubAgentTool(
-                SubAgentRunner(
-                    llmProvider = { buildMainClient() },
-                    baseRegistry = { this },
-                    // R4 + P1-3：同意策略穿子代理边界。用 lambda 间接引用而不是直接传值：
-                    // registry 的初始化早于 approvalHandler，直接取值会捕到 null；lambda 在真正弹窗时才读。
-                    consent = Consent.ask { tool, args -> approvalHandler(tool, args) }
-                )
-            )
-        )
-        // W-32：GitHub 提交三件套——「改完能提交」闭环（复用「构建」页的仓库与 PAT）
-        register(GitHubStatusTool(app))
-        register(GitHubCommitTool(app))
-        register(GitHubLogTool(app))
-        // W-34：行级 diff——提交前确认到底改了哪几行
-        register(GitHubDiffTool(app))
-        // W-35：整仓克隆到工作区子目录（codeload zip，走镜像回退）
-        register(GitHubCloneTool(app))
-        // W-33：后台命令——长命令不再阻塞整轮，跑完发通知
-        register(ShellBackgroundTool(app, jobRunner))
-        register(ShellJobsTool(jobStore, jobRunner))
-        // B 批：容器运行时管理——让 Agent 自己把容器变成能跑 node/python/java 的环境
-        register(ContainerToolchainTool(app))
-        startup.mark("registry") // 工具注册表整段（40+ 工具实例化）：最可能随工具数线性增长的段
-    }
+    )
 
     /** R-07：MCP 工具同步器（可回卷）。必须声明在 [registry] 之后：属性按声明序初始化。 */
     private val mcpBinder = McpToolBinder(
@@ -972,22 +817,17 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             runStateReady.complete(interrupted)
             runCatching { recoverInterruptedJournal() }
         }
-        if (skillsSnapshot.isNotEmpty()) {
-            // use_skill 工具的 systemPrompt 会被 AgentLoop 自动拼进系统提示（利用工具自带提示特性）
-            // 用 skillsProvider 动态感知导入/卸载/授权的技能变化
-            registry.register(createUseSkillTool({ skillsSnapshot }, skillExecutor))
-        }
-        // W-23：load_skill——模型可自己安装/卸载技能包（装完热生效，立刻能用 use_skill）
-        registry.register(
-            LoadSkillTool(
-                download = { url -> downloadSkillZip(url) },
-                install = { bytes -> importRepo.installZip(bytes) },
-                uninstall = { id -> importRepo.uninstall(id) },
-                installedSkills = {
-                    skillsSnapshot.filter { it.id in importedIds }.map { it.id to it.name }
-                },
-                onChanged = { reloadSkills() }
-            )
+        // 技能工具是第二阶段装配：SkillExecutor 构造时要一张**已建好**的工具表
+        // （技能脚本通过它调工具），所以不可能和 52 个内建工具一起注册。
+        ToolAssembler.attachSkillTools(
+            registry,
+            skills = { skillsSnapshot },
+            executor = skillExecutor,
+            download = { url -> downloadSkillZip(url) },
+            install = { bytes -> importRepo.installZip(bytes) },
+            uninstall = { id -> importRepo.uninstall(id) },
+            importedIds = { importedIds },
+            onChanged = { reloadSkills() },
         )
         // 同步总开关到桥；并把服务连接变化回写到 UI 状态流
         AutomationBridge.enabled = automationPrefs.enabled
@@ -996,7 +836,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             refreshCapabilityPlans() // 无障碍连接变化 → 能力就绪度随之刷新
         }
         // W-17：注册周期巡检（读磁盘，跟着对账一起下沉）。
-        // 列表载入**不能**放这里：本 init 块在类体第 971 行，早于第 1331 行的 workflowFacade，
+        // 列表载入**不能**放这里：本 init 块在类体前部，早于 workflowFacade 的声明，
         // 慢设备上 IO 协程先于属性初始化抢到 CPU 就会读到未初始化的 facade（2026-11-09 模拟器复现 NPE）。
         // 它挪到类体末尾的 init 块里，那里所有字段已就绪。
         viewModelScope.launch(Dispatchers.IO) {
@@ -3397,8 +3237,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     /**
      * W-17 列表载入。**必须留在类体最末**：Kotlin 按书写顺序执行属性初始化器与 init 块，
-     * 而 [refreshWorkflows] 依赖第 1331 行才初始化的 [workflowFacade]。放在上面第 971 行的
-     * init 块里时，慢设备上 IO 协程会先于属性初始化执行，直接 NPE（2026-11-09 模拟器复现）。
+     * 而 [refreshWorkflows] 依赖晚于本块才初始化的 [workflowFacade]。放回前面那个 init 块里，
+     * 慢设备上 IO 协程会先于属性初始化执行，直接 NPE（2026-11-09 模拟器复现）。
      */
     init {
         viewModelScope.launch(Dispatchers.IO) { runCatching { refreshWorkflows() } }

@@ -164,7 +164,11 @@
 #      提为同包 top-level（401 气泡与卡片共用一个口径）。
 # 剩 3413 行，仍是上限的 2.3 倍：下一批该拆工具装配（Assembly，253 行）与 send 之外的
 # 会话编辑簇，目标先压到 3000 以下。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3413
+# 2026-11-20 **再次下调**（3413 → 3253，第六批：工具装配收口）：
+# 52 个内联 register(...) 与整段依赖接线搬进 tools/ToolAssembler（295 行，含 ToolDeps
+# 与桌宠/技能两条支线）。这是这个文件里最后一片「整块搬走、且搬走不改行为」的区域。
+# 顺带清掉 72 个因搬移而失效的 import（工具类、备份、本地推理等，均已无人引用）。
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3253
 # 2026-11-14 重记（ChatScreen +45）：语音输入的能力预检与编排。
 # 增量分布：
 #   ① 能力预检：约 12 行（含 8 行注释）。系统识别页一旦弹出，用户就进入了一个

@@ -10,7 +10,6 @@ import com.beichen.polaris.core.LLMClient
 import com.beichen.polaris.core.LLMConfig
 import com.beichen.polaris.core.ProviderManager
 import com.beichen.polaris.core.SystemMessage
-import com.beichen.polaris.core.ToolRegistry
 import com.beichen.polaris.core.UserMessage
 import com.beichen.polaris.core.agent.EgressGuard
 import com.beichen.polaris.core.runtime.AgentLoopFactory
@@ -18,13 +17,9 @@ import com.beichen.polaris.core.runtime.RunSource
 import com.beichen.polaris.core.runtime.RuntimeSessions
 import com.beichen.polaris.core.agent.productionSeams
 import com.beichen.polaris.core.workspace.WorkspaceStore
-import com.beichen.polaris.memory.MemorySearchTool
-import com.beichen.polaris.memory.MemoryStore
 import com.beichen.polaris.skill.ModelConfig
-import com.beichen.polaris.tools.AppLaunchTool
-import com.beichen.polaris.tools.CalculatorTool
-import com.beichen.polaris.tools.ReadFileTool
-import com.beichen.polaris.tools.WebSearchTool
+import com.beichen.polaris.tools.ConfirmRequiredTool
+import com.beichen.polaris.tools.ToolAssembler
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -49,8 +44,9 @@ import java.util.Locale
  *
  * ## 工具集为什么这么小
  *
- * `ChatViewModel` 里有 45 个内联 `register(...)`，没有可复用的工厂。桌宠只接
- * **只读、无副作用**的四个工具：算数、联网搜索、读工作区、查记忆。
+ * 工具表的装配在 `tools/ToolAssembler`（3.1 第六批收口）：主界面那一路 52 个工具、
+ * 桌宠这一路 5 个，两套清单放在同一处，读的时候能直接对照，不用开两个文件。
+ * 桌宠只接 **只读、无副作用** 的四个工具：算数、联网搜索、读工作区、查记忆。
  *
  * 没有 `SpeakTool`：桌宠的「说」只有一个出口——[PetOverlayHost.speak]（每轮回答结束后
  * 朗读）。再挂一个 speak 工具，模型一旦主动调用，同一段话就会被念两遍。
@@ -130,24 +126,7 @@ class PetAgentSession(context: Context) {
      * 而 [PetAgentSession] 是在 `Service.onCreate` 里构造的——主线程。用户在设置页
      * 点「开启」的那一帧不该去做文件搬迁。
      */
-    private val registry by lazy {
-        ToolRegistry().apply {
-            register(CalculatorTool())
-            register(WebSearchTool())
-            register(ReadFileTool(WorkspaceStore.dir(appContext)))
-            register(MemorySearchTool(MemoryStore(File(appContext.filesDir, "memory"))))
-            // P1-3 第二阶段：桌宠的第一个写工具。
-            //
-            // 为什么是 app_launch 而不是写文件：桌宠的典型句子是「帮我打开微信」，
-            // 这是它作为悬浮球唯一无可替代的场景——用户说完就去看别的了。
-            // 写文件那种事用户不会在气泡里等，该回主界面。
-            //
-            // 包一层 [ConfirmRequiredTool] 而不是改 AppLaunchTool 本身：主界面的
-            // app_launch 一直是免确认的（用户就在屏幕前，划一下返回就行），
-            // 让全局跟着弹窗是一次没有论证过的行为扩大。
-            register(ConfirmRequiredTool(AppLaunchTool(appContext)))
-        }
-    }
+    private val registry by lazy { ToolAssembler.pet(appContext) }
 
     private val loop by lazy {
         AgentLoopFactory.create(

@@ -21,6 +21,8 @@ SKILL="$ROOT/core/src/main/java/com/beichen/polaris/skill/SkillExecutor.kt"
 APP=app/src/main/java/com/beichen/polaris
 VM="$APP/ui/ChatViewModel.kt"
 PET="$APP/pet/PetAgentSession.kt"
+# 工具装配（含子代理那一路的 Consent 接线）在 3.1 第六批搬进了 tools/ToolAssembler。
+ASM="$APP/tools/ToolAssembler.kt"
 
 p=0; f=0
 pass() { echo "  PASS  $*"; p=$((p + 1)); }
@@ -79,7 +81,12 @@ fi
 # 所以由这条门禁盯住真正需要判别力的四处。
 missing=""
 code_has "$VM" "consent = Consent.ask" || missing="$missing ChatViewModel(主loop)"
-[ "$(grep -c 'consent = Consent.ask' "$VM" 2>/dev/null || echo 0)" -ge 2 ] || missing="$missing ChatViewModel(子代理)"
+# 子代理那一路的 Consent 随工具装配收口搬进了 tools/ToolAssembler（3.1 第六批）。
+# 这里查的是「子代理有没有表态」，所以读**接线点**而不是读某个文件——装配器里那处
+# `deps.approval()` 与 ViewModel 里的 `{ approvalHandler }` 合起来才是完整语义，
+# 缺任何一半都会让子代理退到默认拒绝（或者更糟：捕到未初始化的 handler）。
+asm_consent=$(grep -c 'consent = Consent.ask' "$ASM" 2>/dev/null || echo 0)
+[ "${asm_consent:-0}" -ge 1 ] || missing="$missing ToolAssembler(子代理)"
 code_has "$PET" "consent = Consent.ask" || missing="$missing PetAgentSession"
 code_has "$SKILL" "consent = Consent.ask" || missing="$missing SkillExecutor"
 if [ -z "$missing" ]; then

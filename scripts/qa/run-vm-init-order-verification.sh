@@ -26,10 +26,14 @@ fail() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n' "$1"; }
 [ -f "$VM" ] || { echo "FATAL: 缺 $VM" >&2; exit 1; }
 
 DECL=$(grep -n "private val workflowFacade = WorkflowFacade(" "$VM" | head -1 | cut -d: -f1)
-# 取第一个「构造期会真的跑」的调用点，两类排除：
+# 取第一个「构造期会真的跑」的调用点，三类排除：
 #   `fun refreshWorkflows()` —— 委托实现本身，要等别人调；
-#   `register(XxxTool(...) { refreshWorkflows() })` —— lambda 回调，工具被调用时才跑。
-CALL=$(grep -n "refreshWorkflows()" "$VM" | grep -v "fun refreshWorkflows" | grep -v "register(" | head -1 | cut -d: -f1)
+#   `register(XxxTool(...) { refreshWorkflows() })` —— lambda 回调，工具被调用时才跑；
+#   `onWorkflowsChanged = { refreshWorkflows() }` —— 3.1 第六批随工具装配搬进 ToolDeps 的
+#     那个 lambda，同样是「被调用时才跑」。排除的是「整条右值就是一个 lambda」这一形态
+#     （`= { refreshWorkflows() }`），不是某个具体文件；`runCatching { ... }` 那种
+#     构造期真跑的不受影响，仍会被算成调用点。
+CALL=$(grep -n "refreshWorkflows()" "$VM" | grep -v "fun refreshWorkflows" | grep -v "register(" | grep -v "= { refreshWorkflows() }" | head -1 | cut -d: -f1)
 
 if [ -z "$DECL" ]; then
   fail "找不到 workflowFacade 声明（改名了？同步更新本脚本）"

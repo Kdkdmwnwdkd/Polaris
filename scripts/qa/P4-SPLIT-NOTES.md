@@ -17,8 +17,10 @@
 | 新增（3.1 第三批） | — | `SettingsFacade` 70 / `AppearanceFacade` 38 |
 | `ChatViewModel.kt`（3.1 第四批，2026-11-08） | 3527 行，仍混着权限探测 / 调试通道 / 能力就绪度 | 3439 行（守卫上限同步从 3527 降到 3439） |
 | 新增（3.1 第四批） | — | `PermissionFacade` 200 / `CapabilityReadiness` 39 |
-| `ChatViewModel.kt`（3.1 第五批，2026-11-20） | 3723 行（**已顶格**，加一行就红），仍混着数据契约 / 工具组开关 / 测试连接 | 3415 行（守卫上限同步从 3723 降到 3415） |
+| `ChatViewModel.kt`（3.1 第五批，2026-11-20） | 3723 行（**已顶格**，加一行就红），仍混着数据契约 / 工具组开关 / 测试连接 | 3413 行（守卫上限同步从 3723 降到 3413） |
 | 新增（3.1 第五批） | — | `ChatUiTypes` 103 / `ToolGroupsFacade` 166 / `ConnectionProbe` 169 |
+| `ChatViewModel.kt`（3.1 第六批，2026-11-20） | 3413 行，工具装配仍内联（52 个 `register(...)` + 20 项依赖接线），桌宠另写一份 5 个的迷你版 | 3253 行（守卫上限同步从 3413 降到 3253） |
+| 新增（3.1 第六批） | — | `tools/ToolAssembler` 295（含 `ToolDeps`、桌宠分支、技能二阶段装配）；`ConfirmRequiredTool` 从 `pet/` 迁到 `tools/` |
 
 ## 谁拥有什么
 
@@ -41,7 +43,17 @@
 | 工具属于哪个能力组、暴露面怎么裁、工具表按什么顺序排 | `CapabilityManifest` + `KernelExposure` | 分组 / 成员 / **顺序**都在清单（P3-5）；裁剪算法仍在 KernelExposure（它只读清单） |
 | 「本任务开过哪些组」的落盘 / 设置页行 / 用户点击增删 | `ToolGroupsFacade` | 集合实例**在 VM**（loop 的 `activeGroups` 要同一个对象），facade 只借它干活 |
 | 这次配置通不通、端点长什么样、失败归哪一类 | `ConnectionProbe` | 只依赖 ProviderManager + 本地模型名，产物是一条 `TestResult` |
+| 模型**能用哪些工具**：注册清单、依赖接线、桌宠的能力边界 | `tools/ToolAssembler` | 装配单点。ui / pet 只持有结果，不再决定清单（守卫 [H]）；`register(` 在 ui/、pet/ 目录下为零 |
 | 审批弹窗 / 测试卡片 / 附件回执的形状 | `ChatUiTypes` | 六个零逻辑类型；谁都能用，谁都不该再往 ViewModel 里塞新类型 |
+
+## 第六批：工具装配收口的边界
+
+1. **装配器不许造依赖**。`ToolDeps` 的每一项都指向宿主已有的对象；装配器自己 `new` 一个
+   （记忆库、终端池、审批回调），主界面与桌宠就会各有一份，写入互相看不见。
+2. **会变的依赖必须是函数**（`activeConversationId` / `planModeEnabled` / `llmProvider` /
+   `approval`）。快照的失效是静默的：todo 会永远写进启动时那个会话，不报错。
+3. **桌宠的能力边界写在同一处**（`ToolAssembler.pet`）。给它复用 `assemble()` 就等于
+   给悬浮球 52 个工具（含 shell / 写文件 / 装应用），而它没有界面让人确认。
 
 ## 第五批的两条新不变量（守卫 [G] 钉住）
 
