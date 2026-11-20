@@ -33,9 +33,8 @@ internal class ToolGroupsFacade(
 
     private val _ui = MutableStateFlow<List<ToolGroupRow>>(emptyList())
 
-    /** 把当前激活组落盘（失败只记日志，不打断收尾——见 ToolActivationStore 的失败模式）。 */
     /**
-     * 把当前激活组落盘并重算 UI。
+     * 把当前激活组落盘并重算 UI（失败只记日志，不打断收尾——见 ToolActivationStore 的失败模式）。
      *
      * 公开是因为**收尾点不在这个类里**：一轮生成结束（成功/失败/取消）由宿主的
      * GenerationRunController.onFinished 触发，那里必须能叫到这里——漏掉那一次，
