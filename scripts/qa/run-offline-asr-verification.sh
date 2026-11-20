@@ -23,6 +23,9 @@ ACCURATE=$ASR_DIR/OfflineAsrEngine.kt
 ROUTER=$ASR_DIR/AsrRouter.kt
 PET=app/src/main/java/com/beichen/polaris/pet/PetVoice.kt
 CHAT=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
+# 2026-11-20：语音入口的权限闸门从 ChatScreen 抽到 VoiceInputGate.kt，
+# 「没模型就指路」那段字面量跟着搬走了。判据要跟实现，否则实现一搬就假红。
+GATE=app/src/main/java/com/beichen/polaris/ui/VoiceInputGate.kt
 SHEET=app/src/main/java/com/beichen/polaris/ui/LocalVoiceSheet.kt
 JNI=app/src/main/jniLibs/arm64-v8a/libsherpa-onnx-jni.so
 WORKFLOW=.github/workflows/build.yml
@@ -108,8 +111,10 @@ else
   fail "B1 桌宠还在走/还留着系统识别 —— 那条路在真机上一个字都出不了"
 fi
 
-if grep -qF 'if (AsrDirectory.of(ctx).isInstalled())' "$CHAT" \
-   && ! grep -vE '^[[:space:]]*(\*|//)' "$CHAT" | grep -qF 'RecognizerIntent'; then
+if [ -f "$GATE" ] \
+   && grep -qF 'AsrDirectory.of(ctx).isInstalled()' "$GATE" \
+   && ! { grep -vE '^[[:space:]]*(\*|//)' "$CHAT"; grep -vE '^[[:space:]]*(\*|//)' "$GATE"; } \
+        | grep -qF 'RecognizerIntent'; then
   pass "B2 聊天页只用自带识别，没模型就指路（不再弹系统识别页）"
 else
   fail "B2 聊天页还留着系统识别页 —— 国行机上照样没字"
