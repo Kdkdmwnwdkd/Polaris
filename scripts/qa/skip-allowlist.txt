@@ -18,7 +18,7 @@
 #   反而会触发「SKIP 未登记」FAIL。只有当所有目标环境都常备该依赖时才删行，
 #   并把下面的上限数字一起调小；单台机器偶尔补齐不构成删除理由。
 #
-# 条目上限：41
+# 条目上限：40
 #
 # 只减不增：新增 harness 必须能在本机真跑。实在只能 SKIP，就显式改这个数字——
 # 让「又多了一个零覆盖的 harness」成为一次需要人点头的决定，而不是一次
@@ -60,7 +60,6 @@ run-retry-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./grad
 run-round4-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）
 run-shell-route-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）
 run-shell-state-hint-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）
-run-spake2-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）
 run-t01-probe.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）
 run-t01-probe2.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）
 run-t01-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）

@@ -4,6 +4,18 @@ import java.math.BigInteger
 import java.security.MessageDigest
 import java.security.SecureRandom
 
+// 注意：这里一律写 `BigInteger.valueOf(2)`，**不要**写 `BigInteger.TWO`。
+//
+// `TWO` 是 Java 9 加的静态字段，Android 平台的 `java.math.BigInteger` 直到
+// **API 33** 才有它；而本模块 minSdk = 26。项目没开 core library desugaring，
+// 所以 `GETSTATIC BigInteger.TWO` 在 Android 8.0–12L 上会抛 NoSuchFieldError。
+//
+// 更要命的是它出现在 object 的**顶层 val 初始化式**里（P / L 等），也就是类一被
+// 加载就执行——不是「用到才崩」，是「进 ADB 配对就崩」，且崩在类初始化，连
+// try/catch 都接不住。JVM 单测（JDK 21）全绿，看不出任何异常。
+//
+// 2026-11-20 由云端 `:app:lintDebug` 首次发现（CI 此前不跑 lint）。
+
 /**
  * AOSP / boringssl 版 SPAKE2（Edwards25519 群）——adb 无线配对的密码学核心。
  *
@@ -44,10 +56,10 @@ import java.security.SecureRandom
 internal object Ed25519 {
 
     /** 2^255 − 19 */
-    val P: BigInteger = BigInteger.TWO.pow(255).subtract(BigInteger.valueOf(19))
+    val P: BigInteger = BigInteger.valueOf(2).pow(255).subtract(BigInteger.valueOf(19))
 
     /** 素数阶子群的阶：2^252 + 27742317777372353535851937790883648493 */
-    val L: BigInteger = BigInteger.TWO.pow(252)
+    val L: BigInteger = BigInteger.valueOf(2).pow(252)
         .add(BigInteger("27742317777372353535851937790883648493"))
 
     /** 曲线常数 d = −121665 / 121666 mod p */
@@ -110,7 +122,7 @@ internal object Ed25519 {
         val exp = P.add(BigInteger.valueOf(3)).shiftRight(3)
         var x = a.modPow(exp, P)
         if (x.multiply(x).mod(P) == a) return x
-        val sqrtMinusOne = BigInteger.TWO.modPow(P.subtract(BigInteger.ONE).shiftRight(2), P)
+        val sqrtMinusOne = BigInteger.valueOf(2).modPow(P.subtract(BigInteger.ONE).shiftRight(2), P)
         x = x.multiply(sqrtMinusOne).mod(P)
         return if (x.multiply(x).mod(P) == a) x else null
     }
@@ -130,7 +142,7 @@ internal object Ed25519 {
         val a = p1.y.subtract(p1.x).multiply(p2.y.subtract(p2.x)).mod(P)
         val b = p1.y.add(p1.x).multiply(p2.y.add(p2.x)).mod(P)
         val c = p1.t.multiply(TWO_D).multiply(p2.t).mod(P)
-        val d = p1.z.multiply(BigInteger.TWO).multiply(p2.z).mod(P)
+        val d = p1.z.multiply(BigInteger.valueOf(2)).multiply(p2.z).mod(P)
         val e = b.subtract(a)
         val f = d.subtract(c)
         val g = d.add(c)
@@ -142,7 +154,7 @@ internal object Ed25519 {
     fun double(p: Point): Point {
         val a = p.x.multiply(p.x).mod(P)
         val b = p.y.multiply(p.y).mod(P)
-        val c = p.z.multiply(p.z).multiply(BigInteger.TWO).mod(P)
+        val c = p.z.multiply(p.z).multiply(BigInteger.valueOf(2)).mod(P)
         val d = P.subtract(a)
         val xy = p.x.add(p.y).mod(P)
         val e = xy.multiply(xy).subtract(a).subtract(b).mod(P)
@@ -174,7 +186,7 @@ internal object Ed25519 {
         return result ?: IDENTITY
     }
 
-    private val TWO_D: BigInteger by lazy { D.multiply(BigInteger.TWO).mod(P) }
+    private val TWO_D: BigInteger by lazy { D.multiply(BigInteger.valueOf(2)).mod(P) }
 
     fun hex(s: String): ByteArray =
         ByteArray(s.length / 2) { i ->
@@ -282,7 +294,7 @@ internal class Spake2Ed25519(
             return s
         }
 
-        private val MASK256: BigInteger = BigInteger.TWO.pow(256).subtract(BigInteger.ONE)
+        private val MASK256: BigInteger = BigInteger.valueOf(2).pow(256).subtract(BigInteger.ONE)
 
         /** 含结尾 NUL（AOSP 用 `sizeof()` 传长度，16 字节）。 */
         val CLIENT_NAME: ByteArray = "adb pair client\u0000".toByteArray(Charsets.UTF_8)

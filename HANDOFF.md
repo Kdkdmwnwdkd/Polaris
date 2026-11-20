@@ -793,6 +793,76 @@ CI 里有一段 shim（`.github/workflows/build.yml` 的「Prepare kotlinc shim�
 **插件必须与编译器同为 embeddable 变体**——非 embeddable 插件配 embeddable 编译器
 会在编译期内部崩溃（exit=2）。
 
+### 5.9 云端构建机（instabox）：沙箱编不了的，这里能编
+
+沙箱没有 Android SDK，`app` 侧只能靠 CI。2026-11-20 起多了一条通道：
+
+```
+ssh -p 2222 ibssh_viqb5x6t7oyvhjlovwzqltapii@ssh.instabox.sh
+```
+
+Debian 13 / 4 核 / 7G 内存 / JDK 21 / 持久卷 `/data/home`。**SDK 已装好**
+（`~/android-sdk`：platform-34、build-tools 34.0.0、emulator、API 30 x86_64 镜像），
+仓库在 `~/work/Polaris`。
+
+一次完整验证（实测耗时）：
+
+| 步骤 | 命令 | 耗时 |
+|---|---|---|
+| 拉第三方源码 | `bash scripts/fetch-llama.sh git` | ~40s（有网，commit 校验通过） |
+| Kotlin 编译 | `./gradlew :app:compileDebugKotlin` | 47s |
+| core 单测 | `./gradlew :core:testDebugUnitTest` | 19s（**224 条**） |
+| app 单测 | `./gradlew :app:testDebugUnitTest -PnoNative=true` | 14s（**18 条**） |
+| 出 APK | `./gradlew :app:assembleDebug -PnoNative=true` | 25s（28MB） |
+| 静态检查 | `./gradlew :app:lintDebug` | 48–64s |
+
+四点要注意：
+
+1. **必须 `-PnoNative=true`**（或先跑 `fetch-llama.sh`）。仓库不带 `llama.cpp`，
+   主 CMakeLists 第一件事就是 `add_subdirectory` 它，缺了直接 FATAL。
+2. **模拟器只能软件模拟**：容器里 `/dev/kvm` 是个假节点（`ioctl KVM_GET_API_VERSION`
+   报 `ENODEV`），加 `-accel off` 才起得来。代价是启动 3–5 分钟、`MainActivity`
+   冷启 21s、SystemUI 会自己 ANR 一次（**不是 app 的问题**）。
+3. **模拟器要 >7.2G 空闲**（`Not enough space to create userdata partition`），
+   而 AVD 的 `disk.dataPartition.size` 改小**没用**——那是固定门槛。腾空间最省事的是
+   删 `~/android-sdk/ndk`（2.1G，`-PnoNative` 构建用不到，要编 arm64 再装回来）。
+4. **输入框点不进去**：纯软件模拟下 Compose `BasicTextField` 拿不到焦点
+   （`focused=false`、`mInputShown=false`，换成 DOWN/UP 分离事件也一样）。
+   点击按钮正常（菜单、抽屉、「先自己看看」都能点中）。所以模拟器能验
+   「渲染 + 导航 + 数据落盘」，验不了「打字」。
+
+**别把它当真机**：APK 是 `noNative` 的，本地 llama 推理链路完全没跑；
+真机矩阵（P1–P3 容器、语音、桌宠悬浮窗）仍然只有 arm64 真机能验。
+
+### 5.10 坑七：`BigInteger.TWO` 在 minSdk 26 上崩，而所有既有判据都绿
+
+`app/.../automation/adb/Spake2Ed25519.kt` 用了 7 次 `BigInteger.TWO`。它是 **Java 9**
+加的静态字段，Android 平台的 `java.math.BigInteger` 到 **API 33** 才有；
+`minSdk = 26` 且项目没开 core library desugaring。
+
+后果不是「用到才崩」——它写在 `object Ed25519` 的**顶层 val 初始化式**里（`P` 和 `L`），
+也就是**类一被加载就执行**。「进 ADB 无线配对」即 `NoSuchFieldError`，崩在类初始化，
+`try/catch` 接不住。
+
+它为什么能活到现在：
+
+| 判据 | 为什么看不见 |
+|---|---|
+| 编译 | JDK 21 有 `TWO`，过 |
+| JVM 单测（`Spake2Verification` 15 条） | 同上，全绿 |
+| arch-guard | 只管分层/行数/schema 单点 |
+| CI | **CI 不跑 lint** |
+
+2026-11-20 在云端第一次跑 `:app:lintDebug` 才抓出来（13 条 NewApi 里 7 条是它）。
+
+修法：全部改成 `BigInteger.valueOf(2)`（`valueOf` 对 -16..16 有缓存，零额外开销），
+并在文件头写清「为什么不许写 TWO」；`arch-guard` 新增 [J] 段，禁
+`BigInteger.TWO` / `List.of` / `Set.of` / `Map.of` / `copyOf` 这些 Java 9+ 平台符号
+（带反向自检：已知坏样本必须被正则命中）。变异验证：改回 `TWO` → 守卫变红并指出行号。
+
+**教训**：JVM 单测跑在**比目标平台新**的 JDK 上，这类「新平台才有」的符号它天生看不见。
+判据要落在**目标平台**（lint 的 API 检查），或者至少落在**符号级 grep** 上。
+
 ---
 
 ## 6. 未决事项

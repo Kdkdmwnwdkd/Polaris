@@ -14,6 +14,7 @@
 #   G 拆分后的所有权：共享状态靠注入，写点唯一
 #   H 工具装配单点：清单只在 ToolAssembler
 #   I 冷启动恢复单入口：运行态与回合日志在裁决前合流
+#   J Android API 级别：minSdk 26 下不得用 Java 9+ 平台类库符号（真机崩、单测看不见）
 #
 # 退出码：0 通过 / 1 有违规 / 3 环境不具备（这里不用 3，纯静态检查总是可跑）。
 set -uo pipefail
@@ -308,6 +309,42 @@ if [ "${N_FALSE:-0}" -eq 1 ] && awk '/UNKNOWN_WRITES,/{f=1} f&&/overrideNotice =
   good "[I] 只有「写操作结局未知」不覆盖启动提示（明细由 note 提供）"
 else
   bad "[I] overrideNotice=false 的位置不对（count=${N_FALSE:-0}）——细节提示会被笼统句盖掉"
+fi
+
+say "[J] Android API 级别：minSdk 26 下不得使用 Java 9+ 平台类库符号"
+
+# 为什么这条必须存在：
+#
+# `BigInteger.TWO` 是 Java 9 加的静态字段，Android 平台的 `java.math.BigInteger`
+# 直到 **API 33** 才有它；minSdk 是 26。项目没开 core library desugaring，所以
+# `GETSTATIC BigInteger.TWO` 在 Android 8.0–12L 上是 NoSuchFieldError。
+#
+# 它躲过了所有既有判据：编译过（JDK 21 有这个字段）、JVM 单测过（同上）、
+# arch-guard 过（不涉及分层/行数）、CI 过（CI 不跑 lint）。2026-11-20 才被
+# 云端 `:app:lintDebug` 第一次抓出来——而它写在 object 的顶层 val 初始化式里，
+# 意味着「进 ADB 配对就崩」，连 try/catch 都接不住。
+#
+# 不查 `"x".repeat(n)` 与 `.toList()`：前者是 kotlin.text.repeat 扩展，
+# 后者是 Kotlin 集合的 toList()，都不是 Java 11/16 的同名成员，lint 也不报。
+API_PATTERNS='BigInteger\.TWO|\bList\.of\(|\bSet\.of\(|\bMap\.of\(|\bList\.copyOf\(|\bSet\.copyOf\(|\bMap\.copyOf\('
+api_hits=$(grep -rnE "$API_PATTERNS" --include=*.kt app/src/main core/src/main 2>/dev/null \
+  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*|/\*)' || true)
+
+if [ -z "$api_hits" ]; then
+  good "[J] 未发现 Java 9+ 平台类库符号（BigInteger.TWO / List.of / Map.of 等）"
+else
+  while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    bad "[J] 需要 API>26 的符号：$hit"
+  done <<< "$api_hits"
+fi
+
+# 反向自检：这条守卫必须真能抓到东西——把已知坏样本喂进同一个正则。
+# 不做这一步的话，正则写错（比如转义吞掉了）会让守卫永远「通过」。
+if printf 'val P = BigInteger.TWO.pow(255)\nval x = List.of(1, 2)\n' | grep -qE "$API_PATTERNS"; then
+  good "[J] 守卫自检：已知坏样本能被正则命中"
+else
+  bad "[J] 守卫自检失败：正则抓不到 BigInteger.TWO，这条守卫等于没写"
 fi
 
 say ""

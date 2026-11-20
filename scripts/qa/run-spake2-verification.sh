@@ -20,23 +20,38 @@ if [ ! -f "$KOTLINC" ]; then
 fi
 
 CLASSES=${AGENTKIT_CLASSES:-$(qa_classpath "$ROOT")}
-if [ -z "$CLASSES" ]; then
-  echo "KS_HARNESS_SKIP $(basename "$0") 缺少 Gradle 编译产物：$CLASSES" >&2
-  echo "  先执行 ./gradlew :app:compileDebugKotlin，或用 AGENTKIT_CLASSES 指向已有目录" >&2
-  exit 3
-fi
 
 OUT=/tmp/qa-verify-spake2
-DEPS=$CLASSES:$STDLIB
 rm -rf "$OUT" && mkdir -p "$OUT"
 
-echo "[1/2] compiling spake2 harness with kotlin-compiler-embeddable ..."
-# -Xfriend-paths：SPAKE2 实现与 Ed25519 群运算是 internal，仅 module 内可见
-java -cp "$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
-  -no-stdlib -no-reflect \
-  -Xfriend-paths="${CLASSES//:/,}" \
-  -classpath "$DEPS" \
-  -d "$OUT" $ROOT/scripts/qa/Spake2Verification.kt
+# 这条 harness 曾经长期 SKIP：它只测 Spake2Ed25519 + Ed25519，而这两个类**只依赖
+# java.math / java.security 三个 JDK 类**（见文件头 import）。为它去要整个 app 的
+# AGP 产物，等于让「15 条密码学判据」在沙箱里永久不跑——2026-11-20 的
+# BigInteger.TWO 崩溃就是这么活下来的（编译过、JVM 单测过、这条一直 SKIP、CI 不跑 lint）。
+#
+# 所以：有 AGP 产物走产物（最接近真实构建），没有就**直接编那几个源文件**。
+# 同一编译单元内 internal 天然可见，不需要 -Xfriend-paths。
+# 要编的：SPAKE2 实现 + `Spake2` 接口所在文件（AdbPairingPacket.kt，同样只用 JDK 类）。
+if [ -n "$CLASSES" ]; then
+  DEPS=$CLASSES:$STDLIB
+  echo "[1/2] compiling spake2 harness against AGP output ..."
+  # -Xfriend-paths：SPAKE2 实现与 Ed25519 群运算是 internal，仅 module 内可见
+  java -cp "$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
+    -no-stdlib -no-reflect \
+    -Xfriend-paths="${CLASSES//:/,}" \
+    -classpath "$DEPS" \
+    -d "$OUT" $ROOT/scripts/qa/Spake2Verification.kt
+else
+  DEPS=$STDLIB
+  echo "[1/2] 无 AGP 产物，直接编译 Spake2Ed25519.kt + harness ..."
+  java -cp "$KOTLINC:$STDLIB:$TROVE:$JB_ANNOTATIONS" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
+    -no-stdlib -no-reflect \
+    -classpath "$DEPS" \
+    -d "$OUT" \
+    $ROOT/app/src/main/java/com/beichen/polaris/automation/adb/Spake2Ed25519.kt \
+    $ROOT/app/src/main/java/com/beichen/polaris/automation/adb/AdbPairingPacket.kt \
+    $ROOT/scripts/qa/Spake2Verification.kt
+fi
 
 echo "[2/2] running ..."
 java -cp "$OUT:$DEPS" Spake2VerificationKt

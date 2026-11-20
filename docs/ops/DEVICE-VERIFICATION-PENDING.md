@@ -28,6 +28,51 @@ P7/P8 这两条原本最需要真机的（一个要看 manifest、一个要跑 9
 
 ---
 
+## 2026-11-20 云端模拟器复测（instabox，x86_64 API 30，软件模拟）
+
+新开了一台云端构建机（见 `HANDOFF.md` §5.9）。它补上了沙箱三年没补的那一环：
+**app 侧能真编译、真跑单测、真装真启**。本轮实测：
+
+| 项 | 结果 | 说明 |
+|---|---|---|
+| `:app:compileDebugKotlin` | ✅ 47s | 仓库 HEAD `ceef615` 的 Kotlin 层真编过（此前只能靠 CI） |
+| `:core:testDebugUnitTest` | ✅ 13 类 / **224 条** / 0 失败 | 真跑，不是「CI 里跑过」的转述 |
+| `:app:testDebugUnitTest` | ✅ 3 类 / **18 条** / 0 失败 | 沙箱完全做不到 |
+| `:app:assembleDebug -PnoNative` | ✅ 25s，APK 28MB | 装进模拟器成功 |
+| `MainActivity` 冷启 | ✅ `Displayed +21s546ms`，无 FATAL | 软件模拟下 21s 属正常 |
+| 首启引导页 | ✅ 渲染完整 | 见 `scripts/qa` 外的截图记录；三步文案、按钮命中区都正常 |
+| 会话抽屉 | ✅ 数据正确 | 「新对话 10:01 · 0 条消息」、`● 无障碍未连接`（真检测，非写死） |
+| 新建会话 | ✅ 生效 | `conversations.json` 从 1 个 id 变 2 个，`drafts.json` 被创建 |
+| `:app:lintDebug` | ⚠️ 86 条（13 Error / …） | **抓到 7 条真崩溃**（见下），其余已逐条核实为误报 |
+
+### 这次抓到的真问题（已修）
+
+`app/.../automation/adb/Spake2Ed25519.kt` 用了 7 次 `BigInteger.TWO`——Java 9 的静态字段，
+Android 平台 API 33 才有，而 minSdk 是 26 且没开 desugaring。它写在 `object` 的顶层
+`val` 初始化式里，**类一加载就崩**，「进 ADB 配对」即 `NoSuchFieldError`。
+
+四个既有判据全都看不见：编译过（JDK 21 有 TWO）、JVM 单测过（同上）、arch-guard 不管这类、
+CI 不跑 lint。已改成 `BigInteger.valueOf(2)`，并给 arch-guard 加了 [J] 段（带反向自检与
+变异验证：改回 `TWO` 会红并指出行号）。
+
+顺带把 `run-spake2-verification.sh` 从 SKIP 白名单里捞出来了：它只测两个类，而那两个类
+**只依赖 JDK 三个类**，过去却因为「缺 AGP 产物」永久 SKIP——15 条密码学判据等于没有。
+现在缺产物时回退直接编源码，15 条第一次在沙箱里真跑（`skip-allowlist` 41 → 40）。
+
+### 这台模拟器验不了什么（别当成真机）
+
+1. **本地 llama 推理整条链路**：APK 是 `-PnoNative=true` 的，没有 native 库；
+   `abiFilters` 也不含 x86_64 的 llama。
+2. **打字**：软件模拟下 Compose `BasicTextField` 拿不到焦点（`focused=false`、
+   `mInputShown=false`，DOWN/UP 分离事件同样无效）。按钮、抽屉、导航都能点中。
+   所以「草稿随会话走」这类**需要输入**的行为仍只能靠 `ConversationEditorVerification`
+   的 14 条行为判据，模拟器没帮上忙。
+3. **容器租约（P1–P3）**、**语音/音频链路（P15–P17）**、**桌宠悬浮窗（P11/P18）**：
+   与之前结论一致，只有 arm64 真机能验。
+4. 硬件加速不可用：容器里 `/dev/kvm` 是假节点（`ioctl` 报 `ENODEV`），只能 `-accel off`。
+
+---
+
 ## 一次验收怎么走（约 20 分钟）
 
 1. arm64 手机连 adb（x86 模拟器能到 P4、P5，以及 P1 的「租约登记」半步——见文末 2026-11-12 记录）。
