@@ -834,6 +834,11 @@ Debian 13 / 4 核 / 7G 内存 / JDK 21 / 持久卷 `/data/home`。**SDK 已装�
 **别把它当真机**：APK 是 `noNative` 的，本地 llama 推理链路完全没跑；
 真机矩阵（P1–P3 容器、语音、桌宠悬浮窗）仍然只有 arm64 真机能验。
 
+还有一招很好用：**在目标 API 上直接验某个符号在不在**。写 6 行 Java，`javac --release 11`
+（d8 认不得 major 65，不降级会报 `Unsupported class file major version`）→
+`d8 --min-api 26` → `adb push` → `adb shell dalvikvm -cp x.dex Probe`。
+验 `BigInteger.TWO` 时输出 `NoSuchFieldException`，比翻文档可信。
+
 ### 5.10 坑七：`BigInteger.TWO` 在 minSdk 26 上崩，而所有既有判据都绿
 
 `app/.../automation/adb/Spake2Ed25519.kt` 用了 7 次 `BigInteger.TWO`。它是 **Java 9**

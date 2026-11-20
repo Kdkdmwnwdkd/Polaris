@@ -55,6 +55,20 @@ Android 平台 API 33 才有，而 minSdk 是 26 且没开 desugaring。它写�
 CI 不跑 lint。已改成 `BigInteger.valueOf(2)`，并给 arch-guard 加了 [J] 段（带反向自检与
 变异验证：改回 `TWO` 会红并指出行号）。
 
+**这不是推演，是实测**。在 API 30 镜像上跑了 6 行的探针（`javac --release 11` → `d8
+--min-api 26` → `adb shell dalvikvm -cp probe.dex Probe`）：
+
+```
+$ adb shell getprop ro.build.version.sdk
+30
+$ adb shell dalvikvm -cp /data/local/tmp/probe.dex Probe
+RESULT: BigInteger.TWO 不存在 -> NoSuchFieldException
+java.vm.version=2.1.0
+```
+
+反射拿不到 = `GETSTATIC` 会抛 `NoSuchFieldError`。同一个探针也能验别的「目标平台才有」
+的符号，不必等到真机。
+
 顺带把 `run-spake2-verification.sh` 从 SKIP 白名单里捞出来了：它只测两个类，而那两个类
 **只依赖 JDK 三个类**，过去却因为「缺 AGP 产物」永久 SKIP——15 条密码学判据等于没有。
 现在缺产物时回退直接编源码，15 条第一次在沙箱里真跑（`skip-allowlist` 41 → 40）。
