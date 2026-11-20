@@ -279,9 +279,10 @@ private fun testConversationPinAndSearch() {
         )
     }
     check("K4 VM 暴露 setConversationPinned 并刷新摘要列表") {
-        val fn = vm.substringAfter("fun setConversationPinned(")
-        assertContains("K4", fn, "conversationStore.setPinned(id, pinned)")
-        assertContains("K4", fn, "refreshConversations()")
+        // 第八轮：写操作与刷新都在 ConversationEditor.setPinned，VM 只转发。
+        // 刷新次数的行为断言在 conversation-editor 的 D1（refreshCount==3），不重复。
+        val fn = vm.substringAfter("override fun setConversationPinned(").substringBefore("\n\n")
+        assertContains("K4", fn, "editor.setPinned(id, pinned)")
     }
     // W-68 把抽屉里的搜索框整块删掉：一有输入框，点一下键盘就弹起来，抽屉被 IME
     // 压到 400 多 px，固定在底栏的「设置」贴到键盘上沿（用户原话「感觉怪怪的」）。
@@ -756,8 +757,10 @@ private fun testBackupRestore() {
         assertContains("R7", backup, "conversations.replaceAll(convs)")
         assertContains("R7", backup, "memories.restoreAll(mems)")
         assertContains("R7", backup, "config.restoreFrom(it)")
-        // UI 重载留在宿主（它是 ViewModel 的职责），但必须由用例回调触发
-        assertContains("R7", vm, "loadConversation(conversationStore.ensureNotEmpty())")
+        // UI 重载留在宿主（它是 ViewModel 的职责），但必须由用例回调触发。
+        // 第八轮起迁移动作收口到 ConversationEditor：恢复走 adopt（不保存旧草稿——
+        // 恢复把整份会话表换掉了，旧 id 存回去就是孤儿草稿）。
+        assertContains("R7", vm, "editor.adopt(conversationStore.ensureNotEmpty())")
         assertContains("R7", vm, "fun consumeBackupState()")
     }
     check("R8 设置页双闸门：恢复先 danger 确认对话框，再开 SAF 文件选择器") {
@@ -887,8 +890,12 @@ private fun testConversationDrafts() {
     }
     check("T2 切会话草稿随人走：切走前存旧会话，载入后取新会话填回输入框") {
         assertContains("T2", vm, "private val draftStore = DraftStore(File(app.filesDir, \"drafts.json\"))")
-        assertContains("T2", vm, "draftStore.set(_activeConversationId.value, input.value)")
-        assertContains("T2", vm, "input.value = draftStore.get(id)")
+        // 第八轮：迁移本体搬进 ConversationEditor.open。这里只守「VM 确实转发过去」——
+        // 存取成对的行为由 run-conversation-editor-verification.sh 的 B1 真跑验证，
+        // 不在这里重复一份源码断言（重复的源码断言只会抬高重构成本）。
+        val sw = vm.substringAfter("fun switchConversation(id: String)")
+            .substringBefore("fun deleteConversation")
+        assertContains("T2", sw, "editor.switchTo(id)")
     }
     check("T3 发送后清草稿（切走再回来不复活刚发过的原文）") {
         assertContains("T3", vm, "draftStore.remove(_activeConversationId.value)")
@@ -896,8 +903,11 @@ private fun testConversationDrafts() {
         assertContains("T3", sendBlock, "草稿使命结束")
     }
     check("T4 删会话连带清草稿（会话没了草稿是垃圾数据）") {
-        val delBlock = vm.substringAfter("fun deleteConversation(id: String) {").substringBefore("fun rename(")
-        assertContains("T4", delBlock, "draftStore.remove(id)")
+        // 第八轮：清理点在 ConversationEditor.delete。这里只守「VM 不另写一份」——
+        // 「删完 drafts.json 里没有这条键」由 conversation-editor 的 C3/C4 真跑验证。
+        val vmDel = vm.substringAfter("fun deleteConversation(id: String)").substringBefore("fun renameConversation")
+        assertContains("T4", vmDel, "editor.delete(id)")
+        assertTrue("T4", !vmDel.contains("draftStore.remove"))
     }
     check("T5 备份恢复清草稿（旧 id 与新数据对不上，防陌生草稿错配复活）") {
         // P4-3：恢复流程在 BackupUseCase，草稿清理必须与重灌同处一个事务里
@@ -1308,12 +1318,16 @@ private fun testConversationSwitchWhileRunning() {
         val sw = vm.substringAfter("fun switchConversation(id: String)")
             .substringBefore("fun deleteConversation")
         assertTrue("Y5", !sw.contains("if (isRunning.value) return"))
-        assertContains("Y5", sw, "loadConversation(id)")
+        // 第八轮：迁移本体搬进 ConversationEditor，VM 只剩转发。草稿存/取的行为
+        // 由 conversation-editor 的 B1 真跑；这里只守接线，避免一份行为两处断言。
+        assertContains("Y5", sw, "editor.switchTo(id)")
         assertContains("Y5", sw, "syncDraftDisplay()")
     }
     check("Y6 deleteConversation：在途会话（含非 active 的后台生成会话）禁删防复活") {
+        // 守卫搬进 ConversationEditor.delete；这里只守 VM 仍走同一个入口，
+        // 「owner 是自己时删除被拒」由 conversation-editor 的 C1 真跑验证。
         val del = vm.substringAfter("fun deleteConversation(id: String)")
-        assertContains("Y6", del, "if (id == generation.owner) return")
+        assertContains("Y6", del, "editor.delete(id)")
     }
     check("Y7 UI：抽屉生成中标识 + 删除在途 Toast + 空闲会话输入说明行") {
         assertContains("Y7", scaffold, "generatingConvId: String? = null")

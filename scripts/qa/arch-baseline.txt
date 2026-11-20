@@ -178,7 +178,12 @@
 # 2026-11-20 微调（3224 → 3233，同日第七批收尾）：`StartupRecovery` 拆掉 state 字段后，
 # 合流点需要一个 `StartupSnapshot(state, journal)` 才能一起交给裁决——+9 行里 5 行是
 # 说明「为什么必须合成一个对象」（只拿一半正是第七批要修的那个洞）。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3233
+# 2026-11-20 收紧（3233 → 3207，第九批）：会话六个动作（新建/切换/删除/重命名/置顶/
+# 绑目录）搬进 `ui/ConversationEditor.kt`（173 行，纯 JVM，有 19 条 harness 真跑）。
+# 这里减 46 行是净减：VM 只留六个转发入口 + Editor 构造（12 行），KDoc 各留一句指路。
+# 拆的理由不是行数，是那三条不变量（草稿随会话走 / 下标派生状态作废 / 在途守卫）
+# 原先每条都在两处各写一遍，而 VM 拖 Compose，沙箱编不动，只能靠 grep 守。
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3207
 # 2026-11-14 重记（ChatScreen +45）：语音输入的能力预检与编排。
 # 增量分布：
 #   ① 能力预检：约 12 行（含 8 行注释）。系统识别页一旦弹出，用户就进入了一个

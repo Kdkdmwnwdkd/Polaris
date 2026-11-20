@@ -2702,117 +2702,92 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 从备份文件恢复（破坏性，调用方须先二次确认；见 [BackupUseCase.restoreFrom]）。 */
     override fun restoreBackupFrom(uri: Uri) = backup.restoreFrom(uri)
 
+    /**
+     * 会话级状态迁移（新建 / 切换 / 删除 / 重命名 / 置顶 / 绑定目录）的单一入口。
+     *
+     * 为什么拆出去：这六个动作共用「草稿跟着会话走 / 下标派生状态作废 / 在途运行守卫」
+     * 三条不变量，散在本类里时每处都要靠注释提醒。实现见 [ConversationEditor]，纯 JVM，
+     * 有 scripts/qa/run-conversation-editor-verification.sh 真跑。
+     */
+    private val editor = ConversationEditor(
+        store = conversationStore,
+        drafts = draftStore,
+        activeId = { _activeConversationId.value },
+        setActiveId = { _activeConversationId.value = it },
+        inputText = { input.value },
+        setInputText = { input.value = it },
+        running = { isRunning.value },
+        ownerId = { generation.owner },
+        onConversationLoaded = { id -> replaceUiItems(projection.loadOf(id)) },
+        onTranslationsStale = { _translations.value = emptyMap() },
+        onListChanged = { refreshConversations() },
+        onFreshConversation = { resetToolGroups() },
+    )
+
     /** 恢复完成后的 UI 重载：会话列表 / 当前会话 / 记忆 / 档案流 / 提示词。 */
     private fun onBackupRestored(items: List<PromptItem>) {
         _prompts.value = items
         refreshConversations()
-        loadConversation(conversationStore.ensureNotEmpty())
+        // adopt 而非 switchTo：恢复把整份会话表换掉了，旧 id 可能已不存在，
+        // 把输入框内容存回旧 id 只会在 drafts.json 里留一条读不出来的孤儿草稿。
+        editor.adopt(conversationStore.ensureNotEmpty())
         refreshMemories()
         _profiles.value = configStore.loadProfiles()
         _activeProfileId.value = configStore.loadActiveId().orEmpty()
-    }
-
-    /**
-     * 载入指定会话为当前会话（设 id + 读消息进 _messages + 刷新摘要）。
-     *
-     * 功能五（P1-8）：草稿随会话走——切走前把输入框内容存进旧会话的草稿，
-     * 载入后把新会话的草稿填回输入框。用户「在 A 会话打了半段话，去 B 会话聊完，
-     * 回 A 话还在」的预期由此满足（此前输入框是全局单草稿，切走即丢）。
-     * 新建会话的草稿恒为空（[DraftStore.get] 返空串），语义天然正确。
-     */
-    private fun loadConversation(id: String) {
-        draftStore.set(_activeConversationId.value, input.value)
-        _activeConversationId.value = id
-        replaceUiItems(projection.loadOf(id))
-        // W-30：会话切换后消息下标全变，旧译文清掉（否则会显示到别的消息下面）
-        _translations.value = emptyMap()
-        input.value = draftStore.get(id)
-        refreshConversations()
     }
 
     /** 用当前会话的轮次变体结构重建消息列表（变体切换/重新生成/重新发问后调用）。 */
     private fun reloadActiveMessages() {
         projection.reloadActive()
         // W-30：消息下标全变，旧译文清掉（否则会显示到别的消息下面）
-        _translations.value = emptyMap()
+        editor.noteMessagesRebuilt()
     }
 
     /**
      * 新建对话并切过去（顶栏 / 抽屉「＋ 新对话」）。
-     * 运行中拒绝（VM 兜底，UI 禁用只是双保险）：新建即切 activeConversationId，
-     * 在途事件（ToolStarted/ToolFinished、history 兜底、onFailure）会按新 id 落盘，
-     * 把旧会话的尾巴写进新会话——与 [switchConversation] 同一理由。
      *
-     * hotfix30：该风险已由 owner 捕获消除，但**仍保守拦着**——放开后用户在新空会话
-     * 发消息会被 send() 的 isRunning 守卫拒（无并行发送），「能进不能发」比
-     * 「不能进」更割裂；并行发送（运行句柄变多）风险大，不在本 hotfix 范围。
+     * 运行中拒绝、粘性工具组随任务重置（W-102）都在 [ConversationEditor.create]。
+     * 这里只把拒绝原因记进日志——UI 禁用按钮是双保险，真机上「点了没反应」时，
+     * 日志至少要能回答是哪一个守卫拦的。
      */
     override fun newConversation() {
-        if (isRunning.value) return
-        // W-102：新会话 = 新任务。上一个任务开过的组（ui / shell / memory…）如果继续
-        // 挂着，就是「不需要它的时候它还在每轮付钱」——正是这轮改造要消掉的东西。
-        // 粘性作用域到此为止：跨会话从 file 组重新开始，要用再开一次。
-        resetToolGroups()
-        loadConversation(conversationStore.create())
+        editor.create()?.let { AgentLogger.i("Chat", "新建会话被拒：$it") }
     }
 
     /**
      * 切换到指定会话（抽屉「最近对话」点击）。
      *
      * hotfix30：运行中允许切换（真机反馈「我不能跳，不能过其他对话」）——在途任务按
-     * [runOwnerConvId] 继续后台生成（只落盘不上屏），本方法只换显示态：
-     * [loadConversation] 重载目标会话 + [syncDraftDisplay] 按需恢复/清实时草稿
-     * （切到在途会话 → 恢复打字机；切到无关会话 → 清空，缓冲不丢）。
-     * 写串风险由 owner 捕获机制消除（见 [runOwnerConvId] 注释）。
+     * owner 继续后台生成（只落盘不上屏），[ConversationEditor.switchTo] 只换显示态，
+     * [syncDraftDisplay] 再按需恢复/清实时草稿（切到在途会话 → 恢复打字机；
+     * 切到无关会话 → 清空，缓冲不丢）。
      */
     fun switchConversation(id: String) {
         if (id == _activeConversationId.value) return
-        loadConversation(id)
+        editor.switchTo(id)
         syncDraftDisplay()
     }
 
     /**
-     * 删除会话；删的是当前会话则顺手切到剩下的最近一个（_messages 不空指）。
-     * 删 active 会话 = 变相切 active（ensureNotEmpty 会载入另一个会话），运行中同样拒绝；
-     * 删非 active 会话不碰 activeConversationId，在途事件不受影响，不拦。
+     * 删除会话；删的是当前会话则顺手切到剩下的最近一个。
      *
-     * hotfix30 补禁删：在途会话（[runOwnerConvId]，含切走后后台生成的非 active 会话）
-     * 一律禁删——删了 store 记录，在途收尾的 appendToStore 会把消息写回已删 id
-     * （ConversationStore 按需重建记录），「删掉的会话复活」成脏数据。UI 同步禁用并 Toast。
+     * 两条拒绝（在途会话禁删、运行中禁删当前会话）与「删完不留孤儿草稿」的迁移
+     * 都在 [ConversationEditor.delete]——那里是纯 JVM，有 harness 真跑。
      */
     override fun deleteConversation(id: String) {
-        if (id == generation.owner) return
-        if (id == _activeConversationId.value && isRunning.value) return
-        conversationStore.delete(id)
-        // 功能五（P1-8）：会话没了，它的草稿是垃圾数据，一并清
-        draftStore.remove(id)
-        if (id == _activeConversationId.value) {
-            loadConversation(conversationStore.ensureNotEmpty())
-        } else {
-            refreshConversations()
-        }
+        editor.delete(id)?.let { AgentLogger.i("Chat", "删除会话被拒：$it（$id）") }
     }
 
-    /**
-     * 重命名会话（抽屉长按菜单 → 对话框）。
-     * 不需要 isRunning 守卫：只改标题、不切 activeConversationId、不动 _messages，
-     * 在途事件仍按原 id 正常落盘（rename 同步更新该会话的 title 字段，无写串风险）。
-     */
-    override fun renameConversation(id: String, title: String) {
-        conversationStore.rename(id, title)
-        refreshConversations()
-    }
+    /** 重命名会话。只改标题，不需要运行态守卫（理由见 [ConversationEditor.rename]）。 */
+    override fun renameConversation(id: String, title: String) = editor.rename(id, title)
 
     /**
      * 功能五（P1-3）：置顶 / 取消置顶会话（抽屉长按菜单）。
      *
-     * 与 rename 一样不需要 isRunning 守卫：只改排序键，不切 activeConversationId、
-     * 不动 _messages，在途事件仍按原 id 落盘。
+     * 与 rename 一样不需要运行态守卫：只改排序键，不切 activeConversationId、
+     * 不动消息列表，在途事件仍按原 id 落盘（理由同 [ConversationEditor.setPinned]）。
      */
-    override fun setConversationPinned(id: String, pinned: Boolean) {
-        conversationStore.setPinned(id, pinned)
-        refreshConversations()
-    }
+    override fun setConversationPinned(id: String, pinned: Boolean) = editor.setPinned(id, pinned)
 
     // —— L7 技能导入 / 卸载 / 授权 ——
 
@@ -2935,10 +2910,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         }.getOrDefault(emptyMap())
     }
 
-    /** W-28：绑定/解绑当前会话的项目目录（空串 = 解绑）。 */
+    /** W-28：绑定/解绑当前会话的项目目录（空串 = 解绑）；迁移规则见 [ConversationEditor.bindWorkspace]。 */
     fun setConversationWorkspace(convId: String, dir: String) {
-        conversationStore.setWorkspaceDir(convId, dir)
-        refreshConversations()
+        editor.bindWorkspace(convId, dir)
         AgentLogger.i("Chat", "会话 $convId 绑定目录：${dir.ifBlank { "工作区根" }}")
     }
 

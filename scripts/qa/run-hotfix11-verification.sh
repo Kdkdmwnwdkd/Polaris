@@ -24,16 +24,15 @@ if [ ! -f "$KOTLINC" ]; then
 fi
 
 CLASSES=${AGENTKIT_CLASSES:-$(qa_classpath "$ROOT")}
-# W-39：集成型 harness 需要 AGP 编译产物。缺失时明确跳过（exit 3），
-# 绝不把「环境不具备」伪装成「验证失败」，也不伪装成通过。
+# 本 harness 是**纯源码扫描**（全文件只 import java.io.File），不加载任何 Android 类。
+# 旧写法在缺 AGP 产物时直接 SKIP——于是净机器 / 沙箱上这 40 条断言永久不跑，而它们
+# 恰恰是改 ChatViewModel 时唯一能本地验证的东西（改了断言却没人跑过，等于没改）。
+# 现在回退到 Kotlin 标准库编译：真跑不通就红，不再用「环境不具备」把断言藏起来。
 if [ -z "$CLASSES" ]; then
-  echo "KS_HARNESS_SKIP $(basename "$0") 缺少 Gradle 编译产物：$CLASSES" >&2
-  echo "  先执行 ./gradlew :app:compileDebugKotlin，或用 AGENTKIT_CLASSES 指向已有目录" >&2
-  exit 3
+  echo "WARN  缺少 AGP 产物，按纯源码扫描模式编译（只需 kotlin-stdlib）"
 fi
-
 OUT=/tmp/qa-verify-hotfix11
-DEPS=$CLASSES:$STDLIB
+DEPS=${CLASSES:+$CLASSES:}$STDLIB
 
 rm -rf "$OUT" && mkdir -p "$OUT"
 

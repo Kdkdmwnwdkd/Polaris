@@ -12,7 +12,7 @@
 # 格式：`text <路径> <上限>`；`text __TOTAL__ <上限>` 是全局上限，
 # 防的是「把 625 条拆成两个文件」绕过单文件限制。
 
-text scripts/qa/Hotfix11Verification.kt 626
+text scripts/qa/Hotfix11Verification.kt 625
 text scripts/qa/run-local-inference-perf-verification.sh 90
 text scripts/qa/PromptProtocolVerification.kt 47
 text scripts/qa/AppControlVerification.kt 40
@@ -107,4 +107,4 @@ text scripts/qa/run-knowledge-base-verification.sh 10
 text scripts/qa/run-cost-drilldown-verification.sh 10
 text scripts/qa/run-qr-verification.sh 9
 text scripts/qa/run-local-param-input-verification.sh 9
-text __TOTAL__ 1729
+text __TOTAL__ 1728

@@ -18,11 +18,15 @@
 #   反而会触发「SKIP 未登记」FAIL。只有当所有目标环境都常备该依赖时才删行，
 #   并把下面的上限数字一起调小；单台机器偶尔补齐不构成删除理由。
 #
-# 条目上限：42
+# 条目上限：41
 #
 # 只减不增：新增 harness 必须能在本机真跑。实在只能 SKIP，就显式改这个数字——
 # 让「又多了一个零覆盖的 harness」成为一次需要人点头的决定，而不是一次
 # 顺手 `echo skip` 的事故。
+#
+# 第九批（2026-11-20）减 1：run-hotfix11-verification.sh 移出。它全文件只 import
+# java.io.File，本来就是纯源码扫描，缺 AGP 产物不等于不能跑——runner 现在回退到
+# kotlin-stdlib 编译，173 条断言在净机器上也真跑（当时一改就抓出一条漏改的 K4）。
 
 # ── 缺 AGP 编译产物（app/build/tmp/kotlin-classes/debug）
 # 这 37 个是集成型 harness：要拿真实 classpath 才能编。本机没跑过 gradle 时必然缺，
@@ -37,7 +41,6 @@ run-crashlog-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./g
 run-fallback-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）
 run-finish-reason-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）
 run-hotfix-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）
-run-hotfix11-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）
 run-hotfix3-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）
 run-localmodel-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）
 run-markdown-verification.sh	缺少 app/build/tmp/kotlin-classes/debug（先 ./gradlew :app:compileDebugKotlin）

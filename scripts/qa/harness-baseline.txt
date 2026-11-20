@@ -454,7 +454,15 @@
 #   新增 run-runtime-invariants-verification.sh：纯 grep 静态门禁，PASS/PENDING 分层
 #   ——已达标项（不变量 3/4 后半）硬断言、待收口项（不变量 1/2/4 前半）显式挂账，
 #   当前 5 通过 / 0 失败 / 3 待收口。三入口 loop 收口后 PENDING 改 PASS、门禁收紧。
-150
+#
+# 2026-11-20：150 → 151（第九批：会话编辑簇拆分）。
+#   新增 run-conversation-editor-verification.sh：14 条行为（真编 ConversationStore /
+#   DraftStore / ConversationEditor）+ 5 条接线。C3 直接读 drafts.json 原文断言
+#   「没有已删会话的键」——这一条在旧实现上是红的（删会话时把输入框存回已删 id）。
+#   同批把 run-hotfix11 从「缺 AGP 产物就 SKIP」改成回退 kotlin-stdlib 编译：
+#   它全文件只 import java.io.File，本来就是纯源码扫描，173 条断言因此第一次真跑。
+#   注意这两件事对本基线的净效果只有 +1（runner 数）——断言数不是这把尺子量的。
+151
 # 143（2026-11-14 语音识别能力判定）：+ run-speech-capability-verification.sh
 #   [A] 29 条结构断言（判定表在 core 且零 Android 依赖、两条语音入口都调它、
 #   共用同一个探测实现、清单声明了识别服务可见性、两边都用 BCP-47 语言标签、

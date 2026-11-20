@@ -544,6 +544,49 @@ AGP 8.5 / JDK 21）。
 （设计如此）。策略表现在没有任何消费者，做出来是一段没有调用方的抽象。等真有后台执行
 入口时再做，那时形状也会更清楚。
 
+### 3.16 会话生命周期簇拆分（2026-11-20 下午）
+
+前两轮把「启动恢复合流」和「LoopDefaults 单一真源」收了。这一轮处理 `ChatViewModel`
+里最大的一块散落逻辑：会话生命周期的六个动作（新建 / 切换 / 删除 / 重命名 / 置顶 / 绑目录）。
+
+> 注意与 §21.6 里「会话编辑簇」区分：那里指的是**消息级**编辑
+> （`regenerate` / `switchVariant` / `reaskFromTurn` / `deleteFromTurn`，约 136 行），本轮没碰。
+
+**为什么值得拆**：它们共用三条不变量，原先每条都在两个方法里各写一遍——
+
+| 不变量 | 旧写法 | 漏掉的后果 |
+|---|---|---|
+| 草稿跟着会话走 | `loadConversation` 头尾各一句 | 切回来输入框空了，不报错 |
+| 消息下标一变，译文作废 | `loadConversation` + `reloadActiveMessages` 各一句 | 译文显示在别的消息下面 |
+| 在途运行只挡「会切走显示」的动作 | 三个方法各自 `if` | 删掉在途会话 → 收尾把消息写回已删 id |
+
+拆成 `app/ui/ConversationEditor.kt`（173 行，**纯 JVM**）后，每条只有一个实现点，
+而且能被 harness 真编真跑——这是关键：`ChatViewModel` 拖 Compose，沙箱编不动，
+拆之前这三条只有静态 grep 在守。
+
+**顺手抓到并修掉一个真缺陷**：删当前会话时，旧实现先 `drafts.remove(id)`，紧接着
+`loadConversation()` 第一行无条件 `drafts.set(旧 id, 输入框内容)`——**把刚清掉的草稿写了回去**。
+触发很日常：打了半截话去删这个会话。结果 drafts.json 里留一条以已删 id 为键的草稿，
+永远读不出来，还会进备份包。
+
+修法不是加 `if`，而是把「保存上一段草稿」这件事限定在**语义成立的两条路径**上：
+`switchTo` / `create`（旧会话还在）。删除与备份恢复走 `adopt`，明确不保存——
+那两条路径上旧 id 已经不存在，存下来只能是孤儿数据。
+
+**判据**：`run-conversation-editor-verification.sh`，14 条行为 + 5 条接线 = **19 条**。
+C3 直接读 drafts.json 原文断言「里面没有已删会话的键」——`get()` 返回空不足以判定，
+键还在但值为空是另一种脏数据。变异 10 条全 CAUGHT（含「把 adopt 换回 switchTo」这条
+直接复现旧缺陷）。
+
+**副产物（意外收获）**：`run-hotfix11-verification.sh` 一直因「缺 AGP 产物」SKIP，
+但它**全文件只 import `java.io.File`**——本来就是纯源码扫描，AGP classpath 是历史包袱。
+改成缺产物时回退 kotlin-stdlib 后，**173 条断言第一次真跑**，当场抓出一条我漏改的断言
+（K4 还在查 VM 内部的 `conversationStore.setPinned`）。这条值得记住：**SKIP 不只是
+少跑，它会让「改了断言但没人跑」看起来像改对了。**
+
+**数字**：`ChatViewModel` 3253 → **3207**（-46）；新增 `ConversationEditor` 173；
+`arch-baseline` 同步收紧到 3207。
+
 
 ## 4. 代码红线（碰了会立刻红）
 
