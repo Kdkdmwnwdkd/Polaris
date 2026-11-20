@@ -123,7 +123,18 @@ class ConversationShardRecoveryTest {
         assertTrue("前置：分片应已落盘", shardFile(a).isFile && shardFile(b).isFile)
 
         assertTrue("删索引", indexFile().delete())
-        assertTrue("删索引备份", File(root, indexFile().name + AtomicJsonFile.BACKUP_SUFFIX).delete())
+        // 这里**不能**断言 delete() 返回 true。`.bak` 只在「主文件已存在时的再一次写」
+        // 才产生（AtomicJsonFile 语义），而 schedulePersist 的 400ms 去抖会把 seed 期间
+        // 的多次改动合并成一次写——最终写了几次取决于机器快慢。原先断言返回值，等于把
+        // 「写了几次」当成了用例前提：CI 上红过四次（11-19 23:36 / 11-20 05:10 / 05:18 /
+        // 08:49）。用真实 store 循环 200 次量过：192 次有 .bak、8 次没有（4%）。
+        //
+        // 本用例要的是「两份都不可用」（否则 recover 会走 .bak 而不是分片扫描），
+        // 所以断言的是删完的结果，不是删的动作。「有 .bak 但内容坏」由 corruptIndexAndBackup
+        // 那条用例覆盖，两条合起来才是完整的分支覆盖。
+        val bak = File(root, indexFile().name + AtomicJsonFile.BACKUP_SUFFIX)
+        bak.delete()
+        assertFalse("索引备份必须不可用（否则会走 .bak 恢复，测不到分片扫描）", bak.exists())
 
         val reopened = openAndSettle()
         // 断言消息里带上现场：这条在 CI 上偶发红过三次（本地循环 300 轮不复现），

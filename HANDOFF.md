@@ -686,17 +686,40 @@ exec java -cp "$CP" "$MAIN" -kotlin-home "$BASE" "$@"
 判据：日志里搜 `429` 或 `Could not resolve`；若是，等几分钟 rerun，不要改代码。
 缓解：一轮把改动攒够再推（这轮 1 小时内推了 4 次，撞了两次）。
 
-### 5.5.2 已知偶发：`ConversationShardRecoveryTest.主索引丢失时按分片重建全部会话`
+**第三次（2026-11-20 下午，第九批）换了个战场**：这回红的是 `mutation-gate` 的
+「Kotlin 编译器与运行时库」，`Process completed with exit code 22`，**日志一个字都没有**。
+exit 22 是 `curl -f` 拿到 4xx/5xx 时的退出码；`-f` 会把响应体丢掉，`-S` 只对连接错误生效，
+所以既看不到 429 也看不到 404。当时只能重跑——重跑即绿，确认是 Maven 限流。
+
+已改（`build.yml` 的 `fetch()`）：失败时打印 `URL（HTTP xxx）`。本地用真 404 验证过输出。
+下一代再遇到这条红，先看那行 URL 与码：**429/502 重跑，404 是版本号或路径写错**。
+
+> 教训与 5.5.1 开头那句一脉相承：失败步骤名会骗人，**退出码也会**。
+> `exit 22` 看起来像「测试失败」，实际是下载失败；而下载失败的日志被 `-f` 清过场。
+
+### 5.5.2 已定位（2026-11-20）：`ConversationShardRecoveryTest.主索引丢失时按分片重建全部会话`
 
 现象：`core:testDebugUnitTest` 偶发 `AssertionError at ConversationShardRecoveryTest.kt:126`
-（4 tests / 1 failed），rerun 即过。已见三次：2026-11-19 23:36、11-20 05:10、05:18。
+（4 tests / 1 failed），rerun 即过。共四次：2026-11-19 23:36、11-20 05:10、05:18、08:49。
 
-已排除：与本轮改动无关（那三批都没碰 `ConversationStore`）；本地按同样步骤循环 300 轮未复现
-（真实落盘 + `awaitPersist`；复现程序是一次性的，没有入库——它依赖的正是「沙箱里编不了的那套」。）
+**不是分片恢复的 bug，是第 126 行那条「删索引备份」的断言太脆。** 具体：
 
-**未定位**：无法在无 Android SDK 的环境里复现，判断与 CI 机器 IO 时序有关。下次红时先看
-`shards=` 与 `indexExists=`——若分片文件缺失，是真 bug（写失败被吞），要查 `AtomicJsonFile`；
-若分片都在，是「恢复后 ids 少一个」，要查 `readShard(stem)` 的 id 映射。
+```kotlin
+assertTrue("删索引备份", File(root, indexFile().name + AtomicJsonFile.BACKUP_SUFFIX).delete())
+```
+
+`.bak` 只在「主文件已存在时的**再一次**写」才产生（见 `AtomicJsonFile.writeLocked`：先
+`copyTo(bak)` 再 rename）。而 `ConversationStore.schedulePersist` 有 400ms 去抖，seed 期间的
+四次改动（两次 create + 两次 append）大多合并成一次写——**一次写不会留 .bak**。
+写几次取决于 flush 与去抖计时器的相对时序，慢机器上反而更容易写两次。
+
+用真实 store 循环 200 次量了一遍：**192 次有 .bak，8 次没有（4%）**。这就是「本地 300 轮
+不复现、CI 四次红」的全部解释——不是概率低到看不见，是之前没有用对的复现姿势
+（旧复现程序没打在「.bak 存不存在」这个变量上）。
+
+修法：断言的对象从「删除动作的返回值」改成「删完之后 .bak 不存在」。用例要的是
+「两份都不可用」（否则 recover 会走 `.bak` 而不是分片扫描），不是「备份一定存在」。
+「有 .bak 但内容坏」由 `corruptIndexAndBackup` 那条用例覆盖，两条合起来才是完整分支覆盖。
 
 ### 5.6 坑四：沙箱清理后 45 个 runner 集体 SKIP
 
