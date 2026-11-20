@@ -285,8 +285,8 @@ fi
 # 构造函数是 private 的：只能经 build() 造。这一条钉住 TurnJournal 真的调了 build
 # （而不是拿一份空结论充数——那样会把「有写操作已生效」整个吞掉，且不报错）。
 TJ=core/src/main/java/com/beichen/polaris/core/agent/journal/TurnJournal.kt
-if awk '/suspend fun recoveryFor[(]/,/^    }/' "$TJ" | grep -q 'StartupRecovery.build(state, orphans'; then
-  good "[I] recoveryFor 把扫描结果真的合成了（build(state, orphans)）"
+if awk '/suspend fun recoveryFor[(]/,/^    }/' "$TJ" | grep -q 'StartupRecovery.build(orphans'; then
+  good "[I] recoveryFor 把扫描结果真的合成了（build(orphans)）"
 else
   bad "[I] recoveryFor 没有调用 StartupRecovery.build —— 日志结论被吞，写操作会被重做"
 fi

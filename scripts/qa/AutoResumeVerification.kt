@@ -284,7 +284,6 @@ fun main() {
     println("[J] 恢复结论：两份证据（运行态 + 回合日志）合成一个对象")
 
     val both = StartupRecovery.build(
-        state = state(),
         orphans = listOf(
             StartupRecovery.Orphan("write_file", true),
             StartupRecovery.Orphan("write_file", true),
@@ -303,14 +302,14 @@ fun main() {
         bothNote != null && "write_file" in bothNote && "可能已经生效" in bothNote,
         "实际=${bothNote ?: "null"}")
 
-    val safeOnly = StartupRecovery.build(state(), listOf(StartupRecovery.Orphan("read_file", false)))
+    val safeOnly = StartupRecovery.build(listOf(StartupRecovery.Orphan("read_file", false)))
     check("J4 只有「未派发」→ 不阻塞续跑（白烧一轮也是成本）", !safeOnly.resumeBlocked)
     check("J5 只有「未派发」→ 提示仍说可以安全重试",
         safeOnly.note?.let { "可以安全重试" in it } == true, "实际=${safeOnly.note ?: "null"}")
     check("J6 没有孤儿调用 → 不产生提示（不制造噪声）",
-        StartupRecovery.build(state(), emptyList()).note == null)
+        StartupRecovery.build(emptyList()).note == null)
     check("J7 anomalies 原样带出（只进诊断，不参与裁决）",
-        StartupRecovery.build(state(), emptyList(), 3).anomalies == 3)
+        StartupRecovery.build(emptyList(), 3).anomalies == 3)
 
     println("")
     println("$pass 通过 / $fail 失败")

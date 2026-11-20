@@ -1,28 +1,31 @@
 package com.beichen.polaris.core.agent
 
 /**
- * 冷启动恢复的**唯一**结论：把「运行态对账」与「回合日志扫描」两份证据合成一个对象。
+ * 冷启动恢复的**日志侧结论**：一次回合日志扫描留下了什么。
  *
- * ## 为什么必须合成
+ * ## 它为什么存在
  *
- * 这两份证据本来各跑各的：
- *  - [AgentRunState] 记「整个任务跑到第几步」，产出「上次任务被中断，已自动继续」；
+ * 「上次进程死在哪」有两个互不相同的证据源：
+ *  - 运行态（`AgentRunState`）记「整个任务跑到第几步」，产出「上次任务被中断，已自动继续」；
  *  - 回合日志记「本回合每个工具调用越没越过执行边界」，产出「3 个写操作结局未知」。
  *
- * 分开跑时有一个**只会在真机上复现**的漏洞：自动续跑只等运行态（`runStateReady`），
- * 日志扫描是另一个协程，于是「有写操作可能已生效」这件事**赶不上**裁决——
- * 应用照样发一句「继续」，模型看到的历史里也没有「上次那个 write_file 可能已经生效」，
- * 于是把同一件事再做一遍。代码全绿、日志全绿，只有用户的文件被写了两遍。
+ * 以前这两件事各跑各的协程，自动续跑只等前者——于是「有写操作可能已生效」赶不上裁决：
+ * 应用照样发一句「继续」，模型看到历史里「我来写这个文件」就断了，照着重做一遍。
+ * 代码全绿、日志全绿，只有用户的文件被写了两遍。
  *
- * 所以合成点必须在这里：**结果**只有一份，谁先谁后都不成立。
+ * 现在日志侧的结论由 [com.beichen.polaris.core.agent.journal.TurnJournal.recoveryFor] 产出，
+ * 与运行态一起在**同一条 IO 链**上完成，再由上层合流成一次裁决。
  *
- * ## 不放 ViewModel 的理由
+ * ## 为什么这个类不含运行态
  *
- * 文案与计数都是纯数据变换，放进 ViewModel 就只能靠 grep 断言。放这里可以被 harness
- * 真编真跑（[scripts/qa/AutoResumeVerification.kt] 的 C 段）。
+ * 刻意只装日志事实。带 `AgentRunState` 的话，它就依赖 `AgentRunStateStore`（序列化 + 文件），
+ * 于是 `run-journal-verification.sh` 编不动它——「恢复结论」这一层又只剩 grep 断言。
+ * 现在它只依赖标准库，能被那个 harness 真编真跑（J 段逐条断言）。
+ *
+ * 合流点在上层的 `StartupSnapshot`（app 层），那里才有 `_interruptedNotice` 需要的
+ * 「运行态那句提示」。
  */
 data class StartupRecovery private constructor(
-    val state: AgentRunState?,
     /** 越过了执行边界、但没记到结果的写操作数。 */
     val unknownWrites: Int,
     /** 声明了但没派发，重试绝对安全的调用数。 */
@@ -41,7 +44,7 @@ data class StartupRecovery private constructor(
      */
     val resumeBlocked: Boolean get() = unknownWrites > 0
 
-    /** 日志里的一条未应答调用。只保留裁决需要的两件事，不把 journal 包拖进来。 */
+    /** 日志里的一条未应答调用。只保留裁决需要的两件事。 */
     data class Orphan(val toolName: String, val mayHaveTakenEffect: Boolean)
 
     /** 恢复期要注入下一轮请求的说明；没有孤儿调用时为 null。 */
@@ -64,18 +67,20 @@ data class StartupRecovery private constructor(
 
     companion object {
 
-        val EMPTY = build(null, emptyList())
+        val EMPTY = build(emptyList())
 
         /**
          * 合成。纯函数：不读时间、不碰 IO、不写日志。
          *
          * 顺序敏感——[unknownTools] 用 `distinct()` 保序去重，提示里先说哪个工具
          * 取决于日志里的声明顺序，这与模型当时的意图一致。
+         *
+         * 构造是 private 的：只能经这里造。否则调用方可以 `StartupRecovery(state, 0, 0)`
+         * 拿一份「什么都没发生」的结论，把日志事实整个吞掉——而且不报错。
          */
-        fun build(state: AgentRunState?, orphans: List<Orphan>, anomalies: Int = 0): StartupRecovery {
+        fun build(orphans: List<Orphan>, anomalies: Int = 0): StartupRecovery {
             val unknown = orphans.filter { it.mayHaveTakenEffect }
             return StartupRecovery(
-                state = state,
                 unknownWrites = unknown.size,
                 safeRetries = orphans.size - unknown.size,
                 unknownTools = unknown.map { it.toolName }.filter { it.isNotBlank() }.distinct(),

@@ -35,6 +35,9 @@ fi
 
 JV="$ROOT/scripts/qa/journal-verify"
 SRC="$ROOT/core/src/main/java/com/beichen/polaris/core/agent/journal"
+# StartupRecovery 在父包里（agent/）。刻意不带 AgentRunState：那会把
+# AgentRunStateStore（序列化 + 文件）拖进来，这个 harness 就编不动了。
+RECOVERY="$ROOT/core/src/main/java/com/beichen/polaris/core/agent/StartupRecovery.kt"
 # P5-1：RunJournal 的修复路径要记「重放了几次」，故连上遥测（两个纯 JVM 文件，零 Android 依赖）
 TELEMETRY="$ROOT/core/src/main/java/com/beichen/polaris/core/telemetry"
 OUT=/tmp/qa-verify-journal
@@ -53,6 +56,7 @@ if ! java -cp "$KOTLINC:$STDLIB:$COROUTINES:$TROVE:$JB_ANNOTATIONS" \
     "$JV/stubs/AgentLogger.kt" "$JV/stubs/ToolCall.kt" "$JV/stubs/ToolCallOutcome.kt" \
     "$JV/RepairVerification.kt" "$JV/JournalIoVerification.kt" "$JV/TurnJournalVerification.kt" \
     "$SRC/RunEvent.kt" "$SRC/RunScope.kt" "$SRC/RunEventJson.kt" "$SRC/RunJournalRepair.kt" "$SRC/RunJournal.kt" "$SRC/TurnJournal.kt" \
+    "$RECOVERY" \
     "$TELEMETRY/TraceSink.kt" "$TELEMETRY/StoreWriteTrace.kt" \
     > "$COMPILE_LOG" 2>&1; then
   echo "编译失败：" >&2

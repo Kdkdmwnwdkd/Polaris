@@ -70,11 +70,21 @@ else
 fi
 
 # 默认值的方向：忘记表态时必须是拒绝，不能是放行。
-unset_n=$(grep -c 'Consent\.unset(' "$EXEC" "$LOOP" "$SUB" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
-if [ "${unset_n:-0}" -ge 3 ]; then
-  pass "A3 三处默认值都是 Consent.unset()（缺省方向为关）"
+# 2026-11-20 口径变更：三处 `Consent.unset(...)` 已收成 `LoopDefaults.CONSENT` 一处
+# （第八批：工厂与 loop 的默认值单一真源）。原来数「≥3」会把收口误判成退步，
+# 所以改判「来源唯一 + 方向仍是 Deny」——收口反而更好验证：只有一处可改。
+# 判据：**三条执行通道各一处默认值**（通道名不同才说明不是复制粘贴），且方向是 Deny。
+# 只数总数不够——三处都写同一个 channel 名，等于有一处抄错了。
+DEF="$CORE/agent/LoopDefaults.kt"
+unset_n=$(grep -rh 'Consent\.unset(' "$CORE" --include="*.kt" 2>/dev/null | grep -vc '^[[:space:]]*\(//\|\*\)' || true)
+channel_n=$(grep -rho 'Consent\.unset("[A-Za-z]*")' "$CORE" --include="*.kt" 2>/dev/null | sort -u | grep -c . || true)
+deny_ok=0
+awk '/fun unset\(channel: String\)/{f=1} f&&/Deny\(/{found=1} END{exit !found}' "$CORE/Consent.kt" && deny_ok=1
+if [ "${unset_n:-0}" -eq 3 ] && [ "${channel_n:-0}" -eq 3 ] && [ "$deny_ok" -eq 1 ] \
+   && grep -q 'Consent\.unset("RealAgentLoop")' "$DEF"; then
+  pass "A3 三条通道各一处默认值（名字互不相同），方向为拒绝"
 else
-  fail "A3 只找到 ${unset_n:-0} 处 Consent.unset()，预期 ≥3 —— 有一处默认值可能仍是放行"
+  fail "A3 默认值处数=${unset_n:-0}/通道名=${channel_n:-0}（应 3/3）/ Deny=$deny_ok —— 分散、抄重或放行都会让「忘传」变成默认同意"
 fi
 
 # 四个生产入口必须逐个表态。这是默认值方案唯一的代价：默认值让「忘了传」仍能编译，

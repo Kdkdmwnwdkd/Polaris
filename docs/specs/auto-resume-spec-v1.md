@@ -29,7 +29,7 @@
 | 运行态落盘 | `AgentRunStateStore` | 知道上次做到第几步、做过哪些工具 |
 | 冷启动对账 | `reconcile()` | 把 `running` 改写成 `interrupted`，给一句提示 |
 | 续跑上下文 | `buildResumeContext()` | 用户说「继续」时，把进度摘要拼进下一轮请求 |
-| 孤儿调用提示 | `TurnJournal` / `recoverInterruptedJournal` | 提示「某个写操作可能已经生效，别重做」 |
+| 孤儿调用判定 | `TurnJournal.recoveryFor()` → `StartupRecovery` | 有写操作「结局未知」时**不自动续跑**，并说明哪个工具可能已经生效 |
 
 也就是说：**能力全齐了，只差最后一步没人推**。用户要自己打两个字。
 
@@ -52,22 +52,35 @@
 自己判断「接着做什么」。这不是缺陷，而是这件事的本质。
 
 > 由此带来一条硬约束：**重放可能重复已完成的副作用**。
-> 这一条已由既有的 R1 孤儿调用机制兜住——它会把「越过了执行边界但没记到结果」的
-> 工具调用列出来，注入下一轮，提醒模型先核对再动手。自动续跑复用同一个 `send()`
-> 入口，因此这段提示**照样会被注入**（见 §5.3）。
+> 2026-11-20 起这条约束由**判定表**保证，不再只靠提示：日志里只要存在
+> 「越过了执行边界但没记到结果」的写操作（`StartupRecovery.unknownWrites > 0`），
+> 自动续跑直接不跑（`UNKNOWN_WRITES`），并把那个工具名告诉用户。
+>
+> 为什么不能只靠提示：提示是注入给**模型**的，而模型在「历史里我刚说了要写文件、
+> 然后对话断了」这个上下文里最容易做的动作就是再写一次。把决定权交给它，等于赌它
+> 每次都读懂了提示——而失败代价是用户的文件被覆盖，且没有任何报错。
 
 ### 2.2 执行路径
 
 ```
 冷启动
-  └─ IO 协程：reconcile()  → running 变 interrupted，落盘
-       └─ complete(interrupted)            ← runStateReady（Deferred）
+  └─ IO 协程（**同一协程内串行**）
+       ├─ reconcile()            → running 变 interrupted，落盘
+       ├─ turnJournal.recoveryFor(state)
+       │     ├─ scanAndRepair()  → 未闭合回合补尾
+       │     └─ StartupRecovery  → 「几个写操作结局未知 / 几个未派发」
+       └─ complete(recovery)     ← runStateReady（Deferred，两份证据都到齐才放行）
 类体末尾的 init                              ← 这里所有字段都已初始化
-  └─ await() 拿到结论
+  └─ await() 拿到 recovery
        └─ AutoResumePolicy.decide(...)     ← 纯函数，core，JVM 可测
-            ├─ RESUME       → markAutoResumeAttempt() → input="继续" → send()
-            └─ PROMPT_ONLY  → 只显示一句「为什么没自动跑」
+            ├─ RESUME          → markAutoResumeAttempt() → input="继续" → send()
+            ├─ PROMPT_ONLY     → 只显示一句「为什么没自动跑」
+            └─ UNKNOWN_WRITES  → 不跑；沿用启动提示（带工具名），不覆盖它
 ```
+
+**为什么两份证据必须同一条链**：改前 `scanAndRepair()` 跑在另一个协程里，
+自动续跑只等运行态——于是「有写操作可能已生效」赶不上裁决，应用照样发「继续」。
+那个窗口在正常速度的设备上只有几十毫秒，肉眼看不见，但后果是文件被写两次。
 
 **为什么必须绕 `runStateReady` 这个 Deferred**：对账在第 991 行那个 `init` 里、跑在 IO 线程；
 而自动续跑要用 `_activeConversationId`（第 1150 行才初始化）和 `modelReady`。
@@ -85,7 +98,7 @@
 ## 3. 决策表
 
 判定全部在 `AutoResumePolicy.decide()`，一个**纯函数**：同样输入永远同样输出，
-不读时钟、不做 IO。理由枚举 `AutoResumeReason` 有 11 个取值，逐个对应一种真实现场。
+不读时钟、不做 IO。理由枚举 `AutoResumeReason` 有 12 个取值，逐个对应一种真实现场。
 
 | 判据 | 结果 | 理由 |
 |---|---|---|
@@ -95,6 +108,7 @@
 | 此刻已有回合在跑 | SKIP | `BUSY` |
 | 用户正在输入框里打字 | SKIP | `INPUT_BUSY` |
 | 用户关了开关 | SKIP | `DISABLED` |
+| 上次有写操作结局未知 | PROMPT_ONLY | `UNKNOWN_WRITES` |
 | 没留下原始请求 | PROMPT_ONLY | `NO_PROMPT` |
 | 已自动续跑 ≥ 2 次 | PROMPT_ONLY | `ATTEMPT_LIMIT` |
 | 中断超过 24 小时 | PROMPT_ONLY | `TOO_OLD` |
@@ -114,10 +128,12 @@
 
 ### 3.2 判定顺序
 
-先判「能不能跑」（状态 / 未完成 / 不忙 / 用户没在打字），再判「该不该跑」（开关 / 熔断 / 时效），
-最后判「跑得成吗」（会话 / 模型 / 有没有原始请求）。
+先判「能不能跑」（状态 / 未完成 / 不忙 / 用户没在打字），再判「该不该跑」
+（开关 / **写操作是否结局未知** / 熔断 / 时效），最后判「跑得成吗」（会话 / 模型 / 原始请求）。
 
 顺序反了会出现「明明正在跑别的任务，却弹一句『上次任务已过期』」这种噪声。
+「结局未知的写操作」排在开关**之后**、熔断**之前**：它是正确性判断（会把同一件事做两遍），
+比任何成本理由都靠前；但用户自己关掉开关时，对他说话的那一句仍应是「你关了这个功能」。
 
 ### 3.2.1 为什么「用户正在打字」也要拦住
 
@@ -155,7 +171,7 @@
 
 ### 5.1 它是重放，不是恢复
 
-见 §2.1。副作用可能重复，靠 R1 孤儿提示兜底。
+见 §2.1。**有结局未知的写操作时不续跑**（`UNKNOWN_WRITES`）；只在「未派发」或纯推理丢失时续跑，那种重复没有副作用。
 
 ### 5.2 只在「当前会话」自动跑
 
@@ -175,7 +191,7 @@
 
 ## 6. 真机待验
 
-见 `docs/ops/DEVICE-VERIFICATION-PENDING.md` 的 **P14**（3 条）。
+见 `docs/ops/DEVICE-VERIFICATION-PENDING.md` 的 **P14**（4 条，其中 P14-4 专门验「有未知写操作时不续跑」）。
 
 必须真机的理由：模拟器上很难稳定制造「进程被杀」这件事，
 而这正是本功能的触发条件。CI 与 harness 只能证明**判定逻辑**对，

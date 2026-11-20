@@ -242,7 +242,15 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      *
      * 必定 complete（含异常路径），否则末尾的 await 会永远挂着，功能静默失效。
      */
-    private val runStateReady = CompletableDeferred<StartupRecovery?>()
+    private val runStateReady = CompletableDeferred<StartupSnapshot?>()
+
+    /**
+     * 两份证据的合流点：自动续跑要同时知道「任务做到哪」与「日志里有没有结局未知的写」。
+     *
+     * 合成一个对象而不是传两个参数，是为了让「只拿到一半」在类型上不可能——
+     * 这正是第七批要修的那个洞（续跑先于日志扫描）。
+     */
+    private data class StartupSnapshot(val state: AgentRunState?, val journal: StartupRecovery)
 
     /**
      * R1：回合日志。目录 `filesDir/run-journal`，只保留最近 20 个回合。
@@ -310,11 +318,12 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 代价是界面上会多一条用户气泡「继续」。它确实是应用替用户表达的意思，
      * 而且上面那条提示会同时写着「已自动继续」，不会被误认为是自己打的。
      *
-     * 入参是 [StartupRecovery]，不是单个运行态：`unknownWrites` 必须一起送进裁决，
-     * 否则「上次那个 write_file 可能已经生效」这件事到不了判定表里（见该类的注释）。
+     * 入参是 [StartupSnapshot]，不是单个运行态：`unknownWrites` 必须一起送进裁决，
+     * 否则「上次那个 write_file 可能已经生效」这件事到不了判定表里（见 [StartupRecovery]）。
      */
-    private fun autoResumeIfPossible(recovery: StartupRecovery) {
-        val state = recovery.state
+    private fun autoResumeIfPossible(snapshot: StartupSnapshot) {
+        val state = snapshot.state
+        val recovery = snapshot.journal
         val verdict = AutoResumePolicy.decide(
             AutoResumeInput(
                 state = state,
@@ -828,7 +837,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             val state = runCatching { agentRunStateStore.reconcile() }.getOrNull()
             // 扫描 + 合成在 core（输出可被纯 JVM 断言）。异常也不能跳过 complete——
             // 跳过等于 await 永久挂起、自动续跑静默失效。
-            val recovery = runCatching { turnJournal.recoveryFor(state) }
+            val recovery = runCatching { turnJournal.recoveryFor() }
                 .getOrDefault(StartupRecovery.EMPTY)
             pendingRecoveryNote = recovery.note
             // 提示优先级：有写操作结局未知时以日志那句为准（它带工具名与「不会自动重做」），
@@ -838,7 +847,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 !state?.note.isNullOrBlank() -> state?.note
                 else -> recovery.note
             }
-            runStateReady.complete(recovery)
+            runStateReady.complete(StartupSnapshot(state, recovery))
         }
         // 技能工具是第二阶段装配：SkillExecutor 构造时要一张**已建好**的工具表
         // （技能脚本通过它调工具），所以不可能和 52 个内建工具一起注册。
@@ -3217,8 +3226,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // 挂在这一段而不是前面那个 init：这里所有字段都已初始化，读 _activeConversationId /
         // modelReady / configStore 才是安全的。
         viewModelScope.launch {
-            val recovery = runStateReady.await() ?: return@launch
-            autoResumeIfPossible(recovery)
+            val snapshot = runStateReady.await() ?: return@launch
+            autoResumeIfPossible(snapshot)
         }
     }
 }

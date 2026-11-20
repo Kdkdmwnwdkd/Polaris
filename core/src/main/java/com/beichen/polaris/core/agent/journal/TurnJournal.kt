@@ -2,7 +2,6 @@ package com.beichen.polaris.core.agent.journal
 
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.ToolCall
-import com.beichen.polaris.core.agent.AgentRunState
 import com.beichen.polaris.core.agent.StartupRecovery
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -105,7 +104,7 @@ class TurnJournal(
         }
 
     /**
-     * 冷启动恢复：扫描未闭合回合，把日志事实合成 [StartupRecovery]。
+     * 冷启动恢复（日志侧）：扫描未闭合回合，把日志事实合成 [StartupRecovery]。
      *
      * 为什么放在这里而不是 ViewModel：输出要能进纯 JVM 断言（ViewModel 编不了），
      * 而输入（扫描结果）只有本类拿得到。ViewModel 那边于是只剩「把结果交出去」。
@@ -115,7 +114,7 @@ class TurnJournal(
      * 只按「工具有没有副作用」判，会让一个根本没启动的 `rm` 也走「先核对」，白烧一轮；
      * 只按「日志有没有记录」判，又会让已生效的写操作被重放。
      */
-    suspend fun recoveryFor(state: AgentRunState?): StartupRecovery {
+    suspend fun recoveryFor(): StartupRecovery {
         val results = scanAndRepair()
         val orphans = results.flatMap { it.orphans }
             .map { StartupRecovery.Orphan(it.toolName, it.mayHaveTakenEffect) }
@@ -131,7 +130,7 @@ class TurnJournal(
                     orphans.joinToString { "${it.toolName}:${it.mayHaveTakenEffect}" }
             )
         }
-        return StartupRecovery.build(state, orphans, anomalies.size)
+        return StartupRecovery.build(orphans, anomalies.size)
     }
 
     /** 只保留最近 [keep] 个回合的日志。回合结束时调用，失败无所谓。 */
