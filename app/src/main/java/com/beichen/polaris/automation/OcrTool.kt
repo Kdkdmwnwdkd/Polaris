@@ -7,18 +7,12 @@ import com.beichen.polaris.core.AgentTool
 import com.beichen.polaris.core.JsonSchema
 import com.beichen.polaris.core.ToolResult
 import com.beichen.polaris.core.workspace.PathGuard
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
-import kotlin.coroutines.resume
 
 /**
  * ocr_image（W-24，缺口清单 #69）：离线识别图片中的文字（中文 + 英文混排）。
@@ -146,27 +140,6 @@ class OcrTool(
     /** 工作区路径解析（防目录穿越）。判据统一在 [PathGuard]，别再手写前缀比较。 */
     private fun resolveWorkspaceFile(rel: String): File? = PathGuard.resolveInside(workspace, rel)
 
-    /**
-     * ML Kit 识别（中文识别器同时支持英文/数字混排）。
-     *
-     * 用 suspendCancellableCoroutine 包 Task：不引入 play-services-tasks 的 await 扩展，
-     * 少一个依赖、也少一类版本冲突。超时 15 秒（大图首次加载模型会慢）。
-     */
-    private suspend fun recognize(bitmap: Bitmap): String? = withTimeoutOrNull(15_000) {
-        val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
-        try {
-            suspendCancellableCoroutine { cont ->
-                val image = InputImage.fromBitmap(bitmap, 0)
-                recognizer.process(image)
-                    .addOnSuccessListener { result ->
-                        if (cont.isActive) cont.resume(result.text)
-                    }
-                    .addOnFailureListener { e ->
-                        if (cont.isActive) cont.resume(null)
-                    }
-            }
-        } finally {
-            runCatching { recognizer.close() }
-        }
-    }
+    /** 识别交给 [OcrEngine]——`ui_tree` 的降级路径要用同一套（带坐标的那份）。 */
+    private suspend fun recognize(bitmap: Bitmap): String? = OcrEngine.recognizeText(bitmap)
 }

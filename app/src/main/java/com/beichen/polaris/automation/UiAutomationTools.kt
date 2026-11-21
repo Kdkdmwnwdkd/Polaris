@@ -4,6 +4,7 @@ import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.automation.shizuku.ShizukuShell
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.AgentTool
+import com.beichen.polaris.core.agent.OcrPseudoTree
 import com.beichen.polaris.core.JsonSchema
 import com.beichen.polaris.core.ToolResult
 import kotlinx.coroutines.CancellationException
@@ -162,13 +163,85 @@ private fun intArg(args: JsonObject, key: String): Int? =
 private fun strArg(args: JsonObject, key: String): String? =
     args[key]?.primOrNull()?.contentOrNull
 
+/**
+ * P1-2：真树读不到时的兜底——截一帧、OCR 出带坐标的文字，拼棵伪树。
+ *
+ * ## 兜的是什么
+ *
+ * 自绘界面（Flutter / 游戏 / 小程序 WebView / 部分 ROM 的隐私页）里
+ * `rootInActiveWindow` 有值但遍历下来零个有效节点，`kept == 0`。
+ * 原来这里只回一句「稍等片刻重新调用」——模型重试两次拿到两次空，就只能瞎点或问用户。
+ * 而屏幕上有字，字的位置本身就是「哪里能点」。
+ *
+ * ## 为什么不是直接建议「用 ui_screenshot」
+ *
+ * 截图只对**视觉模型**有意义。用户挂的是文本模型（国内常见）时，一张 PNG 扔进上下文
+ * 等于什么也没给。OCR 出的是文字 + 坐标，任何模型都能读、能点。
+ *
+ * @return null 表示「兜底也没东西可给」，调用方必须回落原来的提示，不许假装成功
+ */
+private suspend fun readPseudoTree(service: AgentAccessibilityService): ToolResult? {
+    val started = android.os.SystemClock.elapsedRealtime()
+    // 截图依赖无障碍（API 30+）。不满足就没什么可兜的——这条路走不通是事实，不要去猜。
+    if (!canUseA11yScreenshot(AutomationBridge.isReady(), android.os.Build.VERSION.SDK_INT)) return null
+
+    val shot = withContext(Dispatchers.Main) {
+        runCatching { service.takeScreenshotViaA11y() }.getOrNull()
+    } ?: return null
+
+    // 尺寸必须在 recycle 之前取走：位图回收后再访问 width 会抛 IllegalStateException，
+    // 而这个异常会被外层 catch 吞成「读取界面失败」，把一次成功降级说成失败。
+    val imageWidth = shot.width
+    val imageHeight = shot.height
+    val lines = try {
+        OcrEngine.recognizeLines(shot)
+    } finally {
+        runCatching { shot.recycle() }
+    }.orEmpty()
+
+    val screen = service.resources.displayMetrics
+    val pseudo = OcrPseudoTree.build(
+        lines = lines,
+        imageWidth = imageWidth,
+        imageHeight = imageHeight,
+        screenWidth = screen.widthPixels,
+        screenHeight = screen.heightPixels
+    ) ?: return null
+
+    // 少于三条字更有可能是「页面正在过渡」（白屏、启动页、转场），而不是自绘界面。
+    // 此时给伪树等于把上一屏的残影当成当前界面——模型会照着它点，且点得「很成功」。
+    // 宁可回原来的「稍等再试」，也不给一份可能过期的地图。
+    if (pseudo.kept < MIN_PSEUDO_NODES) {
+        AgentLogger.i("UiTree", "OCR 兜底只有 ${pseudo.kept} 条文字，判为过渡态，不给伪树")
+        return null
+    }
+
+    val cost = android.os.SystemClock.elapsedRealtime() - started
+    AgentLogger.i("UiTree", "无障碍树无有效节点，已降级为 OCR 伪树：${pseudo.kept} 条，耗时 ${cost}ms")
+
+    val msg = buildString {
+        append("无障碍树里没有有效节点（典型于自绘界面：小程序 / Flutter / 游戏 / RN 页面），")
+        append("已改用截图 OCR 生成伪结构：${pseudo.kept} 条文字，bounds 是文字框（单位与 ui_tap 一致，像素）。")
+        if (pseudo.dropped > 0) append("另有 ${pseudo.dropped} 条因超出上限未列出。")
+        append("注意三点：")
+        append("① 这里的界面只能用 ui_tap 按 bounds 中心坐标点——ui_click 依赖真实控件节点，本界面没有，调它必然失败；")
+        append("② clickable 是按「该处有文字」推测的，不是实测值；")
+        append("③ 文字可能被截断（末尾省略号），但仍按它的框中心点。")
+    }
+    return ToolResult.ok(code = "ui_tree_ok_ocr", message = msg, data = pseudo.json)
+}
+
+/** 低于这个条数不认为是「可读界面」，见 [readPseudoTree] 的过渡态判断。 */
+private const val MIN_PSEUDO_NODES = 3
+
 /* ------------------------------------------------------------------ */
 /* ui_tree                                                             */
 /* ------------------------------------------------------------------ */
 class UiTreeTool : AgentTool {
     override val name = "ui_tree"
     override val description =
-        "读取当前屏幕的 UI 结构（精简 JSON 数组）。每个元素含 text/desc（内容描述）/id/cls（类名）/bounds（left,top,right,bottom 像素坐标）/clickable/scrollable/editable/checked。在分析屏幕或决定点哪里之前先调用它；ui_tap/ui_click 的坐标与目标都以它为准。每次操作后界面已变，需重新调用本工具；同一界面内容未变时不要重复调用。"
+        "读取当前屏幕的 UI 结构（精简 JSON 数组）。每个元素含 text/desc（内容描述）/id/cls（类名）/bounds（left,top,right,bottom 像素坐标）/clickable/scrollable/editable/checked。在分析屏幕或决定点哪里之前先调用它；ui_tap/ui_click 的坐标与目标都以它为准。每次操作后界面已变，需重新调用本工具；同一界面内容未变时不要重复调用。" +
+            "若返回的条目带 src=ocr，说明这个界面读不到真实控件（自绘界面），这些是从画面文字识别出来的：只能用 ui_tap 按 bounds 中心坐标点，不要用 ui_click。"
     override val systemPrompt =
         "你可以通过 ui_tree 读取当前屏幕结构，并用 ui_tap/ui_long_press/ui_swipe/ui_input/ui_key/ui_click 操作手机——这是操控界面的唯一可行通道。坐标取自 ui_tree 返回的 bounds（格式 left,top,right,bottom）。每次操作后重新 ui_tree 确认界面；界面内容未变则不要重复读取。"
     override val parameters = JsonSchema.objectSchema()
@@ -216,13 +289,16 @@ class UiTreeTool : AgentTool {
             // W-7 P1-1：用带陈旧窗口防护的新版抓取——刚切换窗口时根节点可能没跟上，
             // 会自动轮询等待（≤1.5s），避免模型拿到 [] 或 AgentKit 自己的界面。
             val snap = withContext(Dispatchers.Main) { svc.getFreshUiTreeSnapshot() }
+            // P1-2：树里一个有效节点都没有 → 这多半是自绘界面，别再让模型「稍等重试」空转。
+            // 走 OCR 兜底；兜不到（过渡态/截图不可用）就照原样返回空树提示。
+            if (snap.kept == 0) readPseudoTree(svc)?.let { return it }
             val msg = buildString {
                 append("已读取当前界面结构（${snap.json.length} 字符，保留 ${snap.kept} 个有效节点")
                 if (snap.filtered > 0) append("，已过滤 ${snap.filtered} 个纯容器节点")
                 append("）")
                 if (snap.kept == 0) {
                     // kept=0 且没抛异常：要么界面真在切换中（启动应用/跳转后的过渡态），
-                    // 要么当前前台是没有可读节点的界面。给模型明确的自纠指引。
+                    // 要么前台画面里根本没有文字（纯图标/纯图形界面）。
                     append("。未读到可交互节点——可能界面正在切换（如刚打开新应用/页面），稍等片刻重新调用本工具；")
                     append("若持续为空，可先用 device_foreground_app 确认前台应用，或用 ui_screenshot 直接看屏幕。")
                 }
@@ -231,7 +307,9 @@ class UiTreeTool : AgentTool {
         } catch (c: CancellationException) {
             throw c // 同上：withContext(Dispatchers.Main) 的取消不得吞成 ui_tree_error
         } catch (e: Exception) {
-            ToolResult.fail(
+            // 读树本身抛异常时也值得兜一次：厂商 ROM 在自绘页上偶尔直接抛
+            // （不是返回空，而是构造 Snapshot 时 NPE）。兜到了就正常返回伪树。
+            readPseudoTree(svc) ?: ToolResult.fail(
                 code = "ui_tree_error",
                 message = "读取界面失败：${e.message}",
                 hint = "确认无障碍服务在线；稍后重试或改用 ui_screenshot 看屏幕。"
