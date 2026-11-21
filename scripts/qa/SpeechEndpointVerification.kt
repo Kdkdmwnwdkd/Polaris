@@ -109,23 +109,27 @@ fun main() {
         assertTrue("没说过话却被判说完了，会话会提交一句空话", !t.shouldEnd())
     }
 
-    check("A2 说完话后静音满 1 秒判停") {
+    check("A2 干脆的人说完 800ms 就判停") {
         val t = SpeechPresence.Tracker()
         t.feed(SPEECH, 400)
-        t.feed(QUIET, 900)
-        assertTrue("900ms 还不够", !t.shouldEnd())
+        t.feed(QUIET, 700)
+        assertTrue("700ms 还没到下限", !t.shouldEnd())
         t.feed(QUIET, 100)
-        assertTrue("1000ms 到了该收尾", t.shouldEnd())
+        assertTrue("800ms 到了该收尾", t.shouldEnd())
+        assertEquals("没停过顿，阈值取最小值", SpeechPresence.MIN_END_SILENCE_MS, t.endSilenceMs)
     }
 
-    check("A3 句中停顿不判停，两边的话都算") {
+    check("A3 句中停顿不判停，两边的话都算，阈值同时抬高") {
         val t = SpeechPresence.Tracker()
         t.feed(SPEECH, 300)
         t.feed(QUIET, 600)
+        assertTrue("600ms 还不够判停", !t.shouldEnd())
         t.feed(SPEECH, 400)
         assertEquals("两段都要累计", 700, t.voiced)
-        assertTrue("停顿后才 600ms，不该判停", !t.shouldEnd())
+        assertEquals("停过 600ms，阈值应升到 1100", 1_100, t.endSilenceMs)
         t.feed(QUIET, 1_000)
+        assertTrue("刚停过 600ms，1000ms 还不能算句末", !t.shouldEnd())
+        t.feed(QUIET, 100)
         assertTrue(t.shouldEnd())
     }
 
@@ -167,8 +171,9 @@ fun main() {
         t.feed(QUIET, 700)
         t.feed(SPEECH, 100)
         assertEquals("尾部静音必须清零", 0, t.silence)
-        t.feed(QUIET, 900)
-        assertTrue("从「嗯」之后重新数，才 900ms", !t.shouldEnd())
+        assertEquals("停过 700ms，阈值升到 1200", 1_200, t.endSilenceMs)
+        t.feed(QUIET, 1_100)
+        assertTrue("从「嗯」之后重新数，才 1100ms", !t.shouldEnd())
         t.feed(QUIET, 100)
         assertTrue(t.shouldEnd())
     }
@@ -183,15 +188,61 @@ fun main() {
         assertTrue(!t.shouldEnd())
     }
 
-    check("A10 常量自洽：判停阈值在合理区间") {
+    check("A10 自适应区间自洽") {
         assertTrue(
-            "静音阈值要长于最小语音时长，否则一句话内部就会被切开",
-            SpeechPresence.END_SILENCE_MS > SpeechPresence.MIN_SPEECH_MS,
+            "下限要长于最小语音时长，否则一句话内部就会被切开",
+            SpeechPresence.MIN_END_SILENCE_MS > SpeechPresence.MIN_SPEECH_MS,
         )
         assertTrue(
-            "静音阈值 ${SpeechPresence.END_SILENCE_MS}ms 超出 500–2000 的可接受区间",
-            SpeechPresence.END_SILENCE_MS in 500..2_000,
+            "上限 ${SpeechPresence.MAX_END_SILENCE_MS}ms 超出 800–2000 的可接受区间",
+            SpeechPresence.MAX_END_SILENCE_MS in 800..2_000,
         )
+        assertTrue(
+            "上限必须高于下限，否则自适应区间是空的",
+            SpeechPresence.MAX_END_SILENCE_MS > SpeechPresence.MIN_END_SILENCE_MS,
+        )
+    }
+
+    check("A12 同样的停顿，判停时刻必须晚于停顿本身") {
+        // 自适应的唯一硬约束：阈值永远大于已观测到的最长停顿。
+        // 违反它 = 用户每停一次就被判一次说完，句子被切成碎片。
+        for (pause in 200..800 step 100) {
+            val t = SpeechPresence.Tracker()
+            t.feed(SPEECH, 300)
+            t.feed(QUIET, pause)
+            t.feed(SPEECH, 300)
+            assertTrue(
+                "停顿 ${pause}ms 后阈值只有 ${t.endSilenceMs}ms，下次同样长度的停顿会被判成句末",
+                t.endSilenceMs > pause,
+            )
+        }
+    }
+
+    check("A13 开麦先愣神不算句内停顿") {
+        // 用 700ms 而不是 2 秒：超过 800 的停顿本来就不进统计，
+        // 拿 2 秒测等于什么都没测——两种实现都会过。
+        val t = SpeechPresence.Tracker()
+        t.feed(QUIET, 700)
+        t.feed(SPEECH, 400)
+        assertEquals(
+            "还没开口，那段静音不该抬高阈值",
+            SpeechPresence.MIN_END_SILENCE_MS,
+            t.endSilenceMs,
+        )
+        t.feed(QUIET, 800)
+        assertTrue(t.shouldEnd())
+    }
+
+    check("A14 阈值可钉死，不被自适应改掉") {
+        val t = SpeechPresence.Tracker(fixedEndSilenceMs = 1_000)
+        t.feed(SPEECH, 300)
+        t.feed(QUIET, 600)
+        t.feed(SPEECH, 300)
+        assertEquals("钉死就该一直是 1000", 1_000, t.endSilenceMs)
+        t.feed(QUIET, 900)
+        assertTrue("900ms 还不够", !t.shouldEnd())
+        t.feed(QUIET, 100)
+        assertTrue(t.shouldEnd())
     }
 
     check("A11 与整段判据对同一段音频结论一致") {

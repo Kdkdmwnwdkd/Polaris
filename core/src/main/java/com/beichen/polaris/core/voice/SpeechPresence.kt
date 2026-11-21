@@ -52,12 +52,35 @@ object SpeechPresence {
     const val MIN_SPEECH_MS = 200
 
     /**
-     * 尾部连续静音超过这个时长，认为「这句说完了」。
+     * 静音阈值的下限：再干脆的人，说完也要给 800ms 才收尾。
      *
-     * 中文自然停顿（"我想想……嗯，就这样"）约 300–600ms，取 1000ms 才不会把
-     * 句中的思考停顿当成句末。代价是说完要多等 1 秒——比被截断重说划算。
+     * 低于这个数，一口气说完的短句会被句中的换气切成两半。
      */
-    const val END_SILENCE_MS = 1000
+    const val MIN_END_SILENCE_MS = 800
+
+    /**
+     * 静音阈值的上限：再爱停顿的人，等 1.3 秒也该收了。
+     *
+     * 上限不是为了准确，是为了让「说完」这件事有时间上的确定性——
+     * 否则一个习惯长停顿的用户会永远等下去，看起来就像卡住了。
+     */
+    const val MAX_END_SILENCE_MS = 1300
+
+    /**
+     * 自适应阈值在「已观测到的最长句内停顿」之上多留的余量。
+     *
+     * 500ms 来自中文换气的量级：句中换气 200–400ms，句末沉下来 600ms 以上。
+     * 取比最长停顿多 500ms，等于说「你停过多久我都等你，再多等半秒」。
+     */
+    const val PAUSE_MARGIN_MS = 500
+
+    /**
+     * 计入「句内停顿」统计的最长停顿。
+     *
+     * 超过 800ms 的停顿本来就该判停，把它记进统计只会让后面的阈值一路往上爬，
+     * 用户的下一句话反而更慢。所以只统计这个范围内的。
+     */
+    const val MAX_TRACKED_PAUSE_MS = 800
 
     /**
      * 增量判据里估底噪用的窗口：20 块。
@@ -190,11 +213,25 @@ object SpeechPresence {
      * 2. **只要有声就把尾部静音清零**。静音是「连续」概念，中间一个「嗯」
      *    就该重新计时，不然一段有停顿的话会被从停顿处切开。
      *
+     * ## 「等多久算说完」为什么不写死
+     *
+     * 上一版是 1000ms，拍出来的数字：短了会切句子，长了每句话都要多等。
+     * 但「多长算停顿」因人而异——有人一口气说完，有人每三个字停一下。
+     * 一个数字不可能同时对这两种人正确。
+     *
+     * 现在改成**按这个人自己的停顿习惯推**：记录本次录音里出现过的最长句内停顿，
+     * 阈值取 `最长停顿 + [PAUSE_MARGIN_MS]`，夹在 [MIN_END_SILENCE_MS] 与
+     * [MAX_END_SILENCE_MS] 之间。干脆的人 800ms 就收，爱停顿的人自动放宽，
+     * 但永远比他自己停过的最长处再多留半秒——所以永远比他慢半拍，不会被切。
+     *
+     * 这个值**只升不降**：一句里停过 600ms，后面就按 1100ms 等。降回去会让
+     * 同一句话的后半段更容易被切，而前半段已经证明了这个用户确实会停这么久。
+     *
      * ## 为什么还要一道「对比度」
      *
      * 录音开头 1 秒窗口里样本不足 10 个，估不出底噪，门限只能退到绝对下限 [FLOOR_RMS]。
      * 于是空调声（0.01，高于 0.006）在这 1 秒里会被误计成「有声」。如果只看
-     * 「有声够 200ms、静音够 1 秒」两条，空调一开一停就能把会话判结束——
+     * 「有声够 200ms、尾部静音够了」两条，空调一开一停就能把会话判结束——
      * 用户什么都没说，界面却自己关了。
      *
      * 所以判停前再看一眼**对比度**：有声段的平均电平必须比当前底噪高 [NOISE_MARGIN] 倍。
@@ -202,7 +239,13 @@ object SpeechPresence {
      * 比值 50，通过。这条恰好也是 [gateOf] 的定义——只是换成事后核验。
      */
     class Tracker(
-        private val endSilenceMs: Int = END_SILENCE_MS,
+        /**
+         * 钉死的静音阈值（毫秒）。
+         *
+         * 默认 null = 自适应。[LocalSpeechInput] 用默认；测试与「阈值必须钉死」的
+         * 场景可以显式传值，这样调自适应参数不会连带改掉它们的语义。
+         */
+        private val fixedEndSilenceMs: Int? = null,
         private val windowBlocks: Int = NOISE_WINDOW_BLOCKS,
     ) {
 
@@ -211,6 +254,9 @@ object SpeechPresence {
         private var voicedMs = 0
         private var silenceMs = 0
         private var totalMs = 0
+
+        /** 本次录音里出现过的最长「句内停顿」。自适应阈值就是它 + 余量。 */
+        private var maxPauseMs = 0
 
         /** 有声段的电平和：Σ rms × ms。判停前用它核算「这段到底算不算人声」。 */
         private var voicedWeighted = 0.0
@@ -227,6 +273,12 @@ object SpeechPresence {
             while (recent.size > windowBlocks) recent.removeFirst()
             totalMs += blockMs
             if (blockRms >= gateOf(recent.toFloatArray())) {
+                // 有声块来了：刚才那段静音是句内停顿，记下它有多长。
+                // voicedMs > 0 排除「按下麦克风先愣神」那一段——那不是句内停顿，
+                // 记进去只会把整句话的阈值顶高。
+                if (voicedMs > 0 && silenceMs in 1..MAX_TRACKED_PAUSE_MS) {
+                    maxPauseMs = max(maxPauseMs, silenceMs)
+                }
                 voicedMs += blockMs
                 voicedWeighted += blockRms.toDouble() * blockMs
                 silenceMs = 0
@@ -243,6 +295,18 @@ object SpeechPresence {
 
         /** 已录总时长。 */
         val elapsed: Int get() = totalMs
+
+        /**
+         * 当前生效的静音阈值。
+         *
+         * 固定值直接用；否则按「最长句内停顿 + 余量」推，并夹在上下限之间。
+         * 对外暴露是为了让调用方（与测试）能看见此刻的判定依据——
+         * 一个会自己变的阈值如果不透明，出问题时无法复盘。
+         */
+        val endSilenceMs: Int
+            get() = fixedEndSilenceMs
+                ?: (maxPauseMs + PAUSE_MARGIN_MS)
+                    .coerceIn(MIN_END_SILENCE_MS, MAX_END_SILENCE_MS)
 
         /** 说完了没有。 */
         fun shouldEnd(): Boolean =
