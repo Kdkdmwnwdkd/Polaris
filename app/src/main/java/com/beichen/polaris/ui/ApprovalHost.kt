@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.beichen.polaris.automation.ApprovalBridge
 import com.beichen.polaris.ui.contract.ChatScreenContract
 import kotlinx.coroutines.delay
 
@@ -40,6 +41,10 @@ import kotlinx.coroutines.delay
 @Composable
 internal fun ApprovalHost(vm: ChatScreenContract) {
     val request by vm.pendingApproval.collectAsStateWithLifecycle()
+    // 无障碍在线时，审批卡由 ApprovalOverlay 画在所有应用之上（跨应用可见、可就地点）。
+    // 此时不再画应用内 Dialog：两份同时出现时，用户点了浮层，对话框还挂着，
+    // 看起来像「点了没反应」。
+    val overlayReady by ApprovalBridge.overlayReady.collectAsStateWithLifecycle()
     var shown by remember { mutableStateOf<ApprovalRequest?>(null) }
     var visible by remember { mutableStateOf(false) }
 
@@ -54,6 +59,7 @@ internal fun ApprovalHost(vm: ChatScreenContract) {
         }
     }
 
+    if (overlayReady) return
     val current = shown ?: return
     ApprovalDialog(request = current, visible = visible, vm = vm)
 }

@@ -920,7 +920,7 @@ Debian 13 / 4 核 / 7G 内存 / JDK 21 / 持久卷 `/data/home`。**SDK 已装�
 
 ---
 
-### 5.11 坑八：Android 的正则不是 OpenJDK 的正则（ICU 花括号）
+### 5.12 坑八：Android 的正则不是 OpenJDK 的正则（ICU 花括号）
 
 **现象**：2026-11-21 真机（`1.827`）点「快捷指令」，直接闪退。崩溃记录：
 
@@ -977,6 +977,61 @@ arch-guard 的 [J] 段只查**符号**不查**语法**、CI 不跑 Android 运�
 另有 11 条含 `$` 的模板拼接正则无法静态判定（`AgentLogger`、`ToolchainInstaller`、
 `LocalToolCallParser`、`TerminalSessionPool`、`MarketModels`、`MemoryAutoCapture`、
 `ShellTool`），它们是「运行时才成形」的正则，需要单独审——已记进未决事项。
+
+---
+
+### 5.13 跨应用审批浮层：审批卡必须跟着界面走
+
+**现象**（用户 2026-11-21 真机反馈，原话）：
+
+> 让它去 QQ 发消息，它就会跳到 QQ 那里，但是它点确定了，它还在北辰那里……
+> 我又得回到北辰点确定，再跳回去，它又自己跳回去，很麻烦。
+
+拆开是三件事挤在一起：
+
+1. 审批卡是 Compose `Dialog`，只挂在北辰的 `MainActivity` 窗口上。自动化跳到目标
+   应用后北辰进后台，`Dialog` 不在屏幕上，而 `awaitApprovalDecision` 的 30 秒倒计时
+   照跑——用户还没看到卡，闸门已经落下（`tool.end code=approval_denied`）。
+2. 用户切回北辰点「允许」后，进程虽在前台，但 Agent 已经重新读了一遍界面并继续
+   跳转，用户看到的界面又变了。一次操作变成两三次应用切换。
+3. 「本次会话不再询问」那一行是小字链接，真机上没人看见，于是每一步都回来点一次。
+   截图里一次发消息任务有 8 个工具调用，其中 4 个需要审批。
+
+**为什么不能靠「把 Dialog 换个位置」解决**
+
+`Dialog` 的窗口属于 Activity。Activity 在后台就没有窗口可画，这不是布局问题。
+跨应用显示只有三条路：通知、`SYSTEM_ALERT_WINDOW` 悬浮窗、无障碍浮层。
+
+**为什么选无障碍浮层**
+
+`TYPE_ACCESSIBILITY_OVERLAY` 是 `AccessibilityService` 专属窗口类型，
+**不需要 `SYSTEM_ALERT_WINDOW`**。而要做自动化，无障碍必定已经连上，所以在所有
+会触发审批的场景里这条路都成立，不多要一个用户得手动去开的特殊权限。
+
+走 Shizuku / 无线调试（无障碍没开）时浮层不挂载，`overlayReady` 保持 false，
+应用内 `Dialog` 照旧渲染——功能不退化，只是少了跨应用那一步。
+
+**三个不能省的窗口细节**
+
+| 细节 | 不加会怎样 |
+|---|---|
+| `FLAG_NOT_FOCUSABLE` | 抢焦点，把输入法顶掉——而自动化此时可能正在往输入框打字 |
+| 不加 `FLAG_NOT_TOUCHABLE` | 加了按钮永远点不动；窗外穿透靠 `FLAG_NOT_TOUCH_MODAL` |
+| `IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS` | `ui_tree` 会把「允许本次」读给模型，**模型自己批自己** |
+
+**遮挡会不会导致点错**：不会。浮层只在「有一张卡在等」时出现，那一刻 Agent 正卡在
+审批挂起里，不派发任何手势；用户点完卡片立即消失，Agent 才继续。时序上不重叠。
+
+**结构**：`automation/ApprovalBridge.kt`（进程级中转，`pending` / `overlayReady` /
+`Sink`）+ `automation/ApprovalOverlay.kt`（原生 View 浮层）+ 服务挂载 + ViewModel 发布。
+
+判定逻辑仍然只有一份：浮层点按钮回调 `ChatViewModel.approveOnce / approveAlways /
+denyApproval`，档位与白名单仍在 `ApprovalTier` / `ApprovalScope`。浮层只负责显示。
+
+**判据** `scripts/qa/run-approval-overlay-verification.sh`（15 条）：窗口类型、
+三个标志位、无障碍树排除、接线、不双份、失败降级，以及反向自检（喂
+`APPLICATION_OVERLAY + NOT_TOUCHABLE` 的坏样本必须判红）。判据读文件时**剔除注释行**
+——第一版就踩了这个坑：注释里写着「不能加 FLAG_NOT_TOUCHABLE」，被 grep 当成实现命中。
 
 ---
 

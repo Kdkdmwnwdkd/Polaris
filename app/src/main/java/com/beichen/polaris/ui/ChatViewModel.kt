@@ -17,6 +17,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.beichen.polaris.automation.adb.AdbBackendProvider
 import com.beichen.polaris.automation.shizuku.ShizukuBackendProvider
+import com.beichen.polaris.automation.ApprovalBridge
 import com.beichen.polaris.automation.AutomationBridge
 import com.beichen.polaris.automation.AutomationPrefs
 import com.beichen.polaris.automation.DeviceContext
@@ -904,6 +905,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         // W-25：唤醒挂起中的提问/计划，避免 deferred 悬着（协程随 ViewModel 取消）
         runCatching { AskUserBroker.cancel() }
         runCatching { PlanBroker.cancel() }
+        // 审批浮层是进程级的，比本 ViewModel 活得久：不解绑的话，浮层点下去会调到一个
+        // 已销毁的 ViewModel；同时它也把整个 ViewModel 钉在内存里。
+        runCatching { ApprovalBridge.bind(null) }
         super.onCleared()
     }
 
@@ -1491,17 +1495,24 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             grant.key == ApprovalGrouping.GROUP_UI_SCREENSHOT && screenshotApprovedThisTurn
         ) return@withLock true
         val deferred = CompletableDeferred<Boolean>()
+        val preview = ApprovalPreview.of(args.toString())
         _pendingApproval.value = ApprovalRequest(
             toolName = toolName,
             // P0-2：预览与判定同源。原来 take(500) 会砍掉命令尾部，
             // 用户看到「构建一下」、实际执行「构建 + rm -rf」，而审批判定用的是全量参数。
-            argsPreview = ApprovalPreview.of(args.toString()),
+            argsPreview = preview,
             deferred = deferred,
             grant = grant
         )
+        // 跨应用浮层：无障碍在线时由 ApprovalOverlay 画在所有应用之上。
+        // 只发布、不判定——要不要问、记住什么都已在上游定完（见方法头的档位说明）。
+        ApprovalBridge.publish(toolName, preview, grant.memoLabel, grant.memorizable)
         // R-03：超时归 ViewModel（切页卸载弹窗后照样生效），不在 Composable 的倒计时里。
         // finally 保证无论用户怎么关掉弹窗，pending 都会清空，不会残留卡住下一个工具。
-        val ok = try { awaitApprovalDecision(deferred) } finally { _pendingApproval.value = null }
+        val ok = try { awaitApprovalDecision(deferred) } finally {
+            ApprovalBridge.withdraw()
+            _pendingApproval.value = null
+        }
         if (ok && grant.key == ApprovalGrouping.GROUP_UI_SCREENSHOT) screenshotApprovedThisTurn = true
         AgentLogger.w("Approval", "$toolName ${if (ok) "允许" else "拒绝"}")
         ok
@@ -3195,6 +3206,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 慢设备上 IO 协程会先于属性初始化执行，直接 NPE（2026-11-09 模拟器复现）。
      */
     init {
+        // 审批浮层的决策落点。放在类体最末的 init：三个方法都是成员函数，
+        // 绑定本身不读任何字段，但和下面两段一起排在这里，避免再开一个新 init 块。
+        ApprovalBridge.bind(::approveOnce, ::approveAlways, ::denyApproval)
         viewModelScope.launch(Dispatchers.IO) { runCatching { refreshWorkflows() } }
         // 自动续跑：等冷启动对账出结论再决定（时序理由见 [runStateReady]）。
         // 挂在这一段而不是前面那个 init：这里所有字段都已初始化，读 _activeConversationId /

@@ -380,6 +380,9 @@ class AgentAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         AutomationBridge.attach(this)
+        // 审批卡跨应用显示：自动化跳到目标应用后，用户不必切回北辰点「允许」。
+        // 用 TYPE_ACCESSIBILITY_OVERLAY，不需要 SYSTEM_ALERT_WINDOW。
+        ApprovalOverlay.attach(this)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -401,6 +404,7 @@ class AgentAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        ApprovalOverlay.detach()
         AutomationBridge.detach(this)
         super.onDestroy()
     }

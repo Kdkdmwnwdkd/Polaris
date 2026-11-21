@@ -183,7 +183,12 @@
 # 这里减 46 行是净减：VM 只留六个转发入口 + Editor 构造（12 行），KDoc 各留一句指路。
 # 拆的理由不是行数，是那三条不变量（草稿随会话走 / 下标派生状态作废 / 在途守卫）
 # 原先每条都在两处各写一遍，而 VM 拖 Compose，沙箱编不动，只能靠 grep 守。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3207
+# 2026-11-21 上调（3207 → 3218）：跨应用审批浮层的发布点。11 行里 9 行是注释
+# （为什么发布、为什么 finally 里撤销、为什么 preview 提成变量），代码是 2 行
+# `ApprovalBridge.publish` + `withdraw`，加 init 里 1 行 bind。
+# 这次是**必须留在 ViewModel 里**的：只有它知道「这次要不要问」和「记住了什么」，
+# 挪出去就等于把决策权分给第二处。可回收的是旁边的档位判定（已在 ApprovalTier）。
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3221
 # 2026-11-14 重记（ChatScreen +45）：语音输入的能力预检与编排。
 # 增量分布：
 #   ① 能力预检：约 12 行（含 8 行注释）。系统识别页一旦弹出，用户就进入了一个
