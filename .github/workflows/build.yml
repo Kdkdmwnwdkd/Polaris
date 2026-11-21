@@ -54,6 +54,30 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # 缓存 Gradle 的依赖仓库与 wrapper（**不缓存 build 目录、不缓存 transforms**）。
+      #
+      # 为什么加：2026-11-20 的 run 827 在 22 秒内红掉，原因不是代码——那一刻 Maven
+      # Central 返回了坏响应，`Could not parse POM .../kotlin-gradle-plugin-1.9.25.pom`，
+      # 于是 classpath 上一百多个依赖全部「找不到」，连 Kotlin 插件都没装上。
+      # 缓存命中时这些 HTTP 请求根本不发出去，这类外部抖动就落不到构建上；
+      # 顺带省掉每次 2–3 分钟的重复下载。
+      #
+      # 只缓存两处：
+      # - modules-2：下载回来的 jar/pom，纯内容寻址，跨版本复用安全；
+      # - wrapper/dists：Gradle 本体，避免每次重新下载发行包。
+      # **不缓存 caches/transforms 与 caches/jars-***：它们与 AGP 版本强绑定，
+      # 跨版本复用会出现「改了代码却按旧产物构建」这种最难受的静默错误。
+      # key 带 gradle 文件的哈希：依赖一改自动换 key，旧缓存只是不再命中，不会污染。
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle.properties', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - name: Setup Android SDK (手动安装，避免 setup-android action 在现行 runner 上损坏)
         run: |
           SDK=$HOME/android-sdk
