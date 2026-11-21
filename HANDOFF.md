@@ -1278,7 +1278,8 @@ M3 停顿统计去掉 800 上限 → A7 红；M4 自适应上限放宽到 3 秒 
 
 | 事项 | 状态 | 怎么办 |
 |---|---|---|
-| CI 最后一次构建结果 | **未确认**（沙箱到 `api.github.com` 时通时断） | 打开仓库 Actions 页看最新一次构建（应覆盖本轮提交） |
+| CI 最后一次构建结果 | **已确认**：run 44946462181 → 1.840 全绿 | PASS=161 FAIL=0 XFAIL=0，GATE 1–6 全 OK，SKIP 40/40 已登记；包 versionCode=840 / versionName=1.840，签名与包名守卫通过 |
+| 「说完自己停」+ 自适应阈值（P31/P32） | **已出包，待真机** | 行为判据 18 条 + 变异 4 条全 CAUGHT，`core` 单测 22 条通过。但「0.8 秒收会不会显得急」「1.3 秒上限够不够」只有真机能判，见 §5.16 / §5.17 与手册 §4.10–4.11 |
 | 跨应用审批浮层（P26） | **待真机** | 代码、判据（15+23 条）、编译、装机接线都过了；但模拟器没有模型，触发不了真实审批，所以「卡画在 QQ 上」「点完就地继续」「等 30 秒时 Agent 不自己往下走」三条只有真机能验。见 §5.13 |
 | 11 条模板拼接正则（含 `$`）未静态覆盖 | **待审** | 新判据只能判字面量；`MemoryAutoCapture` / `ShellTool` / `LocalToolCallParser` 等处是运行时拼出来的正则，ICU 兼容性只能逐条人工看。见 §5.12 |
 | 泄漏的 PAT（三个） | **仓库侧已清白；撤销只能用户做** | 三个 token 都只在会话里、或远端 URL 里出现过：`git log -S` 扫全历史 **0 命中**，工作区 `grep` 也干净。第三个今天已从 `.git/config` 的 remote URL 里摘掉（改存 `~/.git-credentials`，600 权限），`git remote -v` 与 `.git/config` 内已无 `ghp_` 前缀。**撤销只能在 GitHub 账号里做**：Settings → Developer settings → Personal access tokens → 逐条 Delete；删完在 GitHub 新建一个，写回 `~/.git-credentials`（格式 `https://x-access-token:<新token>@github.com`），否则下次 `git push` 会 403 |
