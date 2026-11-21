@@ -11,6 +11,16 @@ import java.io.File
  */
 interface AsrSession {
 
+    /**
+     * 这一句的「说完」是谁判的，给人看的短标签。
+     *
+     * 为什么要在会话接口上露这个：整段模型有两条端点路径（silero VAD / RMS 回落），
+     * 而 VAD 加载失败是**静默降级**的。真机上不看这一项，就只能靠「感觉它有点不灵」
+     * 去猜是模型没生效还是模型本身不行——这两件事的处置完全相反。
+     * 流式模型用原生端点，保持默认值即可。
+     */
+    val endpointLabel: String get() = "原生端点"
+
     /** 喂一段 16kHz 单声道 PCM，返回**目前为止**的整句文本。 */
     fun accept(samples: FloatArray, sampleRate: Int = 16_000): String
 

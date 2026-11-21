@@ -65,6 +65,17 @@ class LocalSpeechInput(
     fun isAvailable(): Boolean = asr.isInstalled()
 
     /**
+     * 最近一次 [start] 建出来的会话，在用什么判「说完了」。
+     *
+     * `""` = 还没开始过（或引擎没给标签）。取值见 [AsrSession.endpointLabel]。
+     * 存在的唯一理由是让真机上的静默降级**看得见**：VAD 加载失败会悄悄退回 RMS，
+     * 不显示的话，「模型没生效」会被误读成「模型效果差」。
+     */
+    @Volatile
+    var endpointLabel: String = ""
+        private set
+
+    /**
      * 开始收音。
      *
      * @param autoStop 尾部静音够了就自动收尾。聊天页面板要开（文案就是「说完自己停」）；
@@ -96,6 +107,9 @@ class LocalSpeechInput(
         }
 
         running = true
+        // 会话刚建好，此刻的标签就是这一句的起点状态；中途翻转由 Final 之后的
+        // 下一次 start 反映，界面不必为极端情况加轮询。
+        endpointLabel = session.endpointLabel
         val t = Thread({ loop(session, autoStop, onEvent) }, "asr-capture")
         t.priority = Thread.NORM_PRIORITY + 1
         thread = t

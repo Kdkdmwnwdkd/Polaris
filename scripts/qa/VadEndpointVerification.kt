@@ -156,12 +156,18 @@ fun main() {
     println()
     println("== B 接线：模型与降级真的存在 ==")
 
-    check("B1 模型进了 assets 且体积合理") {
-        val f = File(root, "app/src/main/assets/silero_vad.onnx")
-        assertTrue("silero_vad.onnx 不在 assets —— VAD 永远加载失败", f.exists())
+    check("B1 模型进了 assets 且是 v5（不是 v4）") {
+        val f = File(root, "app/src/main/assets/silero_vad_v5.onnx")
+        assertTrue("silero_vad_v5.onnx 不在 assets —— VAD 永远加载失败", f.exists())
+        // v5 = 2,327,524 字节；v4（k2-fsa 导出）= 643,854。用体积当身份判据，
+        // 因为两种模型都是合法 onnx，只有大小和 window_size 能区分。
         assertTrue(
-            "模型只有 ${f.length()} 字节，不像是完整文件（应为 60 万上下）",
-            f.length() > 300_000,
+            "模型只有 ${f.length()} 字节 —— v5 应为 2,327,524（v4 是 643,854）",
+            f.length() > 2_000_000,
+        )
+        assertTrue(
+            "旧的 v4 还在 assets 里 —— 两份模型都进包，白多 629KB",
+            !File(root, "app/src/main/assets/silero_vad.onnx").exists(),
         )
     }
 
@@ -185,7 +191,7 @@ fun main() {
 
     check("B4 模型名与 assets 文件名一致") {
         val s = read("app/src/main/java/com/beichen/polaris/audio/asr/SileroVad.kt")
-        assertTrue("MODEL 常量没指向 silero_vad.onnx", "\"silero_vad.onnx\"" in s)
+        assertTrue("MODEL 常量没指向 silero_vad_v5.onnx", "\"silero_vad_v5.onnx\"" in s)
         assertTrue("没有从 assets 构造（用了绝对路径会失败）", "context.applicationContext.assets" in s)
     }
 
@@ -216,6 +222,28 @@ fun main() {
         val e = read("app/src/main/java/com/beichen/polaris/audio/asr/OfflineAsrEngine.kt")
         assertTrue("release 没释放 VAD", "vad?.release()" in e)
         assertTrue("release 后没允许重建", "vadTried = false" in e)
+    }
+
+    check("B9 端点判定在界面上可见（静默降级不许藏着）") {
+        val e = read("app/src/main/java/com/beichen/polaris/audio/asr/OfflineAsrEngine.kt")
+        val i = read("app/src/main/java/com/beichen/polaris/audio/asr/LocalSpeechInput.kt")
+        val u = read("app/src/main/java/com/beichen/polaris/ui/LocalVoiceSheet.kt")
+        assertTrue(
+            "Batch 没实现 endpointLabel —— 面板只能显示空",
+            "override val endpointLabel: String" in e,
+        )
+        assertTrue(
+            "endpointLabel 写成了 val 常量 —— VAD 中途崩了界面不会变",
+            "get() = if (useVad)" in e,
+        )
+        assertTrue(
+            "LocalSpeechInput 没把标签传出来",
+            "endpointLabel = session.endpointLabel" in i,
+        )
+        assertTrue(
+            "面板没显示端点判定 —— 真机分不清「模型没生效」和「模型不行」",
+            "端点判定：" in u,
+        )
     }
 
     println()

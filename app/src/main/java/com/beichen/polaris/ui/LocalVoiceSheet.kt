@@ -56,6 +56,8 @@ fun LocalVoiceSheet(
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var listening by remember { mutableStateOf(true) }
+    // 「这一句靠什么判停」。空 = 还没拿到（引擎没给标签）。
+    var endpoint by remember { mutableStateOf("") }
     val input = remember { LocalSpeechInput(ctx, AsrDirectory.of(ctx), AudioGraph.arbiter(ctx)) }
 
     DisposableEffect(Unit) {
@@ -84,6 +86,9 @@ fun LocalVoiceSheet(
             }
         }
         if (!started) listening = false
+        // start() 是同步的：返回 true 时 ensureSession 已经建好会话，
+        // 所以这里读到的就是「这一句由谁判停」。
+        endpoint = input.endpointLabel
         onDispose { input.cancel() }
     }
 
@@ -104,6 +109,18 @@ fun LocalVoiceSheet(
                     Text(
                         text = if (listening) "  正在听（说完自己停）" else "  已停下",
                         style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+                // 端点判定是谁 —— 只在这一项有意义时出现。
+                //
+                // 为什么值得占一行：VAD 加载失败会**静默**退回 RMS（安静环境照常能用，
+                // 噪声里就不判停了）。不显示的话，「模型没生效」看起来和「模型不太好」
+                // 一模一样；显示出来，测试的同学一眼就知道该去看日志还是该换参数。
+                if (endpoint.isNotBlank()) {
+                    Text(
+                        text = "端点判定：$endpoint",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Text(

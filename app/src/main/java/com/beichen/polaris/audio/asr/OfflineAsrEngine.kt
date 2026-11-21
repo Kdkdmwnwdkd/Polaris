@@ -146,6 +146,13 @@ class OfflineAsrEngine(context: Context) : AsrEngine {
         /** VAD 中途失败时会翻成 false，此后本会话永久走 RMS。 */
         private var useVad = vad != null
 
+        /**
+         * 实时反映「现在是谁在判停」。[useVad] 中途会翻，所以这里必须是 getter
+         * 而不是构造时算好的常量——否则界面会一直显示开头那个值。
+         */
+        override val endpointLabel: String
+            get() = if (useVad) SileroVad.LABEL else "RMS 回落"
+
         override fun accept(samples: FloatArray, sampleRate: Int): String {
             chunks.add(samples)
             total += samples.size

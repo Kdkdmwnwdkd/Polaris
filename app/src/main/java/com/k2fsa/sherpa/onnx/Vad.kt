@@ -12,7 +12,7 @@ import android.content.res.AssetManager
  * native 侧是 `libsherpa-onnx-jni.so` 里已编好的符号。VAD 那组符号一直在里面
  * （`Java_com_k2fsa_sherpa_onnx_Vad_*` 共 12 个），只是一直没人写 Kotlin 这半边。
  *
- * 所以这里没有引入任何新依赖、没有重编 so、APK 只多一个 629KB 的模型。
+ * 所以这里没有引入任何新依赖、没有重编 so，APK 只多一个模型（当前是 v5，2.22MB）。
  *
  * ## 字段名不能改
  *
@@ -36,7 +36,7 @@ data class SileroVadModelConfig(
 /**
  * ten-vad 的配置。
  *
- * 本项目不用它（silero 629KB、ten-vad 更大且中文场景没有明显优势），
+ * 本项目不用它（silero v5 在噪声下实测明显更稳，见 `SileroVad` 的类注释），
  * 但 [VadModelConfig] 里必须有这个字段——它是同一个 struct 的一部分，
  * 缺了它 JNI 取 `tenVadModelConfig` 就会失败。
  */
