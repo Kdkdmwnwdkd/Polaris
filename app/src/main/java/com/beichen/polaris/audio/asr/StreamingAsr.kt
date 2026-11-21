@@ -2,6 +2,7 @@ package com.beichen.polaris.audio.asr
 
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.voice.SpeechPresence
 import com.k2fsa.sherpa.onnx.EndpointConfig
 import com.k2fsa.sherpa.onnx.EndpointRule
 import com.k2fsa.sherpa.onnx.FeatureConfig
@@ -11,6 +12,7 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import java.io.File
+import kotlin.math.sqrt
 
 /**
  * 内置离线中文识别（流式 zipformer）。
@@ -128,23 +130,64 @@ class StreamingAsr(context: Context) : AsrEngine {
          * 流式模型的返回值是「整句累计」，不是增量——直接拿去显示即可，不需要自己拼接。
          */
         override fun accept(samples: FloatArray, sampleRate: Int): String {
+            record(samples, sampleRate)
             stream.acceptWaveform(samples, sampleRate)
             drain()
             return recognizer.getResult(stream).text
         }
 
-        /** 松手：补最后一帧并给出最终文本。 */
+        /**
+         * 松手：补最后一帧并给出最终文本。
+         *
+         * 静音时要在这里拦一道。流式模型和整段模型一样，对底噪也会吐出几个字
+         * （2026-11-21 真机：连按四次没说话，得到 3 / 3 / 4 字）。
+         * 端点规则里 `mustContainNonSilence=false` 的第一条本来是为了「说完自动停」，
+         * 副作用是纯静音也可能被它判停，于是上层收到一句凭空的文本。
+         *
+         * 流式不缓存 PCM（30 秒的 float 数组没必要留），所以边收边记每块的 RMS，
+         * 按 [SpeechPresence.FRAME_MS] 的粒度摊平，收尾时用同一套判据。
+         */
         override fun finish(): String {
             stream.inputFinished()
             drain()
-            return recognizer.getResult(stream).text
+            val text = recognizer.getResult(stream).text
+            if (text.isNotBlank() && !SpeechPresence.hasSpeechInFrames(frameRms.toFloatArray())) {
+                AgentLogger.i(
+                    TAG,
+                    "判为无人声：${frameRms.size * SpeechPresence.FRAME_MS}ms 内无有效人声，" +
+                        "丢弃 \"${text.take(8)}\"",
+                )
+                return ""
+            }
+            return text
         }
 
         /** 引擎判断这句已经说完了（尾部静音够长），可以替用户收尾。 */
         override fun isEndpoint(): Boolean = runCatching { recognizer.isEndpoint(stream) }.getOrDefault(false)
 
         override fun close() {
+            frameRms.clear()
             runCatching { stream.release() }
+        }
+
+        // —— 人声存在性 ——
+
+        private val frameRms = ArrayList<Float>(256)
+
+        /**
+         * 把一块音频压成若干等价的 [SpeechPresence.FRAME_MS] 帧 RMS。
+         *
+         * 块内均匀假设：一块只有 100ms，内部起伏对「有没有人声」这个判断没有影响，
+         * 却能让上游传任意块长都不影响判定粒度。
+         */
+        private fun record(samples: FloatArray, sampleRate: Int) {
+            if (samples.isEmpty() || sampleRate <= 0) return
+            var sum = 0.0
+            for (v in samples) sum += v.toDouble() * v
+            val rms = sqrt(sum / samples.size).toFloat()
+            val blockMs = samples.size * 1000 / sampleRate
+            val frames = (blockMs / SpeechPresence.FRAME_MS).coerceAtLeast(1)
+            repeat(frames) { frameRms.add(rms) }
         }
 
         private fun drain() {
@@ -212,5 +255,6 @@ class StreamingAsr(context: Context) : AsrEngine {
 
     companion object {
         const val SAMPLE_RATE = 16_000
+        private const val TAG = "Asr"
     }
 }

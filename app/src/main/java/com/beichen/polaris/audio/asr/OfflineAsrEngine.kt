@@ -2,6 +2,7 @@ package com.beichen.polaris.audio.asr
 
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.voice.SpeechPresence
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineParaformerModelConfig
@@ -36,7 +37,7 @@ import java.io.File
  */
 class OfflineAsrEngine(context: Context) : AsrEngine {
 
-    private val tag = "AsrOffline"
+    private val tag = TAG
 
     override val dir: File = File(File(context.filesDir, "asr"), "zh-paraformer")
 
@@ -104,6 +105,21 @@ class OfflineAsrEngine(context: Context) : AsrEngine {
             }
             chunks.clear()
             total = 0
+
+            // 先判有没有人说话，再决定要不要放大。
+            //
+            // 顺序不能反：normalize 会把峰值拉到 0.9，而静音的峰值只有 0.003 上下，
+            // 一放大等于把底噪抬成「很响的音频」，模型就会给这段噪声编出几个字——
+            // 2026-11-21 真机实测里「一个字没说却识别出 3 字」就是这么来的。
+            // 判定放在放大之前，看到的才是真实音量。
+            val fullMs = pcm.size * 1000 / SAMPLE_RATE
+            val voiced = SpeechPresence.voicedMillis(pcm, SAMPLE_RATE)
+            if (voiced < SpeechPresence.MIN_SPEECH_MS) {
+                AgentLogger.i(TAG, "判为无人声：有声 ${voiced}ms / 全段 ${fullMs}ms，不送识别")
+                return ""
+            }
+            AgentLogger.i(TAG, "送识别：有声 ${voiced}ms / 全段 ${fullMs}ms")
+
             normalize(pcm)
 
             val stream = recognizer.createStream()
@@ -149,6 +165,7 @@ class OfflineAsrEngine(context: Context) : AsrEngine {
     }
 
     private companion object {
+        const val TAG = "AsrOffline"
         const val SAMPLE_RATE = 16_000
         const val TOKENS = "tokens.txt"
 
