@@ -920,11 +920,72 @@ Debian 13 / 4 核 / 7G 内存 / JDK 21 / 持久卷 `/data/home`。**SDK 已装�
 
 ---
 
+### 5.11 坑八：Android 的正则不是 OpenJDK 的正则（ICU 花括号）
+
+**现象**：2026-11-21 真机（`1.827`）点「快捷指令」，直接闪退。崩溃记录：
+
+```
+java.lang.ExceptionInInitializerError
+at com.beichen.polaris.core.PromptVariablesKt.extractPromptVariables(Unknown Source:0)
+```
+
+**根因**：`core/PromptVariables.kt` 顶层的占位正则
+
+```kotlin
+private val PROMPT_VARIABLE = Regex("""\{\{\s*([^{}\n]+?)\s*}}""")
+```
+
+结尾那两个 `}` **没转义**。JVM 上完全合法（OpenJDK 的 `Pattern` 把孤立 `}` 当字面量），
+所以 `:core:testDebugUnitTest` 全绿。但 Android 的 `java.util.regex.Pattern` 底下是
+**ICU4C**，对花括号配对要求严格，直接抛 `PatternSyntaxException: Syntax error near index 23`。
+
+而那行在文件顶层 `val` 的初始化式里 → 异常被包成 `ExceptionInInitializerError` →
+**类加载即崩**，`try/catch` 接不住（炸的是 `<clinit>`，不是方法体）。
+触发点极窄：只有「提示词模板里带 `{{变量}}`」的路径会碰 `extractPromptVariables`，
+所以这个功能从上线起就是死的，而没人点过——真机上第一次点就崩。
+
+**实证**（API 30 模拟器，`javac --release 11` → `d8 --min-api 26` → `dalvikvm` 探针）：
+
+| 正则 | 结果 |
+|---|---|
+| `\{\{...\s*}}` | **FAIL** `Syntax error near index 23` |
+| `\{\{...\s*\}\}` | OK，`find=true g1=name` |
+| `a{` | FAIL `Error in {min,max} interval` |
+| `a]` | OK（右方括号不严格） |
+| `a{2,3}` | OK |
+| `x[}]y` | OK（字符类内的花括号安全） |
+
+**为什么四个判据都没看见**：编译过（编译器不管正则语义）、JVM 单测过（引擎不同）、
+arch-guard 的 [J] 段只查**符号**不查**语法**、CI 不跑 Android 运行时。
+和坑七（`BigInteger.TWO`）是同一个形状：**JVM 能跑、Android 不能**。
+
+**修法**：`...\s*\}\}`，并把理由写在文件头（下一次有人「简化」时能看见）。
+
+**新判据** `scripts/qa/run-regex-compat-verification.sh`（5 条）：
+
+- [A] 提取全仓 `Regex(...)` 字面量，**含 `"""...""" + """..."""` 拼接**（事故点的两条
+  secret 正则就是拼接写法，只取第一段会得到假阳性）；
+- [B] 按 ICU 规则逐条判定：字符类外 `{` 必须是合法 `{n,m}` 量词开头或已转义，
+  `}` 必须与之配对或已转义；
+- [C] 反向自检：已知坏样本（`}}`、`a{`、`a}b`）必须红，已知好样本（`\}\}`、`a{2,3}`、
+  `x[}]y`、`a]`）必须绿——没有这段，正则写错会让门禁永远绿；
+- [D] 回归锁：`PromptVariables.kt` 里那行原文必须还在（防止有人改回去）。
+
+变异：把修复改回 `}}` → B2 + D1 两条红，并指出 `PromptVariables.kt:38`；恢复后 5/5 绿。
+
+**全量体检结论**：仓库里 95 条可静态提取的正则，在 API 30 上**全部编译通过**（0 失败）。
+另有 11 条含 `$` 的模板拼接正则无法静态判定（`AgentLogger`、`ToolchainInstaller`、
+`LocalToolCallParser`、`TerminalSessionPool`、`MarketModels`、`MemoryAutoCapture`、
+`ShellTool`），它们是「运行时才成形」的正则，需要单独审——已记进未决事项。
+
+---
+
 ## 6. 未决事项
 
 | 事项 | 状态 | 怎么办 |
 |---|---|---|
 | CI 最后一次构建结果 | **未确认**（沙箱到 `api.github.com` 时通时断） | 打开仓库 Actions 页看最新一次构建（应覆盖本轮提交） |
+| 11 条模板拼接正则（含 `$`）未静态覆盖 | **待审** | 新判据只能判字面量；`MemoryAutoCapture` / `ShellTool` / `LocalToolCallParser` 等处是运行时拼出来的正则，ICU 兼容性只能逐条人工看。见 §5.11 |
 | 之前用过的 PAT（两个） | 待用户撤销 | 仓库与 869 个提交全扫过：**0 条真 token**，历史干净；但会话里明文出现过，仍需在 GitHub 设置里 revoke |
 | 桌宠真机验证 | **模拟器已过，真机未做** | 模拟器（API 30，`-accel off`）跑通 AUTO 5 项 + 端到端链路，见 §3.12；剩下的省电策略 / 键盘 / 磁贴 / ASR 时延仍需一台 API 31 真机 + 一台国产 ROM |
 | 外发守卫的残余链条 | **已知且接受** | `web_search` 刻意不标脏（连续搜索会连环弹窗，用户必然无脑点允许），代价是「搜索结果里的注入 → 再用 web_search 把内容拼进 query」这条链仍在。取舍与边界见 `docs/ops/P0-落地-2026-11-18.md` §12.8 |

@@ -16,8 +16,26 @@ package com.beichen.polaris.core
  * 判定逻辑与正则一字未改。
  */
 
-/** 提示词变量的占位模式（名称捕获组；允许两侧空白）。 */
-private val PROMPT_VARIABLE = Regex("""\{\{\s*([^{}\n]+?)\s*}}""")
+/**
+ * 提示词变量的占位模式（名称捕获组；允许两侧空白）。
+ *
+ * ## 结尾那两个 `}` 为什么必须转义
+ *
+ * 原来写的是 `...\s*}}`。这在 JVM 上完全合法——OpenJDK 的 `Pattern` 把
+ * 孤立的 `}` 当字面量，`"a}}"` 也能编过，所以 core 的单测全绿。
+ *
+ * **但 Android 的 `java.util.regex.Pattern` 不是 OpenJDK 的实现**，它底下是
+ * ICU4C，对花括号的配对要求严格：孤立的 `}` 直接抛
+ * `PatternSyntaxException: Syntax error in regexp pattern near index 23`。
+ *
+ * 而这一行在文件顶层 `val` 的初始化式里，异常会被包成
+ * `ExceptionInInitializerError`，**类加载即崩**——2026-11-21 真机上点「快捷指令」
+ * 就是这里闪退，`try/catch` 接不住，因为炸的是 `<clinit>`。
+ *
+ * 实测（API 30，dalvikvm 探针）：`\{\{...\s*}}` FAIL，`\{\{...\s*\}\}` OK。
+ * 判据 `run-regex-compat-verification.sh` 会拦住这一类「JVM 能编、Android 不能编」的写法。
+ */
+private val PROMPT_VARIABLE = Regex("""\{\{\s*([^{}\n]+?)\s*\}\}""")
 
 /**
  * 扫描提示词内容里的变量名：按首次出现顺序去重。
