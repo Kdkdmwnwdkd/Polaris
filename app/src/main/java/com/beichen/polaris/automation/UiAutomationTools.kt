@@ -10,6 +10,7 @@ import com.beichen.polaris.core.ToolResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -185,8 +186,12 @@ private suspend fun readPseudoTree(service: AgentAccessibilityService): ToolResu
     // 截图依赖无障碍（API 30+）。不满足就没什么可兜的——这条路走不通是事实，不要去猜。
     if (!canUseA11yScreenshot(AutomationBridge.isReady(), android.os.Build.VERSION.SDK_INT)) return null
 
-    val shot = withContext(Dispatchers.Main) {
-        runCatching { service.takeScreenshotViaA11y() }.getOrNull()
+    // 截图本身没有内建超时（回调靠系统，偶尔不回来）。不给它一个上限的话，
+    // 一次「读取界面」会卡到用户点停止——比读不到更糟，因为用户无法判断是在干活还是死了。
+    val shot = withTimeoutOrNull(SCREENSHOT_TIMEOUT_MS) {
+        withContext(Dispatchers.Main) {
+            runCatching { service.takeScreenshotViaA11y() }.getOrNull()
+        }
     } ?: return null
 
     // 尺寸必须在 recycle 之前取走：位图回收后再访问 width 会抛 IllegalStateException，
@@ -233,6 +238,14 @@ private suspend fun readPseudoTree(service: AgentAccessibilityService): ToolResu
 
 /** 低于这个条数不认为是「可读界面」，见 [readPseudoTree] 的过渡态判断。 */
 private const val MIN_PSEUDO_NODES = 3
+
+/**
+ * 兜底路径的截图超时。
+ *
+ * 正常一次 100~300ms；给到 3 秒是为了包住低端机冷启动。超过就当作「这次兜不了」，
+ * 回落原来的「稍等再试」——总比让 ui_tree 无声卡住好。
+ */
+private const val SCREENSHOT_TIMEOUT_MS = 3_000L
 
 /* ------------------------------------------------------------------ */
 /* ui_tree                                                             */

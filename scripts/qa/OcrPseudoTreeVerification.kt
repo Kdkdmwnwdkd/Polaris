@@ -239,7 +239,7 @@ fun main() {
     // 而那个异常会被外层 catch 吞成「读取界面失败」——一次成功的降级被说成失败。
     check("B2 兜底路径先取尺寸再回收位图") {
         val src = read("app/src/main/java/com/beichen/polaris/automation/UiAutomationTools.kt")
-        val body = src.substringAfter("private suspend fun readPseudoTree")
+        val body = src.substringAfter("private suspend fun readPseudoTree").substringBefore("class UiTapTool")
         val w = body.indexOf("shot.width")
         val recycle = body.indexOf("shot.recycle()")
         assertTrue("没找到取尺寸的语句", w >= 0)
@@ -253,6 +253,14 @@ fun main() {
         assertTrue("缺少 ui_tree_ok_ocr 结果码", "ui_tree_ok_ocr" in ui)
         val prompt = read("core/src/main/java/com/beichen/polaris/core/AgentLoop.kt")
         assertTrue("系统提示没交代 src=ocr 时不能用 ui_click", "src=ocr" in prompt)
+    }
+
+    // 截图回调靠系统，偶尔不回来。没有超时的话，一次「读取界面」会一直挂到用户点停止——
+    // 比读不到更糟：用户判断不出它是在干活还是死了。这条只能看源码，行为测不到。
+    check("B4 兜底截图有超时，不许无声卡住") {
+        val src = read("app/src/main/java/com/beichen/polaris/automation/UiAutomationTools.kt")
+        val body = src.substringAfter("private suspend fun readPseudoTree").substringBefore("class UiTapTool")
+        assertTrue("截图路径缺少超时保护", "withTimeoutOrNull" in body)
     }
 
     /* ------------------------------ 汇总 ------------------------------ */
