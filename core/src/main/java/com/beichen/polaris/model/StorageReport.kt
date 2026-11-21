@@ -68,14 +68,6 @@ data class StorageReport(
     val reclaimableBytes: Long get() = modelBytes + cacheBytes
 }
 
-/** 把字节写成给人看的单位。小于 1MB 用 KB，避免「0MB 却占着」的怪相。 */
-fun formatBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024 * 1024 -> String.format("%.1fGB", bytes / 1073741824.0)
-    bytes >= 1024L * 1024 -> "${bytes / (1024L * 1024)}MB"
-    bytes >= 1024 -> "${bytes / 1024}KB"
-    else -> "${bytes}B"
-}
-
 /**
  * 读出当前的空间账。
  *
@@ -120,9 +112,12 @@ fun readStorage(context: Context): StorageReport {
  */
 fun clearDownloadCache(context: Context): Long {
     var freed = 0L
-    File(context.cacheDir, "models").let {
-        freed += dirSize(it)
-        it.deleteRecursively()
+    // 只清已经下完的残留。`.part` 必须留着——那可能正是此刻在下的包，
+    // 删掉等于把进度清零（用户看到的是「下到 80% 突然从头开始」）。
+    File(context.cacheDir, "models").listFiles()?.forEach { f ->
+        if (f.name.endsWith(".part")) return@forEach
+        freed += if (f.isDirectory) dirSize(f) else f.length()
+        f.deleteRecursively()
     }
     File(context.cacheDir, "updates").listFiles()
         ?.filter { it.isFile && it.name.endsWith(".apk") }

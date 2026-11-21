@@ -42,6 +42,11 @@ private const val APP_SRC = "app/src/main/java/com/beichen/polaris"
 
 private fun readSource(rel: String): String = File(APP_SRC, rel).readText()
 
+/** 骨架 + 路由表：AppDest 枚举 2026-11-21 搬到 ui/AppDest.kt，入口检查要看两处。 */
+private val ROUTES: String by lazy {
+    readSource("ui/AppScaffold.kt") + "\n" + readSource("ui/AppDest.kt")
+}
+
 /** 测试用的最小数据形状：过滤只关心标题，不需要真的 ConversationSummary。 */
 private data class Row(val id: String, val title: String)
 
@@ -114,7 +119,7 @@ fun main() {
     println("— B 区：页面与入口（源码扫描） —")
 
     val screen = readSource("ui/ConversationsScreen.kt")
-    val scaffold = readSource("ui/AppScaffold.kt")
+    val scaffold = ROUTES
 
     check("B1 页面骨架：顶栏 + 搜索框 + 列表 + 空态") {
         assertContains(screen, "fun ConversationsScreen(")

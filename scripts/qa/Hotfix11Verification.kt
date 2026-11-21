@@ -57,6 +57,18 @@ private fun readSource(rel: String): String {
     return (if (app.exists()) app else File(CORE_SRC, rel)).readText()
 }
 
+/**
+ * 页面骨架 + 路由表。
+ *
+ * 2026-11-21：`AppDest` 枚举从 `ui/AppScaffold.kt` 搬到 `ui/AppDest.kt`
+ * （纯数据与 800 行骨架分离，顺手压回行数上限）。这个 harness 里十几处
+ * 「某页面的路由接没接上」的断言都要看两处，合成一个字符串统一读——
+ * 逐个改不仅烦，改漏一处的表现是**假红**，而假红会被当成「功能坏了」排查半天。
+ */
+private val ROUTES: String by lazy {
+    readSource("ui/AppScaffold.kt") + "\n" + readSource("ui/AppDest.kt")
+}
+
 /* =============================== G 区：模型快速切换 =============================== */
 
 private fun testModelQuickSwitch() {
@@ -259,7 +271,7 @@ private fun testConversationPinAndSearch() {
     println("— K 区：会话置顶 + 会话搜索（功能五 P1-3） —")
     val store = readSource("core/ConversationStore.kt")
     val vm = readSource("ui/ChatViewModel.kt")
-    val scaffold = readSource("ui/AppScaffold.kt")
+    val scaffold = ROUTES
 
     check("K1 存储层：Record/Summary 带 pinned 字段（默认 false，旧文件兼容）") {
         assertContains("K1", store, "val pinned: Boolean = false")
@@ -517,7 +529,7 @@ private fun testTokenUsage() {
     val conv = readSource("core/ConversationStore.kt")
     val vm = readSource("ui/ChatViewModel.kt")
     val chat = readSource("ui/ChatScreen.kt")
-    val scaffold = readSource("ui/AppScaffold.kt")
+    val scaffold = ROUTES
 
     check("P1 核心层 TokenUsage（输入/输出/合计 + sum 汇总）") {
         assertContains("P1", contract, "data class TokenUsage(")
@@ -639,7 +651,7 @@ private fun testConversationExport() {
     val vm = readSource("ui/ChatViewModel.kt")
     val share = readSource("ui/ShareActions.kt")
     val chat = readSource("ui/ChatScreen.kt")
-    val scaffold = readSource("ui/AppScaffold.kt")
+    val scaffold = ROUTES
 
     check("Q1 core 纯函数 conversationToMarkdown（零 IO，harness 可断言）") {
         // W-RT9 起签名多一个默认参 archivedTurns（旧调用不变），断言随语义更新：
@@ -792,7 +804,7 @@ private fun testPromptLibrary() {
     val vm = readSource("ui/ChatViewModel.kt")
     val chat = readSource("ui/ChatScreen.kt")
     val picker = readSource("ui/PromptLibraryScreen.kt")
-    val scaffold = readSource("ui/AppScaffold.kt")
+    val scaffold = ROUTES
     val settings = readSource("ui/SettingsScreen.kt")
 
     check("S1 数据契约 + 6 条内置（builtin 字段而非字符串前缀猜语义）") {
@@ -1051,7 +1063,7 @@ private fun testAppearanceEnhancements() {
     val settingsFacadeSrc = readSource("ui/SettingsFacade.kt")
     // W-67：动态取色开关从设置页搬到「壁纸与颜色」子页，断言跟着搬
     val appearance = readSource("ui/AppearanceScreen.kt")
-    val scaffold = readSource("ui/AppScaffold.kt")
+    val scaffold = ROUTES
 
     check("V1 动态取色：默认关 + API 31 门禁 + 只覆盖 M3 标准色角色") {
         assertContains("V1", theme, "dynamicColor: Boolean = false,")
@@ -1204,7 +1216,7 @@ private fun testPromptBackup() {
 private fun testMarkdownFileExport() {
     println("— X 区：会话导出 .md 真文件（hotfix29） —")
     val share = readSource("ui/ShareActions.kt")
-    val scaffold = readSource("ui/AppScaffold.kt")
+    val scaffold = ROUTES
     val paths = File("app/src/main/res/xml/file_paths.xml").readText()
 
     check("X1 FileProvider：cacheDir/exports 路径声明（导出 .md 的落点）") {
@@ -1258,7 +1270,7 @@ private fun testMarkdownFileExport() {
 private fun testConversationSwitchWhileRunning() {
     println("— Y 区：生成中可切换会话（hotfix30） —")
     val vm = readSource("ui/ChatViewModel.kt")
-    val scaffold = readSource("ui/AppScaffold.kt")
+    val scaffold = ROUTES
     val chat = readSource("ui/ChatScreen.kt")
 
     check("Y1 VM：owner 捕获机制（runOwnerConvId + 草稿缓冲 + 投影开关 + 生成中标识流）") {
@@ -1495,7 +1507,7 @@ private fun testJsonSafeAndGlobalBackground() {
     val config = readSource("core/ConfigStore.kt")
     // W-67：背景浓度滑杆随背景图分区搬到「壁纸与颜色」子页
     val appearance = readSource("ui/AppearanceScreen.kt")
-    val scaffold = readSource("ui/AppScaffold.kt")
+    val scaffold = ROUTES
     val chat = readSource("ui/ChatScreen.kt")
 
     check("AB1 JsonSafe：三个 as? 软转换访问器 + 根因文档") {

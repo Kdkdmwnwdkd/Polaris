@@ -200,7 +200,9 @@ fun main() {
     val vm = read("app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt")
     val backup = read("core/src/main/java/com/beichen/polaris/core/BackupArchive.kt")
     val configStore = read("core/src/main/java/com/beichen/polaris/core/ConfigStore.kt")
-    val scaffold = read("app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt")
+    // 骨架 + 路由表：AppDest 枚举 2026-11-21 搬到 ui/AppDest.kt
+    val scaffold = read("app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt") +
+        "\n" + read("app/src/main/java/com/beichen/polaris/ui/AppDest.kt")
 
     check("S1 备份不再导出 PAT；恢复时沿用本机 PAT") {
         // P4-3：导出流程在 BackupUseCase（VM 只转发），断言跟着所有权走

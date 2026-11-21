@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.PieChart
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.SmartToy
@@ -630,6 +631,17 @@ fun SettingsScreen(
                             ).show()
                         }
                     }
+                )
+                // 存储明细：回答「我这几个 GB 都是什么」。
+                //
+                // 为什么放在诊断类而不是「通用」：用户点它的时候，心里已经有一个
+                // 具体的疑问（「我什么都没下，怎么占这么多」），这跟语音诊断、
+                // 后台自检是同一类——都是「我不确定它是不是出问题了，给我看一眼」。
+                AkListItem(
+                    icon = Icons.Outlined.PieChart,
+                    title = "存储空间",
+                    description = "每一笔占了多少、删了会损失什么；临时文件可一键清",
+                    onClick = { onNavigate(AppDest.STORAGE) }
                 )
                 // 存活自检：给没有电脑、拉不了 adb 的用户一个自测入口。
                 // 判据写在通知里——锁屏回来数字还在涨就是没被冻结。

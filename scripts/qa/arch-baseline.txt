@@ -234,7 +234,10 @@ lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1532
 # 混成同一屏，用户分不清「选中」和「录完自动选中」。
 # 增量 = 1 条路由枚举 + 1 行枚举注释 + 3 行 when 分支（含 onOpenClone 拆行）+ 2 行 import。
 # 已压到最小：3 行 when 是三条独立路由，不能合并；注释那行防的是「克隆塞回音色页」。
-lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1559
+# 2026-11-21 下调（1559 → 1506）：AppDest 枚举整体搬到 AppDest.kt。
+# 它是纯数据（路由/文案/图标），跟 800 行的页面骨架没有关系；搬走后 AppScaffold
+# 只剩导航与容器职责，同时也给「存储空间」子页腾出了位置（+7 行）。
+lines app/src/main/java/com/beichen/polaris/ui/AppScaffold.kt 1506
 
 # 2026-11-13 上调（ChatScreen +5）：工具返回的图片改成采样解码。
 # decodeDataUrl / DataImage 原来直接 decodeByteArray 全尺寸解码，一张 4000×3000
