@@ -29,7 +29,8 @@ if [ ! -f "$KOTLINC" ]; then
   exit 3
 fi
 if [ -z "${COROUTINES:-}" ] || [ ! -f "$COROUTINES" ]; then
-  echo "KS_HARNESS_SKIP $(basename "$0") 找不到 kotlinx-coroutines-core-jvm（Gradle 缓存未预热）" >&2
+  # 理由必须可核验（run-all.sh 的 R-17 会去查这个路径到底在不在），所以带上具体路径。
+  echo "KS_HARNESS_SKIP $(basename "$0") 缺少 kotlinx-coroutines-core-jvm：${COROUTINES:-$CACHE/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm}" >&2
   exit 3
 fi
 

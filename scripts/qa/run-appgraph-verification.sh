@@ -85,7 +85,11 @@ print(f"\n[A] 清单本体（解析到 {len(entries)} 条）")
 # 2026-11-18：30 条（+McpHostRuntime，MCP 前台服务重建后监听与配对不能跟着丢）
 # 2026-11-19：31 条（+ApprovalWhitelistStore，审批白名单同样是跨页面的进程级运行态；
 #   它此前漏登记，表现是 resetAll 之后「始终允许」仍然生效）
-check("A1 清单条数为 31", len(entries) == 31, f"实际 {len(entries)}")
+# 2026-11-21：33 条（+ApprovalBridge、+ApprovalOverlay）。同样是「漏登记」——
+#   跨应用审批浮层把状态放进了两个进程级 object，而清单没跟上。
+#   **这条漏登记是 CI 的 B4 判据抓出来的**，本地编译与行为 harness 都没看见：
+#   前者只证明代码能跑，后者只证明这两个对象各自对；「有没有登记」只能静态查。
+check("A1 清单条数为 33", len(entries) == 33, f"实际 {len(entries)}")
 
 names = [e["name"] for e in entries]
 dups = sorted({n for n in names if names.count(n) > 1})

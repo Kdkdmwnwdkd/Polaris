@@ -1,5 +1,7 @@
 package com.beichen.polaris
 
+import com.beichen.polaris.automation.ApprovalBridge
+import com.beichen.polaris.automation.ApprovalOverlay
 import com.beichen.polaris.automation.AutomationBridge
 import com.beichen.polaris.automation.DeviceContextStore
 import com.beichen.polaris.automation.adb.AdbCredentials
@@ -37,7 +39,7 @@ import com.beichen.polaris.ui.container.ContainerInstallController
  *
  * ## 为什么存在
  *
- * 这个应用里有 28 个带可变状态的 `object`：它们是跨层通信的真实通道
+ * 这个应用里有 30 个带可变状态的 `object`：它们是跨层通信的真实通道
  * （ViewModel ↔ 无障碍服务 ↔ 前台服务 ↔ 推理引擎），但依赖关系不写在任何构造参数里。
  * 后果是三条：
  *
@@ -130,6 +132,24 @@ object AppGraph {
                 packageName = "com.beichen.polaris.automation",
                 link = "无障碍服务实例 ↔ Agent 工具/设置页开关状态",
                 reset = { AutomationBridge.reset() }
+            )
+        )
+        add(
+            Global(
+                name = "ApprovalBridge",
+                packageName = "com.beichen.polaris.automation",
+                link = "ChatViewModel 的审批请求 ↔ 无障碍服务的跨应用浮层。审批是异步到达的，" +
+                    "而浮层活在 Service 里、比任何 Activity 都久，两边只能通过一个进程级通道对接",
+                reset = { ApprovalBridge.reset() }
+            )
+        )
+        add(
+            Global(
+                name = "ApprovalOverlay",
+                packageName = "com.beichen.polaris.automation",
+                link = "无障碍服务持有的浮层窗口（TYPE_ACCESSIBILITY_OVERLAY）。" +
+                    "窗口对象不能跨测试复用：上一个用例留下的窗口会盖住下一个用例的屏幕",
+                reset = { ApprovalOverlay.reset() }
             )
         )
         add(

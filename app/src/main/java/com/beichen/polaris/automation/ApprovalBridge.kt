@@ -140,7 +140,10 @@ object ApprovalBridge {
         return true
     }
 
-    /** 仅测试用：清空进程内状态。 */
+    /**
+     * 进程级状态复位。由 AppGraph 的测试清单调用，harness 也用它做用例隔离——
+     * 上一个用例留下的 `pending` 会让下一个用例一开局就看见一张别人的卡。
+     */
     fun reset() {
         _pending.value = null
         _overlayReady.value = false

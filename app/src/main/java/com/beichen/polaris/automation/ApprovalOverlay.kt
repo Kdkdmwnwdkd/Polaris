@@ -284,4 +284,15 @@ object ApprovalOverlay {
 
     /** 仅测试/诊断：浮层当前是否在屏幕上。 */
     val visible: Boolean get() = root != null
+
+    /**
+     * 进程级状态复位：拆掉窗口并清空通道状态。由 AppGraph 的测试清单调用。
+     *
+     * 与 [detach] 的区别只在语义——[detach] 是「无障碍服务销毁了」，
+     * 这个方法是「测试要一个干净的起点」。两者实现相同，但不合并：
+     * 将来 detach 若加上「记住上次位置」之类的行为，reset 不该跟着变。
+     */
+    fun reset() {
+        detach()
+    }
 }
