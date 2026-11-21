@@ -38,16 +38,22 @@ import kotlin.math.sqrt
  * 的固定倍数封顶）都会在别的场景塌掉——时间域里「稳态噪声」和「持续说话」不可分，
  * 要靠频谱 VAD 才能解，不是调常数能解决的。
  *
+ * 2026-11-22：已经接了。sherpa-onnx 的 silero VAD 由 `SileroVad` 驱动，
+ * 端点判定走 [VadEndpoint]。**本文件这一套没有删**——它是降级路径：
+ * 模型缺失、so 不支持、推理抛异常时，录音仍然能自动收尾，只是回到「安静环境准、
+ * 地铁环境可能不停」的旧行为。
+ *
  * ## 为什么放 core
  *
  * 纯 Kotlin、不碰 Android API，可以进 JVM 单测。这个判定的每一条阈值都值得被钉住——
  * 它错一次，用户的体验是「我没说话它自己发了一句」。
  *
- * ## 两种用法
+ * ## 三种用法
  *
  * - **整段判定**：[voicedMillis] / [hasSpeech] / [voicedMillisOfFrames] / [hasSpeechInFrames]。
  *   音频全拿到手再算，用于「这段录音该不该送去识别」。
- * - **增量判定**：[Tracker]。边录边判「这句说完了」，用于让整段模型也能自动收尾。
+ * - **增量判定（无模型）**：[Tracker]。边录边判「这句说完了」，只算 RMS。
+ * - **增量判定（有 VAD）**：[VadEndpoint]。判据由 silero 给出，这里只记时间。
  */
 object SpeechPresence {
 
@@ -71,6 +77,15 @@ object SpeechPresence {
      * 否则一个习惯长停顿的用户会永远等下去，看起来就像卡住了。
      */
     const val MAX_END_SILENCE_MS = 1300
+
+    /**
+     * VAD 版端点等的尾部静音。
+     *
+     * 比 RMS 版的 [MIN_END_SILENCE_MS] 短，因为 silero 模型内部已经先要求
+     * 250ms 静音才翻转状态（见 [VadEndpoint]），两者相加约 750ms。
+     * 再往上加只会让每次说话都多等，而准确率不会提高——模型已经确认说完了。
+     */
+    const val VAD_END_SILENCE_MS = 500
 
     /**
      * 自适应阈值在「已观测到的最长句内停顿」之上多留的余量。
@@ -329,6 +344,89 @@ object SpeechPresence {
             val noise = noiseOf(recent.toFloatArray()) ?: return false
             val mean = (voicedWeighted / voicedMs).toFloat()
             return mean >= noise * NOISE_MARGIN
+        }
+    }
+
+    /**
+     * 端点判定的 **VAD 版**：每块只告诉它「这一段是不是人声」。
+     *
+     * ## 为什么要有第二个端点类
+     *
+     * [Tracker] 用时间域的 RMS 判「有没有人在说话」。这条路的天花板写在
+     * [MAX_GATE] 的注释里：底噪高于 0.027 时门限被压到 0.08，说话电平落在
+     * 0.06–0.08 就会判成静音。地铁、吹风机、开着的电视都落在这个区间。
+     *
+     * 那个缺陷不是调常数能解的——"稳态噪声"和"持续说话"在时间域里不可分。
+     * 真正能分的是频谱模型，也就是 silero VAD：它吃 512 个样本，吐一个 0~1 的
+     * 人声概率，看的是频谱形状而不是音量大小。
+     *
+     * 所以这一层只留**时间维度**的事：累计有声时长、尾部静音、判停。
+     * 「这一块是不是人声」由调用方（[com.beichen.polaris.audio.asr.SileroVad]）
+     * 给出，这里不碰音频、不碰模型——于是它能在 JVM 上逐条对拍。
+     *
+     * ## 和 [Tracker] 的两处刻意不同
+     *
+     * 1. **不需要「对比度」判据**。[Tracker] 那道检查是为了挡住「门限估错时把
+     *    空调算成人声」；VAD 本身就在判人声，空调不会被它报成语音，再叠一层只
+     *    会让真语音在安静环境里被误杀。
+     * 2. **不需要自适应阈值**。[Tracker] 自适应是为了「按这个人的停顿习惯放宽」；
+     *    VAD 已经用 [minSilenceDuration] 消化了短停顿，剩下的只需要一个固定值——
+     *    一个会自己变的阈值在这里只会让延迟不可预期。
+     *
+     * ## 为什么要 [VAD_END_SILENCE_MS] 而不是和 [MIN_END_SILENCE_MS] 一样
+     *
+     * silero 模型内部先要求 250ms 静音才翻转「不在说话」，那是它自己的迟滞。
+     * 我们再等 [VAD_END_SILENCE_MS]，端到端约 750ms——比 RMS 版的 800ms 略快，
+     * 而且这 750ms 里没有一秒是「可能被切」的：模型已经确认语音结束了。
+     */
+    class VadEndpoint(
+        private val minVoicedMs: Int = MIN_SPEECH_MS,
+        private val endSilenceMs: Int = VAD_END_SILENCE_MS,
+    ) {
+
+        private var voicedMs = 0
+        private var silenceMs = 0
+        private var totalMs = 0
+
+        /**
+         * 喂一块音频的判定结果。
+         *
+         * @param isSpeech 这一段被 VAD 判为人声（不是「响」——是「像人说话」）
+         * @param blockMs 这一块的时长，与块大小无关
+         */
+        fun push(isSpeech: Boolean, blockMs: Int) {
+            if (blockMs <= 0) return
+            totalMs += blockMs
+            if (isSpeech) {
+                voicedMs += blockMs
+                silenceMs = 0
+            } else {
+                silenceMs += blockMs
+            }
+        }
+
+        /** 累计有声时长。 */
+        val voiced: Int get() = voicedMs
+
+        /** 尾部连续静音时长。 */
+        val silence: Int get() = silenceMs
+
+        /** 已录总时长。 */
+        val elapsed: Int get() = totalMs
+
+        /** 说完了没有。 */
+        fun shouldEnd(): Boolean = voicedMs >= minVoicedMs && silenceMs >= endSilenceMs
+
+        /**
+         * 清空状态，供下一条录音复用。
+         *
+         * 不复用也能用（每会话 new 一个），但 [com.beichen.polaris.audio.asr.SileroVad]
+         * 那个 ONNX 会话是贵的，复用它会顺带要求这个状态也能清。
+         */
+        fun reset() {
+            voicedMs = 0
+            silenceMs = 0
+            totalMs = 0
         }
     }
 }

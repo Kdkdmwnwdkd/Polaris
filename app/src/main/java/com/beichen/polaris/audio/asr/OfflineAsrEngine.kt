@@ -40,10 +40,37 @@ class OfflineAsrEngine(context: Context) : AsrEngine {
 
     private val tag = TAG
 
+    /**
+     * 只留 applicationContext：VAD 要从 assets 读模型，[AsrSession] 是长生命周期对象，
+     * 存 Activity 的 Context 会漏。
+     */
+    private val appContext = context.applicationContext
+
     override val dir: File = File(File(context.filesDir, "asr"), "zh-paraformer")
 
     @Volatile
     private var recognizer: OfflineRecognizer? = null
+
+    /**
+     * silero VAD。null = 不可用（模型缺失 / so 不匹配 / 内存不足），此时端点判定
+     * 走 [SpeechPresence.Tracker]（RMS 版）。只在第一次需要时尝试加载，失败不重试——
+     * 每句录音都去加载一个已知会失败的模型，等于让用户每句话都多等 100ms。
+     */
+    @Volatile
+    private var vad: SileroVad? = null
+
+    @Volatile
+    private var vadTried = false
+
+    private fun vadOrNull(): SileroVad? {
+        if (!vadTried) synchronized(this) {
+            if (!vadTried) {
+                vad = SileroVad.create(appContext)
+                vadTried = true
+            }
+        }
+        return vad
+    }
 
     override fun isInstalled(): Boolean = model() != null
 
@@ -68,13 +95,20 @@ class OfflineAsrEngine(context: Context) : AsrEngine {
                 }
                 ?: return null
         }
-        return Batch(r)
+        val v = vadOrNull()
+        v?.reset()
+        return Batch(r, v)
     }
 
     @Synchronized
     override fun release() {
         runCatching { recognizer?.release() }
         recognizer = null
+        // VAD 也一起收：它持有一个 ONNX 会话（约 5–10MB 常驻）。
+        // 下次 ensureSession 会重建（约 50ms），比一直占着内存划算。
+        runCatching { vad?.release() }
+        vad = null
+        vadTried = false
     }
 
     /**
@@ -83,29 +117,57 @@ class OfflineAsrEngine(context: Context) : AsrEngine {
      * `accept` 返回的永远是空串：整段模型没有「已经认出来的前半句」这种东西。
      * 上层的 partial 回调于是只在最后跳一次——这是这套模型的固有代价，不是 bug。
      *
-     * ## 端点靠自己的判据补上
+     * ## 端点：VAD 优先，RMS 兜底
      *
      * 这个模型没有原生 endpoint，`isEndpoint()` 曾长期恒返回 false，导致界面上
-     * 「说完自己停」是假的（见 [SpeechPresence.Tracker] 的说明）。现在每收一块
-     * 就算一次 RMS 交给 Tracker，尾部静音够长就报端点。判据与「这段该不该送识别」
-     * 同一套，所以不会出现「认为说完了、却认为没人说话」的自相矛盾。
+     * 「说完自己停」是假的（见 [SpeechPresence.Tracker] 的说明）。
+     *
+     * 现在两条判据**同时喂**：
+     *
+     * - [SileroVad]：频谱判据，地铁/风扇/电视开着也能分清人和噪声；
+     * - [SpeechPresence.Tracker]：时间域 RMS，VAD 不可用时的降级路径。
+     *
+     * 两条都喂而不是「有 VAD 就不算 RMS」，是为了让降级**立刻可用**：VAD 在某一句
+     * 中间崩了（ONNX 偶发），Tracker 已经攒着这半句的数据，切过去就能接着判，
+     * 不用从零开始——否则用户会遇到「这一句突然永远不自动停」。
+     *
+     * 多算一次 100ms 块的 RMS 是 1600 次乘加，可忽略。
      */
-    private class Batch(private val recognizer: OfflineRecognizer) : AsrSession {
+    private class Batch(
+        private val recognizer: OfflineRecognizer,
+        private val vad: SileroVad?,
+    ) : AsrSession {
 
         private val chunks = ArrayList<FloatArray>(64)
         private val tracker = SpeechPresence.Tracker()
+        private val endpoint = SpeechPresence.VadEndpoint()
         private var total = 0
+
+        /** VAD 中途失败时会翻成 false，此后本会话永久走 RMS。 */
+        private var useVad = vad != null
 
         override fun accept(samples: FloatArray, sampleRate: Int): String {
             chunks.add(samples)
             total += samples.size
             if (sampleRate > 0 && samples.isNotEmpty()) {
-                tracker.push(rmsOf(samples), samples.size * 1000 / sampleRate)
+                val ms = samples.size * 1000 / sampleRate
+                // RMS 一直喂：它是降级路径，必须随时是热的。
+                tracker.push(rmsOf(samples), ms)
+                if (useVad) {
+                    val speech = vad?.push(samples)
+                    if (speech == null) {
+                        useVad = false
+                        AgentLogger.w(TAG, "VAD 中断，本句回落 RMS 判据")
+                    } else {
+                        endpoint.push(speech, ms)
+                    }
+                }
             }
             return ""
         }
 
-        override fun isEndpoint(): Boolean = tracker.shouldEnd()
+        override fun isEndpoint(): Boolean =
+            if (useVad) endpoint.shouldEnd() else tracker.shouldEnd()
 
         override fun finish(): String {
             if (total <= 0) return ""
@@ -124,13 +186,30 @@ class OfflineAsrEngine(context: Context) : AsrEngine {
             // 一放大等于把底噪抬成「很响的音频」，模型就会给这段噪声编出几个字——
             // 2026-11-21 真机实测里「一个字没说却识别出 3 字」就是这么来的。
             // 判定放在放大之前，看到的才是真实音量。
+            //
+            // 两条判据的语义不同，别互相替换：
+            // - VAD 路径看 `endpoint.voiced > 0`：模型要求连续 200ms 语音才翻 true，
+            //   所以「有过一段被判为人声」本身就等价于「够长且像人说话」。
+            //   这块只累加 100ms 粒度，拿它和 200ms 比会把短句误杀。
+            // - RMS 路径仍是 200ms：那是纯电平，没有任何语义保障。
             val fullMs = pcm.size * 1000 / SAMPLE_RATE
-            val voiced = SpeechPresence.voicedMillis(pcm, SAMPLE_RATE)
-            if (voiced < SpeechPresence.MIN_SPEECH_MS) {
-                AgentLogger.i(TAG, "判为无人声：有声 ${voiced}ms / 全段 ${fullMs}ms，不送识别")
+            val voiced = if (useVad) {
+                endpoint.voiced
+            } else {
+                SpeechPresence.voicedMillis(pcm, SAMPLE_RATE)
+            }
+            val hasSpeech = if (useVad) voiced > 0 else voiced >= SpeechPresence.MIN_SPEECH_MS
+            if (!hasSpeech) {
+                AgentLogger.i(
+                    TAG,
+                    "判为无人声（${if (useVad) "VAD" else "RMS"}）：有声 ${voiced}ms / 全段 ${fullMs}ms，不送识别",
+                )
                 return ""
             }
-            AgentLogger.i(TAG, "送识别：有声 ${voiced}ms / 全段 ${fullMs}ms")
+            AgentLogger.i(
+                TAG,
+                "送识别（${if (useVad) "VAD" else "RMS"}）：有声 ${voiced}ms / 全段 ${fullMs}ms",
+            )
 
             normalize(pcm)
 
