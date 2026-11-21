@@ -112,6 +112,10 @@ object ToolCatalog {
         CatalogTool("ui_input", "ui", Capability.DANGEROUS, Approval.UI_ACTION),
         CatalogTool("ui_key", "ui", Capability.DANGEROUS, Approval.UI_ACTION),
         CatalogTool("ui_click", "ui", Capability.DANGEROUS, Approval.UI_ACTION),
+        // 批处理：一次调用里串行执行多个界面动作。归到 UI_ACTION 组是有意的——
+        // 用户点「本次会话不再询问界面点击与输入」时，批处理和单步动作是同一类操作，
+        // 不该因为换了工具名就再问一次。
+        CatalogTool("ui_batch", "ui", Capability.DANGEROUS, Approval.UI_ACTION),
         CatalogTool("ui_screenshot", "ui", Capability.DANGEROUS, Approval.UI_SCREENSHOT),
         CatalogTool("ask_user", "ui", Capability.SAFE),
         // ── net：HTTP 请求与网页抓取

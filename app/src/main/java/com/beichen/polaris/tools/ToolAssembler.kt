@@ -6,6 +6,7 @@ import com.beichen.polaris.audio.VoiceArbiter
 import com.beichen.polaris.automation.DeviceForegroundAppTool
 import com.beichen.polaris.automation.DeviceNotificationsTool
 import com.beichen.polaris.automation.OcrTool
+import com.beichen.polaris.automation.UiBatchTool
 import com.beichen.polaris.automation.UiClickTool
 import com.beichen.polaris.automation.UiInputTool
 import com.beichen.polaris.automation.UiKeyTool
@@ -129,6 +130,9 @@ object ToolAssembler {
         register(UiInputTool())
         register(UiKeyTool())
         register(UiClickTool())
+        // 批处理（2026-11-21）：一个屏幕上的连续动作合成一次调用，省掉 N-1 次模型往返。
+        // 必须放在全部 ui_* 之后——它靠 registry.get(name) 找目标工具，注册顺序即依赖顺序。
+        register(UiBatchTool(this))
         // 截图（无障碍）：喂给视觉模型“看”屏幕
         register(UiScreenshotTool(deps.workspace))
         // 设备感知（L3）：通知监听 + 当前前台应用

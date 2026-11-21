@@ -1495,7 +1495,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             grant.key == ApprovalGrouping.GROUP_UI_SCREENSHOT && screenshotApprovedThisTurn
         ) return@withLock true
         val deferred = CompletableDeferred<Boolean>()
-        val preview = ApprovalPreview.of(args.toString())
+        val preview = ApprovalPreview.of(toolName, args)
         _pendingApproval.value = ApprovalRequest(
             toolName = toolName,
             // P0-2：预览与判定同源。原来 take(500) 会砍掉命令尾部，
