@@ -28,8 +28,13 @@ import kotlin.math.max
  *
  * ## 端点（说完自动停）
  *
- * 桌宠是「按一下说一句」，如果非要用户再按一次结束，体验就退化成对讲机。
- * 所以把判断交给流式模型的 endpoint：尾部静音够了就自动收尾。
+ * 两条入口的交互不一样，所以端点要能关：
+ *
+ * - **聊天页的语音面板**是「按一下开始、说完自己停」，必须自动收尾；
+ * - **桌宠**是「按住说」，用户按住期间停下来想词，不该被判定说完了。
+ *
+ * 自动收尾的判据现在两条路都有：流式模型用原生 endpoint，整段模型用
+ * [com.beichen.polaris.core.voice.SpeechPresence.Tracker] 算尾部静音。
  * 同时保留硬上限 [MAX_MS]，防止环境噪音让识别永远不结束。
  */
 class LocalSpeechInput(
@@ -62,9 +67,11 @@ class LocalSpeechInput(
     /**
      * 开始收音。
      *
+     * @param autoStop 尾部静音够了就自动收尾。聊天页面板要开（文案就是「说完自己停」）；
+     *   桌宠是按住说话，必须关——用户按住期间停下来想词不该被判说完了。
      * @return true = 真的开了麦；false = 当场失败（已通过 [onEvent] 报了原因）。
      */
-    fun start(onEvent: (Event) -> Unit): Boolean {
+    fun start(autoStop: Boolean = true, onEvent: (Event) -> Unit): Boolean {
         if (running) {
             onEvent(Event.Failed("上一次还没结束"))
             return false
@@ -89,7 +96,7 @@ class LocalSpeechInput(
         }
 
         running = true
-        val t = Thread({ loop(session, onEvent) }, "asr-capture")
+        val t = Thread({ loop(session, autoStop, onEvent) }, "asr-capture")
         t.priority = Thread.NORM_PRIORITY + 1
         thread = t
         t.start()
@@ -109,7 +116,7 @@ class LocalSpeechInput(
 
     // —— 内部 ——
 
-    private fun loop(session: AsrSession, onEvent: (Event) -> Unit) {
+    private fun loop(session: AsrSession, autoStop: Boolean, onEvent: (Event) -> Unit) {
         var recorder: AudioRecord? = null
         try {
             // 先等扬声器出口静下来再开麦。
@@ -157,7 +164,7 @@ class LocalSpeechInput(
                     last = text
                     onEvent(Event.Partial(text))
                 }
-                if (session.isEndpoint() || System.currentTimeMillis() - started > MAX_MS) {
+                if ((autoStop && session.isEndpoint()) || System.currentTimeMillis() - started > MAX_MS) {
                     running = false
                 }
             }

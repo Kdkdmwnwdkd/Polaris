@@ -131,7 +131,9 @@ class PetVoiceInput(
 
         val input = LocalSpeechInput(app, localAsr, AudioGraph.arbiter(app))
         localInput = input
-        val started = input.start { event ->
+        // autoStop = false：桌宠是「按住说」，按住期间停下来想词不该被判说完了。
+        // 结束只由松手（[stop]）或 [HARD_TIMEOUT_MS] 触发。
+        val started = input.start(autoStop = false) { event ->
             // 回调来自录音线程，UI 状态与 onText 都必须在主线程。
             handler.post {
                 when (event) {

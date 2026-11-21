@@ -66,8 +66,15 @@ fun LocalVoiceSheet(
                     is LocalSpeechInput.Event.Partial -> text = event.text
                     is LocalSpeechInput.Event.Final -> {
                         listening = false
-                        // 端点自己判停时会走到这里：说了话就直接交，没说话就留在原地让用户重试。
-                        if (event.text.isNotBlank()) onSubmit(event.text) else error = "没听清，再说一次试试"
+                        // 端点自己判停时会走到这里：说了话就直接交，没说话就留在原地。
+                        // 这里不能自动重开麦（cancel 与下一次 start 会抢同一个 AudioRecord），
+                        // 所以文案要说清下一步动作是「再点一次麦克风」，而不是「重说」——
+                        // 面板上此刻唯一的按钮是「关闭」。
+                        if (event.text.isNotBlank()) {
+                            onSubmit(event.text)
+                        } else {
+                            error = "没听清，关掉后再点一次麦克风"
+                        }
                     }
                     is LocalSpeechInput.Event.Failed -> {
                         listening = false

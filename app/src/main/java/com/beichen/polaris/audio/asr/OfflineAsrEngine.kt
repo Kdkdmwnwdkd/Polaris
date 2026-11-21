@@ -9,6 +9,7 @@ import com.k2fsa.sherpa.onnx.OfflineParaformerModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import java.io.File
+import kotlin.math.sqrt
 
 /**
  * 整段识别（paraformer-zh-small，非流式）。
@@ -81,19 +82,30 @@ class OfflineAsrEngine(context: Context) : AsrEngine {
      *
      * `accept` 返回的永远是空串：整段模型没有「已经认出来的前半句」这种东西。
      * 上层的 partial 回调于是只在最后跳一次——这是这套模型的固有代价，不是 bug。
+     *
+     * ## 端点靠自己的判据补上
+     *
+     * 这个模型没有原生 endpoint，`isEndpoint()` 曾长期恒返回 false，导致界面上
+     * 「说完自己停」是假的（见 [SpeechPresence.Tracker] 的说明）。现在每收一块
+     * 就算一次 RMS 交给 Tracker，尾部静音够长就报端点。判据与「这段该不该送识别」
+     * 同一套，所以不会出现「认为说完了、却认为没人说话」的自相矛盾。
      */
     private class Batch(private val recognizer: OfflineRecognizer) : AsrSession {
 
         private val chunks = ArrayList<FloatArray>(64)
+        private val tracker = SpeechPresence.Tracker()
         private var total = 0
 
         override fun accept(samples: FloatArray, sampleRate: Int): String {
             chunks.add(samples)
             total += samples.size
+            if (sampleRate > 0 && samples.isNotEmpty()) {
+                tracker.push(rmsOf(samples), samples.size * 1000 / sampleRate)
+            }
             return ""
         }
 
-        override fun isEndpoint(): Boolean = false
+        override fun isEndpoint(): Boolean = tracker.shouldEnd()
 
         override fun finish(): String {
             if (total <= 0) return ""
@@ -174,6 +186,13 @@ class OfflineAsrEngine(context: Context) : AsrEngine {
 
         /** 放大后的目标峰值。留 0.1 余量，避免后续重采样时削顶。 */
         const val TARGET_PEAK = 0.9f
+
+        /** 一块的 RMS。端点判据按块喂，块长由录音循环决定（固定 100ms）。 */
+        fun rmsOf(samples: FloatArray): Float {
+            var sum = 0.0
+            for (v in samples) sum += v.toDouble() * v
+            return sqrt(sum / samples.size).toFloat()
+        }
 
         /** 只放大不衰减：已经很响的录音再拉满只会削顶，反而更糟。 */
         fun normalize(pcm: FloatArray) {

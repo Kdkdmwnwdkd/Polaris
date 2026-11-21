@@ -14,7 +14,13 @@ interface AsrSession {
     /** 喂一段 16kHz 单声道 PCM，返回**目前为止**的整句文本。 */
     fun accept(samples: FloatArray, sampleRate: Int = 16_000): String
 
-    /** 引擎自己判断「这句说完了」。整段识别永远返回 false——它只在收尾时认一次。 */
+    /**
+     * 引擎自己判断「这句说完了」。
+     *
+     * 流式模型用原生端点；整段模型没有，靠 [com.beichen.polaris.core.voice.SpeechPresence.Tracker]
+     * 边收边算尾部静音。两条路都能自动收尾——2026-11-21 之前整段这条路恒返回 false，
+     * 界面上「说完自己停」是假的。
+     */
     fun isEndpoint(): Boolean
 
     /** 松手：给出最终文本。 */

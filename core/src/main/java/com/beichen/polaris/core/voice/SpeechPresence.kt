@@ -36,6 +36,12 @@ import kotlin.math.sqrt
  *
  * 纯 Kotlin、不碰 Android API，可以进 JVM 单测。这个判定的每一条阈值都值得被钉住——
  * 它错一次，用户的体验是「我没说话它自己发了一句」。
+ *
+ * ## 两种用法
+ *
+ * - **整段判定**：[voicedMillis] / [hasSpeech] / [voicedMillisOfFrames] / [hasSpeechInFrames]。
+ *   音频全拿到手再算，用于「这段录音该不该送去识别」。
+ * - **增量判定**：[Tracker]。边录边判「这句说完了」，用于让整段模型也能自动收尾。
  */
 object SpeechPresence {
 
@@ -44,6 +50,23 @@ object SpeechPresence {
 
     /** 累计有声时长低于这个值就算「没人说话」。"嗯"一声大约 300ms，200ms 不会误杀。 */
     const val MIN_SPEECH_MS = 200
+
+    /**
+     * 尾部连续静音超过这个时长，认为「这句说完了」。
+     *
+     * 中文自然停顿（"我想想……嗯，就这样"）约 300–600ms，取 1000ms 才不会把
+     * 句中的思考停顿当成句末。代价是说完要多等 1 秒——比被截断重说划算。
+     */
+    const val END_SILENCE_MS = 1000
+
+    /**
+     * 增量判据里估底噪用的窗口：20 块。
+     *
+     * 块长由调用方决定（录音循环固定 100ms），20 块即 2 秒。
+     * [gateOf] 的分位估计要求至少 10 个样本，所以开头 1 秒内门限退回绝对下限——
+     * 那一秒里宁放松不收紧：把用户第一个字判掉，比把底噪当人声更难受。
+     */
+    private const val NOISE_WINDOW_BLOCKS = 20
 
     /**
      * 绝对门限（帧 RMS）。0.006 ≈ -44 dBFS。
@@ -119,11 +142,123 @@ object SpeechPresence {
      * 直接退到绝对下限——短录音本来也不该因为「估不出底噪」被放行。
      */
     private fun gateOf(frameRms: FloatArray): Float {
+        val noise = noiseOf(frameRms) ?: return FLOOR_RMS
+        return min(max(noise * NOISE_MARGIN, FLOOR_RMS), MAX_GATE)
+    }
+
+    /**
+     * 底噪估计：排序后取 [NOISE_PERCENTILE] 分位。
+     *
+     * 样本不足 10 个时返回 null——分位在这个量级上没有统计意义，
+     * 调用方要么退回绝对下限（整段判据），要么干脆不下结论（[Tracker]）。
+     */
+    private fun noiseOf(frameRms: FloatArray): Float? {
         val n = frameRms.size
-        if (n < 10) return FLOOR_RMS
+        if (n < 10) return null
         val sorted = frameRms.copyOf()
         sorted.sort()
-        val noise = sorted[((n - 1) * NOISE_PERCENTILE).toInt()]
-        return min(max(noise * NOISE_MARGIN, FLOOR_RMS), MAX_GATE)
+        return sorted[((n - 1) * NOISE_PERCENTILE).toInt()]
+    }
+
+    /**
+     * 边录边判「这句说完了没有」。
+     *
+     * ## 为什么需要它
+     *
+     * 上面那一整套（[voicedMillis] / [hasSpeech]）都要**整段音频拿到手**才能算。
+     * 可整段识别（paraformer）的会话是「攒到松手才认一次」，它没有流式模型那种
+     * 原生 endpoint——`AsrSession.isEndpoint()` 只能恒返回 false。
+     *
+     * 于是界面上那句「正在听（说完自己停）」是假的：2026-11-21 核对代码时发现，
+     * 只要装了 paraformer（[AsrRouter] 优先选它），用户说完话之后录音不会停，
+     * 要么手动点「说完了」，要么一直录到 30 秒硬上限。屏幕上还一直是「说点什么…」——
+     * 因为整段模型在收尾前不产出任何文本。用户看到的就是「按了麦克风，然后卡住」。
+     *
+     * ## 判据是同一套，只是换成了增量
+     *
+     * 每来一块音频算一个 RMS，用**滑动窗口的最小值**估底噪（替代整段的低分位），
+     * 超过底噪 [NOISE_MARGIN] 倍算有声。窗口 2 秒够跟上空调启停这类缓变噪声，
+     * 又短到不会被一个人的说话声长期抬高。
+     *
+     * 与 [voicedMillisOfFrames] 的关系：同一段音频、同样安静的环境下，两者对
+     * 「有没有说过话」的结论应当一致；差别只在 Tracker 每 100ms 就能回答一次。
+     *
+     * ## 两个刻意的不对称
+     *
+     * 1. **没说过话就永远不判停**。否则用户按下麦克风后稍一犹豫（1 秒没开口），
+     *    会话就被判「说完了」并提交一句空话。
+     * 2. **只要有声就把尾部静音清零**。静音是「连续」概念，中间一个「嗯」
+     *    就该重新计时，不然一段有停顿的话会被从停顿处切开。
+     *
+     * ## 为什么还要一道「对比度」
+     *
+     * 录音开头 1 秒窗口里样本不足 10 个，估不出底噪，门限只能退到绝对下限 [FLOOR_RMS]。
+     * 于是空调声（0.01，高于 0.006）在这 1 秒里会被误计成「有声」。如果只看
+     * 「有声够 200ms、静音够 1 秒」两条，空调一开一停就能把会话判结束——
+     * 用户什么都没说，界面却自己关了。
+     *
+     * 所以判停前再看一眼**对比度**：有声段的平均电平必须比当前底噪高 [NOISE_MARGIN] 倍。
+     * 空调的「有声」和「底噪」都是 0.01，比值 1，不通过；真人说话 0.05 对底噪 0.001，
+     * 比值 50，通过。这条恰好也是 [gateOf] 的定义——只是换成事后核验。
+     */
+    class Tracker(
+        private val endSilenceMs: Int = END_SILENCE_MS,
+        private val windowBlocks: Int = NOISE_WINDOW_BLOCKS,
+    ) {
+
+        private val recent = ArrayDeque<Float>(windowBlocks)
+
+        private var voicedMs = 0
+        private var silenceMs = 0
+        private var totalMs = 0
+
+        /** 有声段的电平和：Σ rms × ms。判停前用它核算「这段到底算不算人声」。 */
+        private var voicedWeighted = 0.0
+
+        /**
+         * 喂一块音频。
+         *
+         * @param blockRms 这一块的 RMS（不是峰值）
+         * @param blockMs 这一块的时长。块长由调用方定，与 [FRAME_MS] 无关
+         */
+        fun push(blockRms: Float, blockMs: Int) {
+            if (blockMs <= 0 || !blockRms.isFinite()) return
+            recent.addLast(blockRms)
+            while (recent.size > windowBlocks) recent.removeFirst()
+            totalMs += blockMs
+            if (blockRms >= gateOf(recent.toFloatArray())) {
+                voicedMs += blockMs
+                voicedWeighted += blockRms.toDouble() * blockMs
+                silenceMs = 0
+            } else {
+                silenceMs += blockMs
+            }
+        }
+
+        /** 累计有声时长。 */
+        val voiced: Int get() = voicedMs
+
+        /** 尾部连续静音时长。 */
+        val silence: Int get() = silenceMs
+
+        /** 已录总时长。 */
+        val elapsed: Int get() = totalMs
+
+        /** 说完了没有。 */
+        fun shouldEnd(): Boolean =
+            voicedMs >= MIN_SPEECH_MS && silenceMs >= endSilenceMs && hasContrast()
+
+        /**
+         * 有声段确实比底噪响 [NOISE_MARGIN] 倍吗。
+         *
+         * 窗口不足 10 块时返回 false：没有底噪样本就没有对比依据，
+         * 宁可多等一会儿让用户手点，也不要提前把会话关掉。
+         */
+        private fun hasContrast(): Boolean {
+            if (voicedMs <= 0) return false
+            val noise = noiseOf(recent.toFloatArray()) ?: return false
+            val mean = (voicedWeighted / voicedMs).toFloat()
+            return mean >= noise * NOISE_MARGIN
+        }
     }
 }
