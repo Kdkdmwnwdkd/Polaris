@@ -32,6 +32,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.beichen.polaris.core.capability.A11yState
+import com.beichen.polaris.core.capability.a11yStateOf
 import com.beichen.polaris.core.container.RootfsManager
 import com.beichen.polaris.ui.contract.PermissionReadout
 import kotlinx.coroutines.Dispatchers
@@ -74,21 +76,40 @@ fun ReadinessCard(
 
     var expanded by rememberSaveable { mutableStateOf(false) }
 
-    data class Item(val title: String, val hint: String, val done: Boolean, val action: (() -> Unit)?)
+    // 「开关开着但服务掉了」要能看出来是被别的无障碍应用顶掉了，而不是「你忘了开」。
+    // 见 [A11yState]：实测 uiautomator / 自动点击器 / 抢票插件都会把它顶掉。
+    val a11yState = a11yStateOf(serviceConnected, rememberA11yEnabledInSettings(serviceConnected))
+
+    data class Item(
+        val title: String,
+        val hint: String,
+        val done: Boolean,
+        val action: (() -> Unit)?,
+        /** 右侧动作词；默认「去开启」，被占用时改成「重开」——动作确实不同（要先进去关一次）。 */
+        val actionLabel: String = "去开启"
+    )
 
     val items = listOf(
-        Item("无障碍服务", "让它替你看屏幕、点按钮", serviceConnected) {
-            vm.openAccessibilitySettings(ctx)
-        },
-        Item("通知权限", "任务跑完能提醒你", notificationGranted) {
+        Item(
+            title = "无障碍服务",
+            hint = when (a11yState) {
+                A11yState.Connected -> "让它替你看屏幕、点按钮"
+                A11yState.EnabledNotConnected -> "开关是开的，但服务没连上——可能被其他无障碍应用占用"
+                A11yState.Off -> "让它替你看屏幕、点按钮"
+            },
+            done = serviceConnected,
+            action = { vm.openAccessibilitySettings(ctx) },
+            actionLabel = if (a11yState == A11yState.EnabledNotConnected) "重开" else "去开启"
+        ),
+        Item("通知权限", "任务跑完能提醒你", notificationGranted, action = {
             openAppNotificationSettings(ctx)
-        },
-        Item("使用情况访问", "知道你正在用哪个 App", usageGranted) {
+        }),
+        Item("使用情况访问", "知道你正在用哪个 App", usageGranted, action = {
             safeStart(ctx, Settings.ACTION_USAGE_ACCESS_SETTINGS)
-        },
-        Item("容器运行时", "在里面跑 node / python / java", containerReady == true) {
+        }),
+        Item("容器运行时", "在里面跑 node / python / java", containerReady == true, action = {
             onOpenContainer()
-        }
+        })
     )
     val missing = items.count { !it.done }
     if (missing == 0) return
@@ -153,7 +174,7 @@ fun ReadinessCard(
                             }
                             if (item.action != null) {
                                 Text(
-                                    text = "去开启",
+                                    text = item.actionLabel,
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.primary
                                 )

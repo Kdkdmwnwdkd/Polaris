@@ -1320,7 +1320,9 @@ private fun DrawerHeader(
         AkReadyTextRow(
             serviceConnected = serviceConnected,
             pendingGrants = pendingGrants,
-            onClick = onReadyClick
+            onClick = onReadyClick,
+            // 「开关开着却没连上」与「压根没开」是两回事：前者多半被别的无障碍应用顶掉了
+            enabledInSettings = rememberA11yEnabledInSettings(serviceConnected)
         )
     }
 }

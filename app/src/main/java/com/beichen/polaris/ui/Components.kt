@@ -81,6 +81,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.CrashLogger
+import com.beichen.polaris.core.capability.A11yState
+import com.beichen.polaris.core.capability.a11yStateOf
 import kotlinx.coroutines.delay
 
 /**
@@ -798,28 +800,41 @@ fun AkStatusDot(color: Color, size: Dp = 8.dp) {
  * ② warning 点 +「无障碍已连接 · N 项待授权」（N 用正文数字，与权限中心红点同源）；
  * ③ danger 点 +「无障碍未连接」。
  *
- * 状态词着色、其余 on-surface-var；整行可点（抽屉里跳权限中心，权限中心里就地刷新）。
+ * 2026-11-22 补第三点五态：④「无障碍被占用」——设置里仍启用、服务却掉了。
+ * 系统同一时刻只让一个无障碍客户端拿稳，自动点击器/抢票插件/厂商 AI 助手都会把它顶掉。
+ * 这时说「未连接」是错的：用户会以为是自己没开，跑去设置里反复开关。见 [A11yState]。
  */
 @Composable
 fun AkReadyTextRow(
     serviceConnected: Boolean,
     pendingGrants: Int,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 设置里是否仍启用本服务；由 [isEnabledInSettings] 探测，用于区分「没开」与「被顶掉」。 */
+    enabledInSettings: Boolean = false
 ) {
     val ak = LocalAkColors
+    val state = a11yStateOf(serviceConnected, enabledInSettings)
     val dotColor = when {
-        !serviceConnected -> MaterialTheme.colorScheme.error
+        state == A11yState.Off -> MaterialTheme.colorScheme.error
+        state == A11yState.EnabledNotConnected -> ak.warning
         pendingGrants > 0 -> ak.warning
         else -> ak.success
     }
-    val head = if (serviceConnected) "无障碍已连接" else "无障碍未连接"
-    val tail = if (serviceConnected && pendingGrants > 0) " · ${pendingGrants} 项待授权" else ""
+    val head = when (state) {
+        A11yState.Connected -> "无障碍已连接"
+        A11yState.EnabledNotConnected -> "无障碍被占用"
+        A11yState.Off -> "无障碍未连接"
+    }
+    val tail = if (state == A11yState.Connected && pendingGrants > 0) " · ${pendingGrants} 项待授权" else ""
     val onVar = MaterialTheme.colorScheme.onSurfaceVariant
-    val talkBack = if (serviceConnected) {
-        if (pendingGrants > 0) "$head，${pendingGrants} 项待授权，双击进入权限中心" else head
-    } else {
-        "无障碍未连接，双击进入权限中心"
+    // 读屏文案：把「开关开着但没连上」的原因说出来，否则视障用户得到的异常与视觉用户一样含糊。
+    val talkBack = when (state) {
+        A11yState.Connected ->
+            if (pendingGrants > 0) "$head，${pendingGrants} 项待授权，双击进入权限中心" else head
+        A11yState.EnabledNotConnected ->
+            "无障碍开关是开的，但服务没连上——可能被其他无障碍应用占用。双击进入权限中心"
+        A11yState.Off -> "无障碍未连接，双击进入权限中心"
     }
     Row(
         modifier = modifier

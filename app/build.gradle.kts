@@ -134,7 +134,14 @@ android {
         val ciVersionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: LOCAL_FALLBACK_VERSION_CODE
         // maxOf 兜底，确保 versionCode 永不小于历史值，否则 Android 拒绝覆盖安装。
         versionCode = maxOf(maxOf(ciVersionCode, LOCAL_FALLBACK_VERSION_CODE), localVersionCode ?: 0)
-        versionName = "1.$versionCode"
+        // 三个入口都没给值时，1.$versionCode 会算成「1.14」——一个**看起来完全正常**的版本号。
+        // 2026-11-22 云机实测的后果：本地 debug 包的诊断包首行写「版本：1.14 (14)」，
+        // 手册让用户「先确认装的是哪个版本」，而本地包永远显示 1.14，无法判断新旧。
+        // 加 `-local` 后缀让「这个包不是 CI 出的」在版本号层面就无处可藏。
+        val versionInjected = project.findProperty("versionCode") != null ||
+            localProps.getProperty("polaris.versionCode") != null ||
+            System.getenv("GITHUB_RUN_NUMBER") != null
+        versionName = "1.$versionCode" + if (versionInjected) "" else "-local"
         // 本地 llama.cpp 推理只编 arm64-v8a：先覆盖全部真机，模拟器 x86_64 后续再补
         if (!skipNative) {
             ndk {

@@ -1,6 +1,5 @@
 package com.beichen.polaris.core.capability
 
-import com.beichen.polaris.core.AgentLogger
 
 /*
  * Phase 2 · DoD⑤「权限/能力申请一次走完降级链」——统一「能力链」抽象（核心，零 Android 依赖）。
@@ -28,9 +27,6 @@ import com.beichen.polaris.core.AgentLogger
  * 可操作 `hint`（具体到下一步该做什么），与 tools/AppControlTools.kt 里 app_stop 的
  * 诚实降级一脉相承。
  */
-
-/** 日志标签（降级轨迹逐级落日志，便于真机诊断）。 */
-private const val TAG = "CapabilityChain"
 
 /**
  * 全链不可用且候选未自带提示时的**兜底引导**（保证终态 `hint` 恒非空）。
@@ -209,36 +205,4 @@ fun resolveCapability(request: CapabilityRequest): CapabilityResolution {
 private fun synthesizeHint(candidates: List<BackendAvailability>): String {
     val hints = candidates.mapNotNull { it.hint?.takeIf { h -> h.isNotBlank() } }
     return if (hints.isEmpty()) CAPABILITY_FALLBACK_HINT else hints.joinToString("；")
-}
-
-/**
- * 把降级轨迹逐级写入日志（每级一行：候选名 + 可用性 + 原因），并在末尾记一条裁决行。
- *
- * 与 [resolveCapability] 的**纯函数**属性解耦：求解本身不改任何状态；可观测性由此独立完成，
- * 调用方（ViewModel / 工具层）在拿到结果后调用本方法即可。异常安全（日志只是旁路）。
- */
-fun CapabilityResolution.logTrace() {
-    trace.forEach { entry ->
-        AgentLogger.i(
-            TAG,
-            "[${capability.wire}] 候选「${entry.label}」可用=${entry.available}" +
-                (entry.reason?.takeIf { it.isNotBlank() }?.let { "，原因=$it" } ?: "")
-        )
-    }
-    when (this) {
-        is CapabilityResolution.Selected -> {
-            // W-61：原来是 `降级 ${trace.size} 级`——**off by one**。trace 从首候选一直列到
-            // 选中项，选中首选时 trace.size 已经是 1，于是日志写成「降级 1 级」；选中第 2 档
-            // 写成「降级 2 级」。真机日志里 [run_shell] 明明命中的是首选 Shizuku，却显示
-            // 「降级 1 级」，读日志时会被误导成「有更优候选但没选它」。
-            val degraded = (trace.size - 1).coerceAtLeast(0)
-            AgentLogger.i(
-                TAG,
-                "[${capability.wire}] 选中「${backend.label}」（" +
-                    (if (degraded == 0) "首选" else "降级 $degraded 级") + "）"
-            )
-        }
-        is CapabilityResolution.Unavailable ->
-            AgentLogger.w(TAG, "[${capability.wire}] 全链不可用：$message")
-    }
 }

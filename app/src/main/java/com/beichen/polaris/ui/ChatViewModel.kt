@@ -712,14 +712,16 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      *
      * 类型显式标注：lambda 反向引用 [permissionFacade]，交给推断会撞上 K1 的递归问题。
      */
-    private val capabilityReadiness: CapabilityReadiness = CapabilityReadiness { capability: Capability ->
-        when (capability) {
-            Capability.RUN_SHELL -> terminalBackendFactory.shellCapabilitySnapshot(
-                shizukuAvailable = permissionFacade.shizukuReady
-            )
-            Capability.CONTROL_SCREEN -> screenCapabilitySnapshot()
+    private val capabilityReadiness: CapabilityReadiness = CapabilityReadiness(
+        snapshotFor = { capability: Capability ->
+            when (capability) {
+                Capability.RUN_SHELL -> terminalBackendFactory.shellCapabilitySnapshot(
+                    shizukuAvailable = permissionFacade.shizukuReady
+                )
+                Capability.CONTROL_SCREEN -> screenCapabilitySnapshot()
+            }
         }
-    }
+    )
     override val capabilityPlans: StateFlow<List<CapabilityResolution>> get() = capabilityReadiness.plans
 
     /** 重算全部能力的就绪度（进入权限页 / 权限或自动化状态变化时调用）。 */

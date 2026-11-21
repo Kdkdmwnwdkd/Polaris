@@ -223,7 +223,8 @@ fun PermissionsScreen(vm: PermissionStatusContract, onStartGuide: () -> Unit = {
                 AkReadyTextRow(
                     serviceConnected = connected,
                     pendingGrants = pendingGrants,
-                    onClick = { vm.refreshGrants() }
+                    onClick = { vm.refreshGrants() },
+                    enabledInSettings = rememberA11yEnabledInSettings(connected)
                 )
                 Spacer(Modifier.height(AgentSpacing.space3))
                 Text(
