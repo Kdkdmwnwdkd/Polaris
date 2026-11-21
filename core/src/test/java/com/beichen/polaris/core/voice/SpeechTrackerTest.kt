@@ -139,15 +139,15 @@ class SpeechTrackerTest {
         t.feed(speech, 300)
         t.feed(quiet, 700)   // 阈值 800，700 还不判停
         t.feed(speech, 300)
-        assertEquals("750+500 应被夹到上限", 1_200, t.endSilenceMs)
+        assertEquals("700+500 应落到 1200", 1_200, t.endSilenceMs)
 
         t.feed(quiet, 800)   // 800 < 1200 不判停，同时记进统计
         t.feed(speech, 300)
         assertEquals("最长停顿 800 + 500 = 1300，正好撞上限", 1_300, t.endSilenceMs)
 
-        t.feed(quiet, 1_299)
-        assertFalse("差 1ms 还不算说完", t.shouldEnd())
-        t.feed(quiet, 1)
+        t.feed(quiet, 1_200)
+        assertFalse("才 1200ms，还差 100", t.shouldEnd())
+        t.feed(quiet, 100)
         assertTrue(t.shouldEnd())
     }
 
