@@ -27,6 +27,8 @@ import com.beichen.polaris.core.runtime.AgentRuntime
 import com.beichen.polaris.core.runtime.RunSource
 import com.beichen.polaris.core.runtime.RuntimeSessions
 import com.beichen.polaris.core.agent.TurnObservers
+import com.beichen.polaris.core.agent.HistoryCompactor
+import com.beichen.polaris.core.agent.toPriorTurn
 import com.beichen.polaris.core.capability.CapabilityAuditReporter
 import com.beichen.polaris.core.capability.ToolActivationStore
 import com.beichen.polaris.core.AgentLogger
@@ -2061,10 +2063,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         const val AUTO_RESUME_TEXT = "继续"
 
         /**
-         * W-46：喂给模型的历史最多回看多少轮。
+         * W-46：喂给模型的历史最多回看多少轮（P0-1 起 = 保留**原文**的轮数）。
          *
-         * 只是**构造阶段的粗暴上限**，真正的体积控制交给 `ContextBudget`（按 token 预算整段丢）。
-         * 20 轮 ≈ 40 条消息，覆盖住常见追问场景，又不会让摊平本身变慢。
+         * 超出的部分不再丢弃：`HistoryCompactor` 会把它们折成一段摘要排在最前，
+         * 所以这个数字只是「细节保留到哪」，不是「记忆保留到哪」。
+         * 真正的体积上限仍由 `ContextBudget` 按 token 预算兜。
          */
         const val PRIOR_TURNS_MAX = 20
 
@@ -2183,6 +2186,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 只取正文、**不带工具 trace**：把历史 `tool` 消息塞回去必须与对应
      * `assistant.tool_calls` 严格配对，跨回合重建极易让严格供应商直接 400；而工具过程
      * 属于上一回合的执行细节，对「刚才说的那件事」的指代没有帮助。
+     * **但工具名要带上**（只带名字、不带结果）：摘要里一句「涉及工具：ui_batch、take_screenshot」
+     * 就能挡住「把已经做过的事再做一遍」这类重复，成本只有十几个字符。
+     *
+     * P0-1 起窗口外的轮次不再消失，交给 [HistoryCompactor] 折成一段摘要；
+     * 本函数只做「存储结构 → 压缩视图」的映射，不含任何取舍逻辑（那里要能单测）。
      *
      * @param convId 目标会话（null / 不存在 → 空历史，等价旧行为）
      * @param excludeLastTurn 重新生成时用：最后一轮正要重做，不能把它自己的旧答案当历史
@@ -2194,19 +2202,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         val rec = convId?.let { runCatching { conversationStore.load(it) }.getOrNull() }
             ?: return emptyList()
         val turns = if (excludeLastTurn) rec.turns.dropLast(1) else rec.turns
-        return buildList {
-            turns.takeLast(PRIOR_TURNS_MAX).forEach { turn ->
-                val question = turn.user.content.trim()
-                if (question.isBlank()) return@forEach
-                add(UserMessage(question))
-                // 变体列表为空（异常数据）或游标越界时安静跳过，绝不让历史构造把本轮搞崩
-                val variant = turn.variants.getOrNull(
-                    turn.selectedIndex.coerceIn(0, (turn.variants.size - 1).coerceAtLeast(0))
-                )
-                val answer = variant?.content?.trim().orEmpty()
-                if (answer.isNotBlank()) add(AssistantMessage(answer))
-            }
-        }
+        return HistoryCompactor.buildPriorMessages(turns.map { it.toPriorTurn() }, PRIOR_TURNS_MAX)
     }
 
     override fun send() {
