@@ -187,10 +187,26 @@ GROUPS = {
             "com.beichen.polaris.core.runtime.RuntimeBoundAgentLoopTest",
         ],
     },
+    # 重试退避的纯数值排期（2026-11-22）。**全场最便宜的一组**：只编两个文件、零依赖。
+    #
+    # 值一提的是它以前进不来：数值原本住在 RetryBackoffPolicy 里，而那个对象带着
+    # `networkAware(waiter: NetworkRecoveryWaiter)`，NetworkRecoveryWaiter 定义在
+    # NetworkRecovery.kt（import android.net）——想编它就得有 android.jar。
+    # 把数值拆到 RetrySchedule 之后，这一组才成立。
+    "retry": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/agent/RetrySchedule.kt",
+            "core/src/test/java/com/beichen/polaris/core/agent/RetryScheduleTest.kt",
+        ],
+        "classes": [
+            "com.beichen.polaris.core.agent.RetryScheduleTest",
+        ],
+    },
 }
 
-# 被测源文件。刻意只挑这一小片：审批链拿得出 30 秒内跑完的 JVM 断言的只有它，
-# 更广的覆盖面应该先写断言再谈变异，否则只是在测「grep 匹不匹配」。
+# 被测源文件。收录判据只有一条：**这段判定有能在 30 秒内跑完的真断言**。
+# 覆盖面按组推进（审批 → 脱敏 → 解析 → 二维码 → 存储 → 动作回执 → 运行时 → 退避），
+# 先写断言再谈变异；没有断言的代码放进来只会测出「grep 匹不匹配」。
 MUTATIONS = [
     {
         "id": "M1 相对路径不解析（= P1-1 修前行为）",
@@ -866,6 +882,39 @@ MUTATIONS = [
         "old": """        val held = lease ?: return""",
         "new": """        val held = lease ?: run { sink?.invoke(event); return }""",
         "expect": ["未绑定回合时事件不转发"],
+    },
+    # —— 重试退避（2026-11-22）：三条都对应「静默烧钱 / 静默卡死」 ——
+    {
+        "id": "M43 通用退避越界不封顶（返回 0，回合会在同一步骤里无限重试）",
+        "group": "retry",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/RetrySchedule.kt",
+        "old": "        return BACKOFF_SEQUENCE_MS.getOrElse(index) { MAX_MS }.coerceAtLeast(0L)",
+        "new": "        return BACKOFF_SEQUENCE_MS.getOrElse(index) { 0L }.coerceAtLeast(0L)",
+        "expect": ["B2 越界取末项封顶"],
+    },
+    {
+        "id": "M44 限流退避忽略服务端 Retry-After（服务端说要等，它照旧撞上去）",
+        "group": "retry",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/RetrySchedule.kt",
+        "old": "        return maxOf(base, serverAsk).coerceAtMost(MAX_RATE_LIMIT_MS)",
+        "new": "        return base.coerceAtMost(MAX_RATE_LIMIT_MS)",
+        "expect": ["R2 服务端要得更久时取大值"],
+    },
+    {
+        "id": "M45 限流退避不封顶（坏 Retry-After 能把回合卡死几分钟）",
+        "group": "retry",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/RetrySchedule.kt",
+        "old": "        return maxOf(base, serverAsk).coerceAtMost(MAX_RATE_LIMIT_MS)",
+        "new": "        return maxOf(base, serverAsk).coerceAtMost(Long.MAX_VALUE)",
+        "expect": ["R3 限流退避封顶 60s"],
+    },
+    {
+        "id": "M46 限流序列退化成通用序列（= hotfix10 修前行为，连着再挨 429）",
+        "group": "retry",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/RetrySchedule.kt",
+        "old": "    val RATE_LIMIT_SEQUENCE_MS: List<Long> = listOf(10_000L, 30_000L, 60_000L)",
+        "new": "    val RATE_LIMIT_SEQUENCE_MS: List<Long> = listOf(3_000L, 10_000L, 25_000L)",
+        "expect": ["R1 限流序列每一档都比通用序列更久"],
     },
 ]
 

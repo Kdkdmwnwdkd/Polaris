@@ -211,7 +211,12 @@ lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3221
 # 闸门本身（模型 / 授权 / 永久拒绝三条出路）可独立判据。
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3194
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
-lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1532
+lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
+# 2026-11-22 下调（RealAgentLoop 1532 → 1504）：退避的**纯数值排期**搬到
+# core/agent/RetrySchedule.kt（零依赖），对象里只留同名转发。不是为了行数——
+# 是为了判据：原对象带 networkAware(NetworkRecoveryWaiter)，而那个类型在
+# NetworkRecovery.kt 里 import android.net，于是退避数值永远进不了 mutation-gate
+# 的编译闭包（只有 kotlinc + JUnit）。拆完才有 retry 组（M43–M46）。
 # 2026-11-14 上调（AppScaffold +13）：语音引擎子页。
 # 真机截图证明这台机器的「设置 → 默认应用」里没有「语音识别」，
 # 只有「文字转语音输出」。所以此前所有「去系统设置换一个」的提示都是死路。
