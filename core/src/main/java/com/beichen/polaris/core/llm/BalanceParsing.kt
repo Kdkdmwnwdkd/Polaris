@@ -21,10 +21,33 @@ object BalanceParsing {
     }
 
     /**
+     * 余额接口的候选地址，**按尝试顺序**返回。
+     *
+     * 起因（2026-11-22）：界面里 DeepSeek 的默认 baseUrl 是
+     * `https://api.deepseek.com/v1`（OpenAI 兼容前缀），而官方余额接口是
+     * `GET /user/balance`——**根路径，不在 /v1 下**。原实现直接拼成
+     * `https://api.deepseek.com/v1/user/balance`，点「查余额」就失败。
+     *
+     * 不赌哪一边对：先按用户填的地址原样拼，404 时再补一个「剥掉尾部 `/v1`」的候选。
+     * 这样自建中转（`https://proxy.io/deepseek/v1`）也能覆盖——剥掉的是**它的** /v1，
+     * 没有硬写死官方域名。
+     *
+     * 只剥完整的 `/v1` 后缀：`/v1beta`、`/v1/xxx` 都不动，避免把路径改坏。
+     * 剥完与原串相同（本来就没有 /v1）时只返回一个候选，不做无意义的重复请求。
+     */
+    fun candidateUrls(baseUrl: String, path: String): List<String> {
+        if (path.startsWith("http")) return listOf(path)
+        val base = baseUrl.trim().trimEnd('/')
+        if (base.isEmpty()) return emptyList()
+        val primary = base + path
+        val rootBase = base.removeSuffix("/v1")
+        return if (rootBase == base) listOf(primary) else listOf(primary, rootBase + path)
+    }
+
+    /**
      * 解析响应 JSON → 人类可读文案；无法识别返回 null。
      * 不抛异常（爬各家格式时总会遇到变体，失败就是"读不到"）。
-     */
-    fun parse(providerId: String, json: String): String? = when (providerId.lowercase()) {
+     */    fun parse(providerId: String, json: String): String? = when (providerId.lowercase()) {
         "deepseek" -> parseDeepSeek(json)
         "moonshot", "kimi" -> parseMoonshot(json)
         "siliconflow", "silicon" -> parseSiliconFlow(json)

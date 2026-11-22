@@ -136,6 +136,62 @@ fun main() {
         assertTrue("null", BalanceParsing.parse("openai", """{"balance":"1"}""") == null)
     }
 
+    // ---------- 余额接口地址（2026-11-22 真机「查不了」） ----------
+    check("地址：baseUrl 带 /v1 时，先原样拼、再补根路径候选") {
+        val urls = BalanceParsing.candidateUrls("https://api.deepseek.com/v1", "/user/balance")
+        assertTrue("应有 2 个候选：$urls", urls.size == 2)
+        assertTrue("第一个必须是用户填的地址：$urls", urls[0] == "https://api.deepseek.com/v1/user/balance")
+        assertTrue("第二个要剥掉 /v1：$urls", urls[1] == "https://api.deepseek.com/user/balance")
+    }
+
+    check("地址：baseUrl 已是根路径时只有一个候选，不做无意义重试") {
+        val urls = BalanceParsing.candidateUrls("https://api.deepseek.com", "/user/balance")
+        assertTrue("应只有 1 个：$urls", urls.size == 1)
+        assertTrue(urls[0], urls[0] == "https://api.deepseek.com/user/balance")
+    }
+
+    check("地址：末尾斜杠不会拼出双斜杠") {
+        val urls = BalanceParsing.candidateUrls("https://api.deepseek.com/v1/", "/user/balance")
+        assertTrue("出现了 //：$urls", urls.none { "com//" in it })
+        assertTrue("仍然 2 个候选", urls.size == 2)
+    }
+
+    check("地址：自建中转也剥它自己的 /v1，不写死官方域名") {
+        val urls = BalanceParsing.candidateUrls("https://proxy.io/deepseek/v1", "/user/balance")
+        assertTrue("$urls", urls.size == 2)
+        assertTrue("剥的是代理的 /v1：$urls", urls[1] == "https://proxy.io/deepseek/user/balance")
+    }
+
+    check("地址：/v1beta 或 /v1/xxx 不许被误剥") {
+        val beta = BalanceParsing.candidateUrls("https://x.io/v1beta", "/credits")
+        assertTrue("/v1beta 被剥了：$beta", beta.size == 1 && beta[0] == "https://x.io/v1beta/credits")
+        val deeper = BalanceParsing.candidateUrls("https://x.io/v1/openai", "/credits")
+        assertTrue("中间的 /v1 被剥了：$deeper", deeper.size == 1)
+    }
+
+    check("地址：path 是绝对 URL 时原样返回，不拼 baseUrl") {
+        val urls = BalanceParsing.candidateUrls("https://x.io/v1", "https://other.io/balance")
+        assertTrue("$urls", urls == listOf("https://other.io/balance"))
+    }
+
+    check("地址：baseUrl 为空返回空列表（调用方要当作失败处理，不能拼出相对地址）") {
+        assertTrue("空串", BalanceParsing.candidateUrls("", "/user/balance").isEmpty())
+        assertTrue("纯空白", BalanceParsing.candidateUrls("   ", "/user/balance").isEmpty())
+        assertTrue("只有斜杠", BalanceParsing.candidateUrls("/", "/user/balance").isEmpty())
+    }
+
+    check("地址：候选之间不重复（剥完相同就不再加）") {
+        listOf(
+            "https://api.deepseek.com",
+            "https://api.deepseek.com/v1",
+            "https://api.deepseek.com/v1/",
+            "http://192.168.1.9:8080"
+        ).forEach { base ->
+            val urls = BalanceParsing.candidateUrls(base, "/user/balance")
+            assertTrue("$base 出现重复候选：$urls", urls.size == urls.toSet().size)
+        }
+    }
+
     println("\n=== 汇总: PASS=$pass FAIL=$fail ===")
     if (fail > 0) kotlin.system.exitProcess(1)
 }
