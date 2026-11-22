@@ -8,6 +8,10 @@
  *     因为「uiautomator 会顶掉服务」——那是初判，后来复现证伪了（连跑三次 dump，
  *     `Bound services` 一直在）。真正的事实是：`adb install` 覆盖安装会清空
  *     `enabled_accessibility_services`，以及服务可能被系统回收/被其他客户端占住。
+ *     补记（同日第二轮云机）：第三态**已复现**——`am force-stop` 杀掉已绑定进程后，
+ *     AMS 把服务记进 `Crashed services` 且拒绝重绑，设置项却可能还留着。更关键的是
+ *     原来那个探针（`getEnabledAccessibilityServiceList`）读不到这种状态，D 组因此把
+ *     判定下沉成对设置项原文的解析。
  *  2. **诊断包被能力链日志挤满**：234 行里 171 行是 `[CapabilityChain]`，同一批判定
  *     相隔 10 秒逐字重复两遍。崩溃前那几行因此被顶出「最近 300 行」的窗口。
  *  3. **本地构建版本号伪装成正式版**：`versionName = "1.$versionCode"`，回退值 14
@@ -33,6 +37,7 @@ import com.beichen.polaris.core.capability.CapabilityRequest
 import com.beichen.polaris.core.capability.CapabilityResolution
 import com.beichen.polaris.core.capability.a11yStateOf
 import com.beichen.polaris.core.capability.capabilityFingerprint
+import com.beichen.polaris.core.capability.isA11yServiceListed
 import com.beichen.polaris.core.capability.resolveCapability
 import java.io.File
 
@@ -154,6 +159,64 @@ fun testFingerprint() {
     }
 }
 
+// ──────────────── D. 启用清单解析（第三态到底读不读得到） ────────────────
+
+/*
+ * 为什么单独测这个：云机上「设置里有、服务没连上」时，UI 显示的是「无障碍未连接」，
+ * 因为探针走的是 `getEnabledAccessibilityServiceList()`——它会把崩过的服务过滤掉。
+ * 换成读 `Settings.Secure` 原始字符串后，解析就成了判定第三态的唯一入口，
+ * 它错一位，第三态要么永不出现（空分支），要么到处误报（把「没开」说成「被占用」）。
+ */
+
+private const val PKG = "com.beichen.polaris"
+private const val CLS = "com.beichen.polaris.automation.AgentAccessibilityService"
+
+fun testEnabledListParsing() {
+    println("\n[D] 启用清单解析")
+
+    check("D1 完整类名写法命中（settings get 的默认写法）") {
+        assertTrue("$PKG/$CLS 没命中", isA11yServiceListed("$PKG/$CLS", PKG, CLS))
+    }
+    check("D2 短写法 pkg/.Class 命中（系统自己回写时常是这种）") {
+        assertTrue("短写法没命中", isA11yServiceListed("$PKG/.automation.AgentAccessibilityService", PKG, CLS))
+    }
+    check("D3 中等写法 pkg/pkg.Class 命中") {
+        assertTrue("中等写法没命中", isA11yServiceListed("$PKG/$CLS", PKG, CLS))
+        assertTrue("重复包名前缀没命中", isA11yServiceListed("$PKG/$PKG.automation.AgentAccessibilityService", PKG, CLS))
+    }
+    check("D4 大小写不敏感（ROM 回写可能改大小写）") {
+        assertTrue("大小写不同没命中", isA11yServiceListed("$PKG/$CLS".uppercase(), PKG, CLS))
+    }
+    check("D5 冒号分隔多项，命中其中一项") {
+        val v = "com.other/.Svc:$PKG/$CLS:com.third/.X"
+        assertTrue("列表里第二项没命中", isA11yServiceListed(v, PKG, CLS))
+    }
+    check("D6 没设置 → false（null / 空串 / 字面量 null / 纯空白）") {
+        listOf(null, "", "   ", "null", "NULL").forEach { v ->
+            assertTrue("[$v] 被误判成已启用", !isA11yServiceListed(v, PKG, CLS))
+        }
+    }
+    check("D7 同包换了类名 → false（拿包含关系判会误报）") {
+        assertTrue("别的服务被当成我们", !isA11yServiceListed("$PKG/.automation.OtherService", PKG, CLS))
+    }
+    check("D8 包名前缀相似的其他应用 → false") {
+        assertTrue(
+            "com.beichen.polaris.pro 被当成我们",
+            !isA11yServiceListed("com.beichen.polaris.pro/$CLS", PKG, CLS)
+        )
+    }
+    check("D9 空条目 / 尾随冒号 → 不命中也不崩（系统清空后偶发留下残串）") {
+        listOf("::", ":", " : ").forEach { v ->
+            assertTrue("残串 [$v] 被误判", !isA11yServiceListed(v, PKG, CLS))
+        }
+        assertTrue("有效项加尾冒号应仍命中", isA11yServiceListed("$PKG/$CLS:", PKG, CLS))
+    }
+    check("D10 与真实探针串一致：云端那条原值能命中") {
+        val real = "com.beichen.polaris/com.beichen.polaris.automation.AgentAccessibilityService"
+        assertTrue("云端实测串没命中", isA11yServiceListed(real, PKG, CLS))
+    }
+}
+
 // ──────────────────── C. 接线（源码约束） ────────────────────
 
 fun testWiring() {
@@ -184,16 +247,27 @@ fun testWiring() {
         assertTrue("没有「被占用」文案", "无障碍被占用" in s)
         assertTrue("没有 enabledInSettings 参数", "enabledInSettings: Boolean" in s)
     }
-    check("C5 探测走系统启用清单，不猜") {
-        val s = read("app/src/main/java/com/beichen/polaris/ui/AccessibilityProbe.kt")
-        assertTrue("没调 getEnabledAccessibilityServiceList", "getEnabledAccessibilityServiceList" in s)
-        assertTrue("探测失败没兜底", "catch (_: Exception)" in s)
+    check("C5 探测读设置项原文，不用会自我过滤的清单接口") {
+        val raw = read("app/src/main/java/com/beichen/polaris/ui/AccessibilityProbe.kt")
+        // 注释里要能自由解释「为什么不用那个接口」，所以只在代码行上查。
+        val code = raw.lineSequence()
+            .filterNot { it.trimStart().let { t -> t.startsWith("*") || t.startsWith("//") || t.startsWith("/**") } }
+            .joinToString("\n")
+        assertTrue("没读 ENABLED_ACCESSIBILITY_SERVICES", "ENABLED_ACCESSIBILITY_SERVICES" in code)
+        assertTrue("没看总开关", "ACCESSIBILITY_ENABLED" in code)
+        assertTrue("没委托给 core 的解析函数", "isA11yServiceListed(" in code)
+        assertTrue(
+            "仍在用 getEnabledAccessibilityServiceList——它会把崩过的服务过滤掉，第三态就永远探不到",
+            "getEnabledAccessibilityServiceList" !in code
+        )
+        assertTrue("探测失败没兜底", "catch (_: Exception)" in code)
     }
-    check("C6 就绪清单把「被占用」和「没开」分开说") {
+    check("C6 就绪清单把「开关开着但没连上」和「没开」分开说") {
         val s = read("app/src/main/java/com/beichen/polaris/ui/ReadinessCard.kt")
         assertTrue("没区分 EnabledNotConnected", "A11yState.EnabledNotConnected" in s)
-        assertTrue("没有「可能被其他无障碍应用占用」", "可能被其他无障碍应用占用" in s)
+        assertTrue("提示没说清是「开关是开的」", "开关是开的" in s)
         assertTrue("动作词没随状态变", "重开" in s)
+        assertTrue("动作词和提示之间没有固定间距（折行会把字挤到一起）", "Spacer(Modifier.width(" in s)
     }
 }
 
@@ -201,6 +275,7 @@ fun main() {
     println("=== 云机三修判据（2026-11-22）===")
     testA11yStates()
     testFingerprint()
+    testEnabledListParsing()
     testWiring()
     println("\n────────────────────────────")
     // 注意语序：run-all.sh 的通过标记正则是 `(^|[^0-9])0 失败`，

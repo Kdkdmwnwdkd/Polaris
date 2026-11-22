@@ -10,16 +10,24 @@ package com.beichen.polaris.core.capability
  * 2. 绑定本身是即时的：`settings put` 之后 `dumpsys accessibility` 在 t=0 就已经
  *    `Bound services: 北辰 · 自动化`，不存在几十秒的空窗。
  *
- * ## 那第三态什么时候出现
+ * ## 那第三态什么时候出现（2026-11-22 云机已复现）
  *
- * 列表里**还留着**本服务，但服务没连上。两种成因：
- *  - 服务进程被系统回收（国产 ROM 清后台、省电策略），用户没关开关但服务没了；
- *  - 系统的无障碍通道被另一个客户端占住（自动点击器、抢票插件、厂商 AI 助手），
- *    同一时刻只让一个客户端拿稳。
+ * 复现路径：服务正常绑定 → `am force-stop` 杀掉进程 → 系统把本组件记进
+ * `Crashed services` 并清空 `enabled_accessibility_services` → 用户（或任何写入者）
+ * 把设置项写回去。此时 `dumpsys accessibility` 同时显示：
  *
- * 这一态**本次没有复现**：模拟器上连跑三次 `uiautomator dump`，`Bound services` 始终在。
- * 保留它是防御——真机上服务被清后台是常态，而这时如果只说「无障碍未连接」，
- * 用户会以为是自己没开，跑去设置里反复开关，问题根本不在开关上。
+ * ```
+ * Bound services:{}                                  ← 没连上
+ * Enabled services:{{com.beichen.polaris/....AgentAccessibilityService}}  ← 开关是开的
+ * Crashed services:{{...AgentAccessibilityService}}  ← 崩过，AMS 拒绝重绑
+ * ```
+ *
+ * 关键事实：**AMS 一旦把服务记进 crashed 表，就不会再自动重绑**，除非用户把开关关掉
+ * 再打开（实测：`settings put` 置 null 后重写，立刻回到 `Bound services: 北辰 · 自动化`）。
+ * 所以用户看到的现象正是「开关明明是开的，但就是用不了」——这是真机上
+ * 「升级/清理后台后无障碍失效」的主因之一，不是我们凭空防的一个态。
+ *
+ * 另一种成因（未复现但同类）：系统的无障碍通道被另一个客户端占住。
  *
  * ## 为什么不放在 ui
  *
@@ -42,4 +50,39 @@ fun a11yStateOf(serviceConnected: Boolean, enabledInSettings: Boolean): A11yStat
     serviceConnected -> A11yState.Connected
     enabledInSettings -> A11yState.EnabledNotConnected
     else -> A11yState.Off
+}
+
+/**
+ * 纯函数：系统设置项 `enabled_accessibility_services` 的原始值里，是否列着这个组件。
+ *
+ * ## 为什么不直接用 `getEnabledAccessibilityServiceList()`
+ *
+ * 因为它会**自我过滤**：AMS 把崩过的服务挪进 `Crashed services`，同时把它从启用清单里
+ * 摘掉。云机实测（2026-11-22）：`settings get` 明确返回本组件、`dumpsys accessibility`
+ * 也写着 `Enabled services:{...}`，可 UI 仍然显示「无障碍未连接」——判定走的正是那个
+ * 被过滤过的接口。第三态于是成了永远走不到的死分支。
+ *
+ * 读原始设置项则与用户在系统设置里看到的那颗开关同源，不会自我过滤。
+ *
+ * ## 值的格式
+ *
+ * 冒号分隔的 `ComponentName.flattenToString()` 列表，同一组件可能有三种写法：
+ * `pkg/full.ClassName`、`pkg/pkg.ClassName`、`pkg/.ClassName`。都认。
+ * 未设置时读出来是 `null`；个别 ROM 会存字面量 `"null"`——不需要特判，
+ * 它不可能等于任何真实组件名，比较时自然落空（写特判会多出一条永远走不到的分支：
+ * 变异测试里把特判删掉，判据一条都不会红，说明它本来就没在起作用）。
+ */
+fun isA11yServiceListed(enabledServices: String?, packageName: String, className: String): Boolean {
+    val raw = enabledServices?.trim().orEmpty()
+    if (raw.isEmpty()) return false
+    val simple = className.removePrefix("$packageName.")
+    val forms = setOf(
+        "$packageName/$className",
+        "$packageName/$simple",
+        "$packageName/.$simple",
+    )
+    return raw.split(':').any { entry ->
+        val e = entry.trim()
+        e.isNotEmpty() && forms.any { it.equals(e, ignoreCase = true) }
+    }
 }

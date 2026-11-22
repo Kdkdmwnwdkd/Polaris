@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -94,7 +95,10 @@ fun ReadinessCard(
             title = "无障碍服务",
             hint = when (a11yState) {
                 A11yState.Connected -> "让它替你看屏幕、点按钮"
-                A11yState.EnabledNotConnected -> "开关是开的，但服务没连上——可能被其他无障碍应用占用"
+                // 云机截图实测：原句「开关是开的，但服务没连上——可能崩过或是被其他无障碍应用占用」
+                // 会把「占用」折到第二行、只剩一个「用」字，紧贴右侧「重开」按钮，看起来像两个词粘住了。
+                // 提示要短到一行放得下，原因说清楚就够，细节留给「重开」这个动作。
+                A11yState.EnabledNotConnected -> "开关是开的，但没连上——重开一次试试"
                 A11yState.Off -> "让它替你看屏幕、点按钮"
             },
             done = serviceConnected,
@@ -173,6 +177,9 @@ fun ReadinessCard(
                                 )
                             }
                             if (item.action != null) {
+                                // 文字和动作之间留固定间距：靠折行挤出来的间隙不可控，
+                                // 一行刚好放满时提示的最后一个字会贴到动作词上。
+                                Spacer(Modifier.width(12.dp))
                                 Text(
                                     text = item.actionLabel,
                                     style = MaterialTheme.typography.labelMedium,

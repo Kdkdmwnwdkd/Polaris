@@ -801,8 +801,9 @@ fun AkStatusDot(color: Color, size: Dp = 8.dp) {
  * ③ danger 点 +「无障碍未连接」。
  *
  * 2026-11-22 补第三点五态：④「无障碍被占用」——设置里仍启用、服务却掉了。
- * 系统同一时刻只让一个无障碍客户端拿稳，自动点击器/抢票插件/厂商 AI 助手都会把它顶掉。
- * 这时说「未连接」是错的：用户会以为是自己没开，跑去设置里反复开关。见 [A11yState]。
+ * 云机实测的主因是服务进程被异常杀掉后，AMS 把它记进 `Crashed services` 并**拒绝重绑**，
+ * 而设置里那颗开关还亮着（详见 [A11yState]）；另一种成因是被别的无障碍客户端顶掉。
+ * 这时说「未连接」是错的：用户会以为是自己没开，跑去设置里反复开关。
  */
 @Composable
 fun AkReadyTextRow(
@@ -836,7 +837,7 @@ fun AkReadyTextRow(
         A11yState.Connected ->
             if (pendingGrants > 0) "$head，${pendingGrants} 项待授权，双击进入权限中心" else head
         A11yState.EnabledNotConnected ->
-            "无障碍开关是开的，但服务没连上——可能被其他无障碍应用占用。双击进入权限中心"
+            "无障碍开关是开的，但服务没连上——可能崩过或被其他无障碍应用占用。双击进入权限中心"
         A11yState.Off -> "无障碍未连接，双击进入权限中心"
     }
     Row(
