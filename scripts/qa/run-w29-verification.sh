@@ -20,13 +20,14 @@ SERCORE=${SERCORE:-$(qa_find_jar "$QA_GRADLE_CACHE/org.jetbrains.kotlinx/kotlinx
 SRC1="$ROOT/core/src/main/java/com/beichen/polaris/core/text/HeaderParsing.kt"
 SRC2="$ROOT/core/src/main/java/com/beichen/polaris/core/llm/BalanceParsing.kt"
 SRC3="$ROOT/core/src/main/java/com/beichen/polaris/core/text/HeaderParsing.kt"
+SRC3B="$ROOT/core/src/main/java/com/beichen/polaris/core/llm/BalanceFailure.kt"
 SRC4="$ROOT/scripts/qa/W29Verification.kt"
 
 if [ ! -x "$KC_HOME/bin/kotlinc" ]; then
   echo "FATAL: 找不到 kotlinc（$KC_HOME/bin/kotlinc）" >&2
   exit 1
 fi
-for f in "$STDLIB" "$SER" "$SERCORE" "$SRC1" "$SRC2" "$SRC4"; do
+for f in "$STDLIB" "$SER" "$SERCORE" "$SRC1" "$SRC2" "$SRC3B" "$SRC4"; do
   [ -f "$f" ] || { echo "FATAL: 缺少 $f" >&2; exit 1; }
 done
 
@@ -34,7 +35,7 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 DEPS="$STDLIB:$SER:$SERCORE"
 
 echo "[1/2] compiling w26 harness ..."
-"$KC_HOME/bin/kotlinc" -Xplugin="$KC_HOME/lib/kotlinx-serialization-compiler-plugin.jar" -classpath "$DEPS" -d "$OUT" "$SRC1" "$SRC2" "$SRC4"
+"$KC_HOME/bin/kotlinc" -Xplugin="$KC_HOME/lib/kotlinx-serialization-compiler-plugin.jar" -classpath "$DEPS" -d "$OUT" "$SRC1" "$SRC2" "$SRC3B" "$SRC4"
 
 echo "[2/2] running ..."
 java -cp "$OUT:$DEPS" W29VerificationKt

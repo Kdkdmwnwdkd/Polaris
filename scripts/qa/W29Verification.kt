@@ -1,5 +1,17 @@
+import com.beichen.polaris.core.llm.BalanceFailure
 import com.beichen.polaris.core.llm.BalanceParsing
 import com.beichen.polaris.core.text.HeaderParsing
+import java.io.File
+
+/** 冒充 Android 的同名异常：真实类在 android.jar 里，harness 不加载它。 */
+private class NetworkOnMainThreadException : RuntimeException()
+
+/** 读仓库内的源文件（CWD 是仓库根，由 run-*.sh 保证）。 */
+private fun readRepoFile(rel: String): String {
+    val f = File(rel)
+    if (!f.isFile) throw AssertionError("找不到 $rel（CWD=${File(".").absolutePath}）")
+    return f.readText()
+}
 
 /**
  * W-29 harness：自定义请求头/请求体解析 + 余额查询解析（纯 JVM）。
@@ -190,6 +202,92 @@ fun main() {
             val urls = BalanceParsing.candidateUrls(base, "/user/balance")
             assertTrue("$base 出现重复候选：$urls", urls.size == urls.toSet().size)
         }
+    }
+
+    // ---------- F 组：失败文案（「查询失败：null」回归）----------
+    //
+    // 真机截图：点「查余额」显示「查询失败：null」。根因是 query() 没切 IO 线程，
+    // Android 抛 NetworkOnMainThreadException（无 message），UI 又拼了 it.message。
+    // 下面每条都对着「用户屏幕上会出现什么」断言，而不是对着实现细节。
+
+    check("文案：message 为 null 时不得出现 null 字面量") {
+        val text = BalanceFailure.describe(java.io.IOException())
+        assertTrue("出现了 null：$text", "null" !in text)
+        assertTrue("不该是空白：$text", text.isNotBlank())
+    }
+
+    check("文案：message 就是字面量 \"null\" 也当作没有") {
+        val text = BalanceFailure.describe(java.io.IOException("null"))
+        assertTrue("把 null 当成了原因：$text", "null" !in text)
+    }
+
+    check("文案：主线程网络异常要说「与网络无关」，别让用户去换 WiFi") {
+        val text = BalanceFailure.describe(NetworkOnMainThreadException())
+        assertTrue("没说主线程：$text", "主线程" in text)
+        assertTrue("应点明与网络无关：$text", "与网络无关" in text)
+    }
+
+    check("文案：协程取消不等于失败") {
+        val text = BalanceFailure.describe(java.util.concurrent.CancellationException())
+        assertTrue("$text", "取消" in text)
+        assertTrue("$text", "失败" !in text)
+        assertTrue("$text", "null" !in text)
+    }
+
+    check("文案：域名解析失败要指向地址/网络，不指向余额接口") {
+        val text = BalanceFailure.describe(java.net.UnknownHostException("api.deepseek.com"))
+        assertTrue("$text", "域名解析" in text)
+        assertTrue("应带上主机名：$text", "api.deepseek.com" in text)
+    }
+
+    check("文案：超时只说一次「超时」，不许拼成「超时：timeout」") {
+        val text = BalanceFailure.describe(java.net.SocketTimeoutException("timeout"))
+        assertTrue("$text", "超时" in text)
+        assertTrue("重复拼了：$text", "超时：timeout" !in text)
+    }
+
+    check("文案：HTTP 状态码原样保留（401/404 是排查的关键信息）") {
+        val t = IllegalStateException("HTTP 401 @ https://api.deepseek.com/user/balance：{\"error\":\"invalid key\"}")
+        val text = BalanceFailure.describe(t)
+        assertTrue("$text", "HTTP 401" in text)
+    }
+
+    check("文案：自己抛的中文原因不被改写") {
+        val text = BalanceFailure.describe(IllegalStateException("响应里没有可识别的余额字段"))
+        assertTrue("$text", "响应里没有可识别的余额字段" in text)
+    }
+
+    check("文案：认不出的异常至少要说清是哪个类抛的") {
+        val text = BalanceFailure.describe(RuntimeException())
+        assertTrue("没有类名：$text", "RuntimeException" in text)
+        assertTrue("$text", "null" !in text)
+    }
+
+    check("文案：超长 message 截断，不把整段 JSON 顶到屏幕上") {
+        val text = BalanceFailure.describe(IllegalStateException("x".repeat(500)))
+        assertTrue("没截断：${text.length}", text.length < 200)
+        assertTrue("$text", text.endsWith("…"))
+    }
+
+    check("结构：BalanceService 的网络调用必须在 Dispatchers.IO 里") {
+        val src = readRepoFile("core/src/main/java/com/beichen/polaris/core/llm/BalanceService.kt")
+        val io = src.indexOf("withContext(Dispatchers.IO)")
+        val exec = src.indexOf(".execute()")
+        assertTrue("没有 withContext(Dispatchers.IO)：主线程会抛 NetworkOnMainThreadException", io >= 0)
+        assertTrue("execute() 在切线程之前：仍然阻塞主线程", io < exec)
+        assertTrue("不该再用 runCatching（会吞 CancellationException）", "runCatching {" !in src)
+    }
+
+    check("结构：界面不许直接拼异常的 message") {
+        val ui = readRepoFile("app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt")
+        assertTrue("还在拼 it.message：" + "「查询失败：\${it.message}」", "查询失败：\${it.message}" !in ui)
+        assertTrue("失败文案应走 queryText（内部走 BalanceFailure）", "BalanceService.queryText" in ui)
+    }
+
+    check("结构：query 在取消时 rethrow，不把取消写成失败") {
+        val src = readRepoFile("core/src/main/java/com/beichen/polaris/core/llm/BalanceService.kt")
+        assertTrue("没有 catch CancellationException", "catch (cancel: CancellationException)" in src)
+        assertTrue("catch 分支里没有 rethrow", Regex("catch \\(cancel: CancellationException\\) \\{\\s*throw cancel").containsMatchIn(src))
     }
 
     println("\n=== 汇总: PASS=$pass FAIL=$fail ===")

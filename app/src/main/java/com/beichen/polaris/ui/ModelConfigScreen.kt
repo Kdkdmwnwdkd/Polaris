@@ -98,6 +98,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyRow
+import com.beichen.polaris.core.llm.BalanceService
 import com.beichen.polaris.core.llm.LlmProvider
 import com.beichen.polaris.core.llm.ProviderCatalog
 import com.beichen.polaris.core.llm.RecoveryAction
@@ -261,12 +262,8 @@ fun ModelConfigScreen(vm: ModelConfigContract, onBack: () -> Unit) {
                         onQueryBalance = {
                             scope.launch {
                                 balanceLoading = true
-                                balanceText = com.beichen.polaris.core.llm.BalanceService
-                                    .query(providerId, baseUrl, apiKey)
-                                    .fold(
-                                        onSuccess = { it },
-                                        onFailure = { "查询失败：${it.message}" }
-                                    )
+                                // 失败文案由 queryText 内部给出（不能拼 it.message：真机上是 null）
+                                balanceText = BalanceService.queryText(providerId, baseUrl, apiKey)
                                 balanceLoading = false
                             }
                         },
