@@ -381,27 +381,33 @@ class RegistryToolExecutor(
             // 也不该产生任何副作用。`run-consent-verification.sh` 用执行计数盯这一条。
             when (val decision = consent.decide(tool, call.arguments)) {
                 is Consent.Decision.Allowed -> Unit
-                is Consent.Decision.Unavailable -> return ToolCallOutcome.Completed(
-                    toolMessageOf(
-                        call,
-                        ToolResult.fail(
-                            code = "no_approver",
-                            message = "该操作需要用户确认，但${decision.reason}，已拒绝执行（${call.name}）。",
-                            hint = "不要重复发起相同调用；请回到主对话中直接调用该工具，由用户确认后再执行。"
-                        )
-                    ),
-                    emptyList(),
-                    code = "no_approver"
-                )
+                is Consent.Decision.Unavailable -> {
+                    // 文案统一走 DenyMessage：读屏组被拒时必须说清「与无障碍无关」，
+                    // 否则模型会把它当成能力探测失败（2026-11-22 真机日志实证）。
+                    val text = DenyMessage.noApprover(call.name, decision.reason)
+                    return ToolCallOutcome.Completed(
+                        toolMessageOf(
+                            call,
+                            ToolResult.fail(
+                                code = "no_approver",
+                                message = text.message,
+                                hint = text.hint
+                            )
+                        ),
+                        emptyList(),
+                        code = "no_approver"
+                    )
+                }
                 is Consent.Decision.Denied -> {
                     AgentLogger.w("Tool", "审批未通过，拒绝执行 ${call.name}")
+                    val text = DenyMessage.denied(call.name)
                     return ToolCallOutcome.Completed(
                         toolMessageOf(
                             call,
                             ToolResult.fail(
                                 code = "approval_denied",
-                                message = "用户拒绝了该危险操作（${call.name}）。",
-                                hint = "不要重复发起相同调用；可改换非危险工具完成，或向用户说明需要该操作的原因。"
+                                message = text.message,
+                                hint = text.hint
                             )
                         ),
                         emptyList(),
@@ -410,13 +416,14 @@ class RegistryToolExecutor(
                 }
                 is Consent.Decision.Failed -> {
                     AgentLogger.e("Tool", "审批回调异常：${decision.cause}")
+                    val text = DenyMessage.channelFailed(call.name)
                     return ToolCallOutcome.Completed(
                         toolMessageOf(
                             call,
                             ToolResult.fail(
                                 code = "approval_denied",
-                                message = "审批通道出错，已拒绝执行（${call.name}）。",
-                                hint = "不要重复发起相同调用；请回报审批通道异常，由用户确认后再试。"
+                                message = text.message,
+                                hint = text.hint
                             )
                         ),
                         emptyList(),
