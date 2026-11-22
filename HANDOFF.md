@@ -699,13 +699,43 @@ A4 工厂必须经 `QuotaResolver.resolve(`。
 截断的位置，硬造一个计数只会得到一个永不触发的上限——比没有更糟。字段留着是给
 「以后要加 token 预算」留落点，类注释里已写明「不要假装它生效」。
 
+### 3.20 系统提示的分段决策搬出 loop（2026-11-23 凌晨）
+
+三段稳定性（FROZEN / SESSION / TURN）此前只写在注释里，**没有任何断言**。这类
+错不会报错，只会变慢：记忆段若被标成 FROZEN，每轮记忆一变整段前缀作废，端侧
+重新 prefill，用户只感觉「这轮特别慢」，日志里也只有一条前缀变化的 INFO。同理
+「没记忆还拼 `memory_usage`」只多花几十 token，谁都不会注意到——直到小模型的
+注意力被这条用不上的指令分走。
+
+**改法**：`RealAgentLoop.buildSystemPrompt` 里的分段判断搬到
+`core/SystemPromptPlan.kt`（78 行，零 import），只回答「该有哪几段、各归哪一档」；
+拼装仍在 `PromptAssembler`。`memoryUsagePrompt` 从参数传而不是引常量——否则这条
+链会经 `core/AgentLoop.kt` 拖进编译闭包，把本可以纯 JVM 验证的东西挤出变异门禁
+（`RetrySchedule` / `QuotaResolver` 踩过同一个坑）。`buildSystemPrompt` 现在只剩
+取数据（`memoryProvider()` + `tools.map { it.systemPrompt }`）和打日志。
+
+**判据**：`SystemPromptPlanTest` 10 个用例，三条是核心：
+- **P7 只改记忆，稳定前缀指纹不变**——这是整套分段的唯一目的；
+- **P8/P9 改身份或工具提示，指纹必须变**——否则缓存会继续喂旧规则；
+- **P5 没有记忆（null / 空串 / 纯空格 / 纯空白）就不拼 `memory_usage`**。
+
+新增 `prompt` 组 + PT1–PT7，**全部 CAUGHT**。其中 PT3（工具段标成 TURN）只红
+P2/P9 两条，正好是「改了工具面缓存却不动」的那一对。
+
+**数字**：`RealAgentLoop` 1409 → **1399**（arch 基线下调）；变异体 92 → **99**；
+分组 11 → **12**。
+
+**还没做的**：`RequestBuilder` 这块只搬了 `buildSystemPrompt` 的决策。
+`logPromptPrefix`（跨回合可变字段 `lastPromptSignature`）与 `buildRequestMessages`
+（`ContextBudget` 三连）仍在 loop 里，下一块再动。
+
 
 ## 4. 代码红线（碰了会立刻红）
 
 | 红线 | 为什么 | 谁在守 |
 |---|---|---|
 | `:core` 不许 import `ui` / `tools` / Compose / `MainActivity` | 分层边界 | 编译器 + `run-arch-guard-verification.sh` |
-| `arch-baseline.txt` **只减不增** | 加一条等于把已知违规合法化 | 同上。当前上限：`ChatViewModel` 3253、`ChatScreen` 3235、`RealAgentLoop` 1532 |
+| `arch-baseline.txt` **只减不增** | 加一条等于把已知违规合法化 | 同上。当前上限：`ChatViewModel` 3221、`ChatScreen` 3194、`RealAgentLoop` 1399 |
 | `harness-baseline.txt` 只增不减（当前 **149**） | 数字变小说明有大面积 SKIP 被当成通过 | `gate.sh` 门禁 5/6 |
 | 守卫裁决**不许加 Allow** | 只能拦不能放行，是这套设计唯一的安全性质 | `run-agent-seams-verification.sh` |
 | 新 harness 必须「静态断言 + 自编译真跑」两段 | 只 grep 不断言行为 = 假绿 | `gate.sh` |

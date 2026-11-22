@@ -211,7 +211,11 @@ lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3221
 # 闸门本身（模型 / 授权 / 永久拒绝三条出路）可独立判据。
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3194
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
-lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1409
+# 2026-11-23 下调（RealAgentLoop 1409 → 1399）：系统提示的**分段决策**搬到
+# core/SystemPromptPlan.kt（78 行）。不是为了行数，是为了判据：
+# 稳定性分级错了不报错、只会变慢（记忆段混进 FROZEN → 每轮前缀作废），
+# 这种错只能靠断言守。搬成零依赖纯函数后才有 prompt 组（PT1–PT7）。
+lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1399
 # 2026-11-22 下调（RealAgentLoop 1504 → 1409）：R5 的回合时钟与回合状态搬到
 # core/agent/TurnClock.kt（113 行，其中搬走的正文 95 行）。
 # 不是为了行数，是为了判据：inner class 读 this@RealAgentLoop.scope，抽成顶层类

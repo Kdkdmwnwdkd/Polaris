@@ -243,6 +243,22 @@ GROUPS = {
             "com.beichen.polaris.core.runtime.QuotaResolverTest",
         ],
     },
+    # 系统提示的分段决策（2026-11-23）。零依赖组：PromptSegments + SystemPromptPlan
+    # 一行 import 都没有，编 300 行不到两秒。
+    #
+    # 它守的是一条**错了不会报错、只会变慢**的规则：记忆段若混进 FROZEN/SESSION，
+    # 每轮记忆一变整段前缀作废，端侧重新 prefill，日志里只有一条 INFO。把它编进
+    # 门禁，才能在有人「顺手调一下段序」时立刻红。
+    "prompt": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/PromptSegments.kt",
+            "core/src/main/java/com/beichen/polaris/core/SystemPromptPlan.kt",
+            "core/src/test/java/com/beichen/polaris/core/SystemPromptPlanTest.kt",
+        ],
+        "classes": [
+            "com.beichen.polaris.core.SystemPromptPlanTest",
+        ],
+    },
 }
 
 # 被测源文件。收录判据只有一条：**这段判定有能在 30 秒内跑完的真断言**。
@@ -1076,6 +1092,63 @@ MUTATIONS = [
         "old": "        require(fallbackSteps > 0) {",
         "new": "        require(true) {",
         "expect": ["QT6"],
+    },
+    # ---------------------------------------------------------------- prompt 组
+    {
+        "id": "PT1 记忆段被标成 FROZEN（记忆一变，整段前缀作废）",
+        "group": "prompt",
+        "file": "core/src/main/java/com/beichen/polaris/core/SystemPromptPlan.kt",
+        "old": "            out += Section(KEY_MEMORY, summary, Stability.TURN)",
+        "new": "            out += Section(KEY_MEMORY, summary, Stability.FROZEN)",
+        "expect": ["P7", "P6"],
+    },
+    {
+        "id": "PT2 没记忆也拼 memory_usage（白占上下文，分走小模型注意力）",
+        "group": "prompt",
+        "file": "core/src/main/java/com/beichen/polaris/core/SystemPromptPlan.kt",
+        "old": "        if (summary.isNotEmpty()) {",
+        "new": "        if (true) {",
+        "expect": ["P5"],
+    },
+    {
+        "id": "PT3 工具段标成 TURN（工具面变了指纹却不变，缓存喂旧工具）",
+        "group": "prompt",
+        "file": "core/src/main/java/com/beichen/polaris/core/SystemPromptPlan.kt",
+        "old": '            out += Section(KEY_TOOLS, hints.joinToString("\\n\\n"), Stability.SESSION)',
+        "new": '            out += Section(KEY_TOOLS, hints.joinToString("\\n\\n"), Stability.TURN)',
+        "expect": ["P9", "P2"],
+    },
+    {
+        "id": "PT4 不过滤空白提示（空段留下连续空行，前缀逐字节不同）",
+        "group": "prompt",
+        "file": "core/src/main/java/com/beichen/polaris/core/SystemPromptPlan.kt",
+        "old": "        val hints = toolHints.filter { it.isNotBlank() }",
+        "new": "        val hints = toolHints",
+        "expect": ["P3"],
+    },
+    {
+        "id": "PT5 身份不判空（空白身份也占一段）",
+        "group": "prompt",
+        "file": "core/src/main/java/com/beichen/polaris/core/SystemPromptPlan.kt",
+        "old": "        if (identity.isNotBlank()) {",
+        "new": "        if (true) {",
+        "expect": ["P4"],
+    },
+    {
+        "id": "PT6 记忆不 trim（纯空白记忆被当成有记忆）",
+        "group": "prompt",
+        "file": "core/src/main/java/com/beichen/polaris/core/SystemPromptPlan.kt",
+        "old": "        val summary = memorySummary?.trim().orEmpty()",
+        "new": "        val summary = memorySummary.orEmpty()",
+        "expect": ["P5"],
+    },
+    {
+        "id": "PT7 记忆引导被抬进 SESSION（引导随身一变，前缀跟着作废）",
+        "group": "prompt",
+        "file": "core/src/main/java/com/beichen/polaris/core/SystemPromptPlan.kt",
+        "old": "            out += Section(KEY_MEMORY_USAGE, memoryUsagePrompt, Stability.TURN)",
+        "new": "            out += Section(KEY_MEMORY_USAGE, memoryUsagePrompt, Stability.SESSION)",
+        "expect": ["P6"],
     },
 ]
 

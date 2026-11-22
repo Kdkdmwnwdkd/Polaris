@@ -26,9 +26,7 @@ import com.beichen.polaris.core.llm.ErrorNormalizer
 import com.beichen.polaris.core.llm.FinishReason
 import com.beichen.polaris.core.llm.RetryProfile
 import com.beichen.polaris.core.Prompt
-import com.beichen.polaris.core.PromptAssembler
-import com.beichen.polaris.core.Section
-import com.beichen.polaris.core.Stability
+import com.beichen.polaris.core.SystemPromptPlan
 import com.beichen.polaris.core.time.Monotonic
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
@@ -1216,37 +1214,29 @@ class RealAgentLoop(
     private fun shouldContinueNow(): Boolean = shouldContinue?.invoke() ?: true
 
     /**
-     * 系统提示分段拼装（[PromptAssembler]）：按「变化频率」排三段，而不是拼成一整块。
+     * 系统提示分段拼装：按「变化频率」排三段，而不是拼成一整块。
      *
      * - **FROZEN**：身份与规则（[systemPrompt]），整个会话不变，排在最前；
      * - **SESSION**：本回合工具面的用法说明，只随工具面变（`__use_tools` 激活新组时会变）；
      * - **TURN**：记忆摘要与使用引导，随时可能变，必须压在最后。
      *
-     * 这样端侧推理的 KV 前缀最坏也能复用「FROZEN + SESSION」这一段；段内顺序由数据
-     * 决定（工具按暴露顺序、段按固定 key），同内容两次组装逐字节一致。
-     *
-     * 记忆段只在**确实有摘要**时才拼：没有可读记忆还教一遍 memory_usage，等于白占
-     * 上下文，小模型的注意力会被这条用不上的指令分走。
+     * 分级与「什么时候才拼记忆段」的决策在 [SystemPromptPlan]（零依赖，带断言）——
+     * 放在那里是为了让「只改记忆不得让稳定前缀失效」这条不变量能被单测与变异门禁守住。
      *
      * Phase 2 DoD④：以 [tools]（= 本回合工具面）而非全量 `registry.list()` 拼接——
      * 工具被裁掉后，其 systemPrompt 片段也一并消失，避免出现「你可以调 ui_swipe」这类
      * 已经不给的提示（否则模型会调不存在的工具）。
      */
     private fun buildSystemPrompt(tools: List<AgentTool>): Prompt {
-        val sections = ArrayList<Section>(4)
-        if (systemPrompt.isNotBlank()) {
-            sections += Section("identity", systemPrompt, Stability.FROZEN)
-        }
-        val hints = tools.mapNotNull { it.systemPrompt.takeIf { s -> s.isNotBlank() } }
-        if (hints.isNotEmpty()) {
-            sections += Section("tools", hints.joinToString("\n\n"), Stability.SESSION)
-        }
-        val summary = memoryProvider?.let { runCatching { it() }.getOrDefault("") }.orEmpty().trim()
-        if (summary.isNotEmpty()) {
-            sections += Section("memory", summary, Stability.TURN)
-            sections += Section("memory-usage", MEMORY_USAGE_PROMPT, Stability.TURN)
-        }
-        val prompt = PromptAssembler.assemble(sections)
+        // 分段决策（哪段归哪一档、什么时候才拼）在 SystemPromptPlan，那里有断言守着
+        // 「只改记忆不得让稳定前缀失效」这条不变量。这里只负责取数据与打日志。
+        val summary = memoryProvider?.let { runCatching { it() }.getOrDefault("") }
+        val prompt = SystemPromptPlan.assemble(
+            identity = systemPrompt,
+            toolHints = tools.map { it.systemPrompt },
+            memorySummary = summary,
+            memoryUsagePrompt = MEMORY_USAGE_PROMPT
+        )
         logPromptPrefix(prompt)
         return prompt
     }
