@@ -588,6 +588,44 @@ C3 直接读 drafts.json 原文断言「里面没有已删会话的键」——`
 `arch-baseline` 同步收紧到 3207。
 
 
+### 3.17 RealAgentLoop 第一刀：回合时钟（2026-11-22 晚）
+
+A1 拆分的第一块，也是四块里唯一「只搬声明、不动算式」的：R5 的 `TurnClock`
+（回合内时间基准 + 8 个事件的信封拼装）与 `TurnEndStatus`，从 `RealAgentLoop.kt`
+搬到 `core/agent/TurnClock.kt`。
+
+**为什么先切它**：它原来是 `private inner class`，对外唯一依赖是
+`this@RealAgentLoop.scope`。把这一个依赖提成构造参数，它就是零依赖纯 JVM 类。
+另外三块（`ExposurePlanner` / `RequestBuilder` / `ToolBatchExecutor`）都要读
+`registry`、`llmProvider()` 这类**可变**状态，切之前得先定「谁持有」，不是一刀的事。
+
+**改了什么**（三处，行为零变化）：
+
+| 位置 | 改法 |
+|---|---|
+| `TurnClock` | `private inner class TurnClock(turnId)` → 顶层 `internal class TurnClock(turnId, scope, observer)` |
+| `TurnEndStatus` | `private class` → 顶层 `internal class`（同一文件） |
+| 调用点 | `TurnClock(turnId)` → `TurnClock(turnId, scope, observer)`（全仓仅此一行） |
+
+**判据**（这一刀的重点不是行数）：
+
+- `TurnClockTest.kt`：**6 个用例 / 21 条断言**——信封四要素（turnId / step /
+  elapsed / scope）、`step()` 返回值与后续事件同号、`turn.end` 唯一且
+  `steps = 末步号 + 1`、`elapsed` 非负不回退、观察者异常不穿透 `emit`、
+  `TurnEndStatus` 默认 `completed` 且只被 `set` 改写。
+- `mutation-gate.py` 新增 **`trace` 组**（4 个源文件、零 Android，编 300 行不到两秒）
+  + M47–M51 五条变异，**全部 CAUGHT**。M47/M48 打的是「steps 少算一步」与
+  「turn.end 丢 scope」——这两条一错，时间线就再也答不出「卡在哪个 tool.start」。
+- 架构守卫 23 通过 / 0 失败；`RealAgentLoop` 1504 → **1409**，基线同步收紧。
+
+**数字**：变异体 77 → **82**；分组 8 → **9**；`TurnClock.kt` 113 行。
+
+**还没切的三块**（按风险从低到高，行号为 1409 下的新位置）：
+`ExposurePlanner`（1177 起）、`RequestBuilder`（1235 起）、`ToolBatchExecutor`
+（699 起）。后两块守着一回合最热的路径（工具批次与请求构造），**切完必须真机跑一轮
+带工具的对话**——沙箱没有设备，这一条只能留给人。
+
+
 ## 4. 代码红线（碰了会立刻红）
 
 | 红线 | 为什么 | 谁在守 |
