@@ -1363,9 +1363,10 @@ C++ 侧是 `exit(-1)`，不是异常，Android 上表现为**整个进程当场�
 
 | 事项 | 状态 | 怎么办 |
 |---|---|---|
-| CI 最后一次构建结果 | **已确认**：run 44955527610 → 1.842 全绿 | build=success（21m34s）/ mutation-gate=success（11m24s）；包 50,796,946 字节；`assets/silero_vad_v5.onnx` 2,327,524 字节且 **Stored 未压缩**；Release `latest` 标题已刷成 `北辰 latest (run 842)` |
+| CI 最后一次构建结果 | **已确认**：run 44966269394 → 1.844 全绿 | build=success（25m01s）/ mutation-gate=success（11m45s）；包 50,799,578 字节（SHA-256 `20772f06…60acd`）；Release `latest` 标题已刷成 `北辰 latest (run 844)`。注：中间那次 run 44963910597 红在自引入的两处（AppScaffold 超冻结行数、判据汇总行语序），已在 95d55fc 修掉 |
 | 「说完自己停」+ 自适应阈值（P31/P32） | **已出包，待真机** | 行为判据 18 条 + 变异 4 条全 CAUGHT，`core` 单测 22 条通过。但「0.8 秒收会不会显得急」「1.3 秒上限够不够」只有真机能判，见 §5.16 / §5.17 与手册 §4.10–4.11 |
 | silero VAD 端点（P33，2026-11-22） | **已出包 1.842（模型 v5），待真机** | 5.18 的「地铁里分不清人声与噪声」从根上绕开：频谱判据替换音量判据，RMS 保留为降级路径。模型从 v4 换到 v5 后，噪声下的帧命中率 44.9% → 79.9%（见 §5.20）。判据 19 条 + 变异 M1–M3 全 CAUGHT，CI 全绿。语音面板新增一行「端点判定：silero v5 / RMS 回落」，静默降级从此可见。**频谱那一半 JVM 给不了**——「电视开着还能不能停」「嘈杂环境不说话会不会乱出字」只有真机能判。见 §5.19、§5.20 与手册 §4.12 |
+| 取证三修（P34，2026-11-22） | **已出包 1.844，待真机** | 云机实测发现：诊断包 345 行里 279 行是 `[CapabilityChain]`且相隔 10 秒逐字重复（崩溃现场被顶出 300 行窗口）；本地包 `versionName` 算出「1.14」冒充正式版；无障碍只有两态、说不清「开关开着却没连上」。修法：指纹去重（`core/capability/ResolutionFingerprint.kt`，纯函数、harness 直测）、版本号加 `-local`、`A11yState` 三态。**另查清：`adb install -r` 会清空无障碍授权**，每次升级都要重开。判据 20 条 + 变异 M1–M6 全 CAUGHT；变异与判据均已进 CI（run-all 自动收集）。**一次自我更正**：最初把「未连接」归因于 uiautomator 抢占，复现证伪。见 `polaris-真机验证/云机验证-1.842.md` |
 | 跨应用审批浮层（P26） | **待真机** | 代码、判据（15+23 条）、编译、装机接线都过了；但模拟器没有模型，触发不了真实审批，所以「卡画在 QQ 上」「点完就地继续」「等 30 秒时 Agent 不自己往下走」三条只有真机能验。见 §5.13 |
 | 11 条模板拼接正则（含 `$`）未静态覆盖 | **待审** | 新判据只能判字面量；`MemoryAutoCapture` / `ShellTool` / `LocalToolCallParser` 等处是运行时拼出来的正则，ICU 兼容性只能逐条人工看。见 §5.12 |
 | 泄漏的 PAT（三个） | **仓库侧已清白；撤销只能用户做** | 三个 token 都只在会话里、或远端 URL 里出现过：`git log -S` 扫全历史 **0 命中**，工作区 `grep` 也干净。第三个今天已从 `.git/config` 的 remote URL 里摘掉（改存 `~/.git-credentials`，600 权限），`git remote -v` 与 `.git/config` 内已无 `ghp_` 前缀。**撤销只能在 GitHub 账号里做**：Settings → Developer settings → Personal access tokens → 逐条 Delete；删完在 GitHub 新建一个，写回 `~/.git-credentials`（格式 `https://x-access-token:<新token>@github.com`），否则下次 `git push` 会 403 |
