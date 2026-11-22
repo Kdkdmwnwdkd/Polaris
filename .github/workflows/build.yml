@@ -407,10 +407,30 @@ jobs:
           [ -n "$SER_CORE" ] && cp "$SER_CORE" /tmp/w7-jars/kotlinx-serialization-core-jvm-1.6.3.jar
           # 序列化编译器插件（-Xplugin 用）。必须与编译器同为 embeddable 变体：
           # 非 embeddable 插件配 embeddable 编译器会在编译期内部崩溃（exit=2）。
-          curl -sSL --max-time 120 \
-            https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-serialization-compiler-plugin-embeddable/1.9.25/kotlin-serialization-compiler-plugin-embeddable-1.9.25.jar \
-            -o /tmp/kotlinc/lib/kotlinx-serialization-compiler-plugin.jar \
-            && ls -lh /tmp/kotlinc/lib/kotlinx-serialization-compiler-plugin.jar || echo "WARN: 序列化插件下载失败"
+          #
+          # 2026-11-22 run 44999173354 的教训：原来这条 curl 没有 `-f`、没有内容校验，
+          # Maven Central 回 429/HTML 错误页时 curl 仍然退出 0，于是「下载成功」的判断
+          # 通过了，落下的却是一段 HTML。六七个 harness 随后一起报
+          # `java.util.zip.ZipException: zip END header not found`，
+          # 看起来像编译器坏了，实际是「jar 不是 jar」。
+          # 现在：`-f` 让 4xx/5xx 直接失败，`unzip -t` 校验真是 zip，多镜像轮一遍。
+          fetch_jar() {
+            out="$1"; shift
+            for u in "$@"; do
+              if curl -fsSL --retry 3 --retry-delay 2 --max-time 180 -o "$out.part" "$u" \
+                 && unzip -tq "$out.part" >/dev/null 2>&1; then
+                mv "$out.part" "$out"; return 0
+              fi
+              rm -f "$out.part"
+            done
+            return 1
+          }
+          fetch_jar /tmp/kotlinc/lib/kotlinx-serialization-compiler-plugin.jar \
+            "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-serialization-compiler-plugin-embeddable/1.9.25/kotlin-serialization-compiler-plugin-embeddable-1.9.25.jar" \
+            "https://maven.aliyun.com/repository/public/org/jetbrains/kotlin/kotlin-serialization-compiler-plugin-embeddable/1.9.25/kotlin-serialization-compiler-plugin-embeddable-1.9.25.jar" \
+            "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/org/jetbrains/kotlin/kotlin-serialization-compiler-plugin-embeddable/1.9.25/kotlin-serialization-compiler-plugin-embeddable-1.9.25.jar" \
+            && ls -lh /tmp/kotlinc/lib/kotlinx-serialization-compiler-plugin.jar \
+            || echo "WARN: 序列化插件下载失败（相关 harness 会报 zip 错，本轮不可信）"
           {
             echo '#!/usr/bin/env bash'
             # 官方 kotlinc 会自动带上 stdlib；直接调 K2JVMCompiler 不会。调用方可能写 -cp
@@ -439,15 +459,25 @@ jobs:
         if: ${{ vars.QA_HARNESS != 'off' }}
         continue-on-error: true
         run: |
-          for u in \
+          # 与中国内网镜像同一策略：`-f` + `unzip -t` 双校验。只判「文件非空」挡不住
+          # HTML 错误页——2026-11-22 那次就是这样把一个网页当成了 jar，harness 报
+          # `unresolved reference 'google'`。
+          fetch_zxing() {
+            for u in "$@"; do
+              if curl -fsSL --retry 3 --retry-delay 2 --max-time 180 -o /tmp/zxing-core-3.5.3.jar.part "$u" \
+                 && unzip -tq /tmp/zxing-core-3.5.3.jar.part >/dev/null 2>&1; then
+                mv /tmp/zxing-core-3.5.3.jar.part /tmp/zxing-core-3.5.3.jar; return 0
+              fi
+              rm -f /tmp/zxing-core-3.5.3.jar.part
+            done
+            return 1
+          }
+          fetch_zxing \
             "https://repo1.maven.org/maven2/com/google/zxing/core/3.5.3/core-3.5.3.jar" \
             "https://maven.aliyun.com/repository/public/com/google/zxing/core/3.5.3/core-3.5.3.jar" \
-            "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/com/google/zxing/core/3.5.3/core-3.5.3.jar"
-          do
-            curl -sSL --max-time 120 -o /tmp/zxing-core-3.5.3.jar "$u" && [ -s /tmp/zxing-core-3.5.3.jar ] && break
-            rm -f /tmp/zxing-core-3.5.3.jar
-          done
-          ls -lh /tmp/zxing-core-3.5.3.jar || echo "WARN: 考官包没取到，二维码对拍会 SKIP（编码器未被外部验证）"
+            "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/com/google/zxing/core/3.5.3/core-3.5.3.jar" \
+            && ls -lh /tmp/zxing-core-3.5.3.jar \
+            || echo "WARN: 考官包没取到，二维码对拍会 SKIP（编码器未被外部验证）"
 
       # QA harness：把仓库里全部断言跑一遍（纯 JVM + APK 静态反验）。
       #
