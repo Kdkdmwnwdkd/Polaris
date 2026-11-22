@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import com.beichen.polaris.core.AgentTool
 import com.beichen.polaris.core.JsonSchema
 import com.beichen.polaris.core.ToolRegistry
+import com.beichen.polaris.core.tool.ActivityTargets
 import com.beichen.polaris.core.ToolResult
 import com.beichen.polaris.automation.DeviceContextStore
 import com.beichen.polaris.automation.deviceContextEverUpdated
@@ -408,7 +409,16 @@ class AppLaunchTool(private val context: Context) : AgentTool {
     private suspend fun launchResolved(entry: AppEntry, activity: String?): ToolResult {
         val pm = context.packageManager
         val intent = if (!activity.isNullOrBlank()) {
-            Intent().setComponent(ComponentName(entry.packageName, activity))
+            // 2026-11-22 真机：模型给的是 `Settings$AccessibilitySettings`（少了 `Activity`），
+            // 组件不存在 → launch_error。按候选顺序挑第一个真能解析的（生成规则见 ActivityTargets）。
+            val picked = ActivityTargets.candidates(activity).firstOrNull { c ->
+                try {
+                    pm.getActivityInfo(ComponentName(entry.packageName, c), 0); true
+                } catch (e: PackageManager.NameNotFoundException) {
+                    false
+                }
+            } ?: activity
+            Intent().setComponent(ComponentName(entry.packageName, picked))
         } else {
             pm.getLaunchIntentForPackage(entry.packageName)
         }
