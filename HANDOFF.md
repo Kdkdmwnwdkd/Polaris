@@ -649,6 +649,26 @@ exec java -cp "$CP" "$MAIN" -kotlin-home "$BASE" "$@"
 缺插件的症状是 `plugin classpath entry points to a non-existent location: `（冒号后为空）——
 看起来像语法错误，其实是 `-Xplugin=""`。
 
+### 5.4 坑三：手工建 `v0.XX` release 会抢走 Latest 徽章（2026-11-22）
+
+症状：README 写「产物在 tag `latest`」，点进去却是 11 天前的 `AgentKit-1.674-debug.apk`。
+
+根因：GitHub 的 **Latest** 徽章按 release 的 `created_at` 挑非 prerelease、非 draft 的那一个，
+**不看资产后来有没有被覆盖**。`latest` 这个 release 建于 2026-10-11（建仓当天），
+CI 每天往里覆盖 `app-release.apk`；v0.27–v0.34 建于 10-14 之后，于是徽章落在 v0.34。
+
+修法（已做）：把 v0.27–v0.34 共 8 个 release 标成 prerelease，徽章回到 `latest`。
+`gh release edit` **不支持按 tag**，要按 release id：
+
+```bash
+gh api repos/$REPO/releases --jq '.[] | "\(.id) \(.tag_name)"'   # 取 id
+gh api -X PATCH repos/$REPO/releases/<id> -F prerelease=true
+gh api repos/$REPO/releases/latest --jq '.tag_name'               # 应输出 latest
+```
+
+**不要再手工建 `v0.XX` release**——它会把徽章抢走，而且不会自己回来。
+标 prerelease 不删包，老下载链接仍然可用。
+
 还有一处容易配错：**插件必须与编译器同一种打包**。`kotlin-compiler.jar`（非 embeddable）
 配非 embeddable 的插件；`kotlin-compiler-embeddable.jar` 配 embeddable 插件。混用会得到
 `NoSuchMethodError: KtClassLikeInfo.getScopeAnchor()`，栈里全在序列化插件内部，与业务无关。
