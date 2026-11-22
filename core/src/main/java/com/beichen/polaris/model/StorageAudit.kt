@@ -176,6 +176,37 @@ internal object ClearPolicy {
     )
 
     /**
+     * 把「根」映射到实际目录。
+     *
+     * ## 为什么单独抽出来
+     *
+     * 它只有一行，原先内联在 `clearStorageTemporary` 里。那样一来，
+     * [targets] 的内容不管怎么断言，都够不着这个条件——把 `==` 写成 `!=`，
+     * 数据侧判据全绿，运行时删的却是 `filesDir/models`（用户的几个 GB 本地模型）。
+     *
+     * 判据能测「清单写了什么」，测不到「清单怎么被用」。所以把用法也做成可测的。
+     */
+    fun baseDir(target: Target, cacheDir: File, filesDir: File): File =
+        if (target.root == Root.CACHE) cacheDir else filesDir
+
+    /**
+     * 这个文件该不该删。
+     *
+     * 原先是 `clearStorageTemporary` 循环里的两行 if。抽出来的原因和 [baseDir] 一样：
+     * 留在循环里，判据碰不到；而这两行管着「更新包只删 .apk」和「.part 一律留」，
+     * 正是用户会记住的两种损失——下到 80% 的模型从头开始、装完的包删了却还剩。
+     *
+     * @param file 目标目录下的一项，可能是文件也可能是子目录。
+     */
+    fun shouldDelete(target: Target, file: File): Boolean {
+        // 下载中的包一律留着：删了等于把进度清零，而用户会以为「这破网」。
+        if (keepWhileClearing(file.name)) return false
+        if (target.recursive) return true
+        // 非递归目标（更新包）只删指定后缀，且只删文件——同名目录不动。
+        return file.isFile && target.suffix != null && file.name.endsWith(target.suffix)
+    }
+
+    /**
      * 清理时必须保留的文件：正在下载的 `.part`。
      *
      * 不跳过它，用户看到的是「下到 80% 突然从头开始」——而且他不会觉得是清理导致的，

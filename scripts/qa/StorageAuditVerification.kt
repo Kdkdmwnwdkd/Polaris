@@ -127,13 +127,80 @@ fun main() {
 
     // 两个 models 是不同目录：cacheDir/models 是下载残留，filesDir/models 是用户的模型库。
     // 断言只盯 filesDir 那一侧——那才是「删了就没了」的地方。
-    check("A6 filesDir 下不许清理用户内容") {
-        val forbidden = listOf(
-            "models", "conversations", "media", "knowledge", "skills", "agent_workspace", "memory"
-        )
+    // 白名单，不是黑名单。黑名单只挡得住「已知的坏名字」——以后有人往 targets 里
+    // 加一行 `Target(FILES, "attachments")`，黑名单认不出；白名单会立刻红。
+    check("A6 filesDir 下只允许清日志与回合现场（白名单）") {
+        val allowed = setOf("logs", "run-journal")
         ClearPolicy.targets.filter { it.root == ClearPolicy.Root.FILES }.forEach { t ->
-            assertTrue("白名单会清掉用户内容：filesDir/" + t.name, t.name !in forbidden)
+            assertTrue("白名单会清掉用户内容：filesDir/" + t.name, t.name in allowed)
         }
+    }
+
+    // 清单写对了不等于用得对。`baseDir` 里那个条件一旦写反，上面几条数据判据
+    // 全部保持绿色，而运行时删的是 filesDir/models——用户几个 GB 的本地模型。
+    check("A11 根到目录的映射：CACHE 走缓存、FILES 走私有目录，不许写反") {
+        val cache = File("/tmp/qa-cache-" + System.nanoTime())
+        val files = File("/tmp/qa-files-" + System.nanoTime())
+        // 两个目录必须不同，否则映射对错结果一样，这条就成了永远绿的死判据。
+        assertTrue("两个基目录不能相同", cache.path != files.path)
+        val models = ClearPolicy.Target(ClearPolicy.Root.CACHE, "models")
+        assertEquals(
+            "cache 目标必须落在 cacheDir",
+            cache, ClearPolicy.baseDir(models, cache, files)
+        )
+        val logs = ClearPolicy.Target(ClearPolicy.Root.FILES, "logs")
+        assertEquals(
+            "files 目标必须落在 filesDir",
+            files, ClearPolicy.baseDir(logs, cache, files)
+        )
+    }
+
+    // 删除判定本身（不是名单）：这两种损失用户会记很久——
+    // 下到 80% 的模型从头开始、装完的更新包删了却还占着地方。
+    check("A13 删除判定：.part 一律留，更新包只删 .apk 文件") {
+        val base = File(System.getProperty("java.io.tmpdir"), "qa-del-" + System.nanoTime())
+        try {
+            base.mkdirs()
+            val apk = File(base, "update.apk").apply { writeBytes(ByteArray(10)) }
+            val part = File(base, "update.apk.part").apply { writeBytes(ByteArray(10)) }
+            val txt = File(base, "notes.txt").apply { writeBytes(ByteArray(10)) }
+            // 名字以 .apk 结尾的目录：删它等于整棵子树递归删除
+            val dirNamedApk = File(base, "trick.apk").apply { mkdirs() }
+
+            val updates = ClearPolicy.Target(
+                ClearPolicy.Root.CACHE, "updates", recursive = false, suffix = ".apk"
+            )
+            assertTrue("装完的更新包该删", ClearPolicy.shouldDelete(updates, apk))
+            assertTrue("下载中的 .part 不许删", !ClearPolicy.shouldDelete(updates, part))
+            assertTrue("非 .apk 不许删", !ClearPolicy.shouldDelete(updates, txt))
+            assertTrue(
+                "同名的目录不许删（否则等于整棵子树递归删除）",
+                !ClearPolicy.shouldDelete(updates, dirNamedApk)
+            )
+
+            val models = ClearPolicy.Target(ClearPolicy.Root.CACHE, "models")
+            assertTrue("目录级目标照删普通文件", ClearPolicy.shouldDelete(models, txt))
+            assertTrue("目录级目标也不许删 .part", !ClearPolicy.shouldDelete(models, part))
+            // 子目录：下载残留里解压出来的是整棵目录，只删文件会把空壳永久留下。
+            // 这一条是变异 M-S10 暴露出来的——原来只测了文件，把「递归」改坏也不红。
+            val extracted = File(base, "extracted").apply { mkdirs() }
+            assertTrue(
+                "目录级目标必须连子目录一起删，否则解压中间态永远清不掉",
+                ClearPolicy.shouldDelete(models, extracted)
+            )
+        } finally {
+            base.deleteRecursively()
+        }
+    }
+
+    // 判据自己的前提：名单空了，上面所有遍历型断言都是「零次遍历通过」。
+    // 这种绿最危险——它不证明任何事，却和其他绿长得一样。
+    check("A12 白名单非空且含 cacheDir/models（防判据空转）") {
+        assertTrue("清理白名单是空的，遍历型判据会全部假绿", ClearPolicy.targets.isNotEmpty())
+        assertTrue(
+            "没有 cacheDir/models：下载残留清不掉，「可腾出」会永远是 0",
+            ClearPolicy.targets.any { it.root == ClearPolicy.Root.CACHE && it.name == "models" }
+        )
     }
 
     check("A6b cacheDir/models 的清理是「下载残留」，且只删目录里的文件") {

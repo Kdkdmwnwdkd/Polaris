@@ -203,16 +203,10 @@ fun clearStorageTemporary(context: Context): Long {
     var freed = 0L
 
     ClearPolicy.targets.forEach { target ->
-        val base = if (target.root == ClearPolicy.Root.CACHE) app.cacheDir else app.filesDir
-        val dir = File(base, target.name)
+        val dir = File(ClearPolicy.baseDir(target, app.cacheDir, app.filesDir), target.name)
         if (!dir.isDirectory) return@forEach
         dir.listFiles()?.forEach inner@{ file ->
-            // 下载中的包一律留着：删了等于把进度清零，而用户会以为「这破网」
-            if (ClearPolicy.keepWhileClearing(file.name)) return@inner
-            // 非递归目标（更新包）只删指定后缀，且只删文件
-            if (!target.recursive) {
-                if (!file.isFile || target.suffix == null || !file.name.endsWith(target.suffix)) return@inner
-            }
+            if (!ClearPolicy.shouldDelete(target, file)) return@inner
             freed += if (file.isDirectory) sizeOf(file) else file.length()
             file.deleteRecursively()
         }
