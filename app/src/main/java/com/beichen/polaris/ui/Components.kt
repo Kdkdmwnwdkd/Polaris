@@ -810,11 +810,14 @@ fun AkReadyTextRow(
     pendingGrants: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    /** 设置里是否仍启用本服务；由 [isEnabledInSettings] 探测，用于区分「没开」与「被顶掉」。 */
-    enabledInSettings: Boolean = false
+    /**
+     * 设置里是否仍启用本服务；`null` = 组件自己探（大多数调用点都走这条）。
+     * 显式传入只为让 harness 能在不碰系统服务的前提下验证文案分支。
+     */
+    enabledInSettings: Boolean? = null
 ) {
     val ak = LocalAkColors
-    val state = a11yStateOf(serviceConnected, enabledInSettings)
+    val state = a11yStateOf(serviceConnected, enabledInSettings ?: rememberA11yEnabledInSettings(serviceConnected))
     val dotColor = when {
         state == A11yState.Off -> MaterialTheme.colorScheme.error
         state == A11yState.EnabledNotConnected -> ak.warning

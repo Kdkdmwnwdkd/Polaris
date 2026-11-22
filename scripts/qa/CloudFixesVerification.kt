@@ -180,7 +180,7 @@ fun testWiring() {
     }
     check("C4 UI 真的用三态，而不是只看 serviceConnected") {
         val s = read("app/src/main/java/com/beichen/polaris/ui/Components.kt")
-        assertTrue("AkReadyTextRow 没算三态", "a11yStateOf(serviceConnected, enabledInSettings)" in s)
+        assertTrue("AkReadyTextRow 没算三态", "a11yStateOf(serviceConnected, enabledInSettings ?: rememberA11yEnabledInSettings" in s)
         assertTrue("没有「被占用」文案", "无障碍被占用" in s)
         assertTrue("没有 enabledInSettings 参数", "enabledInSettings: Boolean" in s)
     }
@@ -203,7 +203,9 @@ fun main() {
     testFingerprint()
     testWiring()
     println("\n────────────────────────────")
-    println("通过 $passed，失败 ${failures.size}")
+    // 注意语序：run-all.sh 的通过标记正则是 `(^|[^0-9])0 失败`，
+    // 写成「失败 0」匹配不上，整个 runner 会被判「无通过标记」——CI 上真发生过一次。
+    println("通过 $passed 条，${failures.size} 失败")
     if (failures.isNotEmpty()) {
         println("失败项：")
         failures.forEach { println("  - $it") }
