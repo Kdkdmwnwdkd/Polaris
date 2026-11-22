@@ -62,13 +62,31 @@ object DenyMessage {
     fun isScreenRead(toolName: String): Boolean =
         ApprovalGrouping.groupOf(toolName) == ApprovalGrouping.GROUP_UI_SCREENSHOT
 
-    /** 用户点了「拒绝」（含超时无人回应，见调用方对超时的单独处理）。 */
+    /** 用户点了「拒绝」。 */
     fun denied(toolName: String): Text =
         if (isScreenRead(toolName)) {
             Text("用户没有允许读取屏幕内容（$toolName）。", SCREEN_READ_HINT)
         } else {
             Text("用户拒绝了该操作（$toolName）。", GENERIC_HINT)
         }
+
+    /**
+     * 时限内没人回应。**不是拒绝。**
+     *
+     * 真机（2026-11-22）：用户看到卡片 30 秒后自己消失，紧接着又弹一条同样的——因为
+     * 模型被告知「用户拒绝了你」，于是换了个工具再试。用户其实只是没在看屏幕。
+     *
+     * 所以这里要同时交代三件事：①不是被拒，②别再试同类工具，③把话留给用户。
+     * 「本回合不再弹确认卡」是**事实**——ViewModel 在超时后置了标志，后续需要确认的
+     * 调用直接拒绝，不会再打扰他。模型知道这一点就不会白等。
+     */
+    fun timedOut(toolName: String): Text = Text(
+        "用户没有回应这个确认卡（$toolName），" +
+            "本回合后续的确认卡不再弹出。",
+        "这不是用户拒绝，也不是能力不可用——他只是没看屏幕。不要重复发起相同调用，" +
+            "也不要换一个同样需要确认的工具再试。把当前进度和「需要你确认哪一步」说清楚，" +
+            "等用户回来自己发起。"
+    )
 
     /** 当前通道根本没有审批界面（后台通道 / 无浮层），一律拒绝。 */
     fun noApprover(toolName: String, reason: String): Text = Text(

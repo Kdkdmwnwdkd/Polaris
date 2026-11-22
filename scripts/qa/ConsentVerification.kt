@@ -121,18 +121,30 @@ fun main() = runBlocking {
         "实际 ${thrown?.let { it::class.simpleName }}",
     )
 
-    // ── 四种裁决必须彼此可区分 ─────────────────────────────────────────
+    // ── 五种裁决必须彼此可区分 ─────────────────────────────────────────
     val all = listOf(
         Consent.Decision.Allowed,
         Consent.Decision.Denied,
+        Consent.Decision.TimedOut,
         Consent.Decision.Unavailable("x"),
         Consent.Decision.Failed("x"),
     )
     ok(
-        "B11 四种 Decision 互不相等（布尔会把这个区分压扁）",
-        all.toSet().size == 4,
+        "B11 五种 Decision 互不相等（布尔会把这个区分压扁）",
+        all.toSet().size == 5,
         "实际只有 ${all.toSet().size} 种",
     )
+
+    // ── null 必须落到 TimedOut，而不是 Denied ───────────────────────────
+    // 混成 Denied 的后果：日志写「拒绝」、模型换个工具再试、用户又收到一张卡。
+    val timedOut = runCatching { Consent.ask { _, _ -> null }.decide(tool, args) }.getOrNull()
+    ok(
+        "B13 handler 返回 null（没人回应）→ TimedOut，不是 Denied",
+        timedOut == Consent.Decision.TimedOut,
+        "实际 $timedOut",
+    )
+
+
     ok(
         "B12 两条不同理由的 Deny 不相等（理由是判据的一部分）",
         Consent.Deny("甲") != Consent.Deny("乙"),

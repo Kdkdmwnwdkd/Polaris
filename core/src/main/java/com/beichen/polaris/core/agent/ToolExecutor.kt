@@ -414,6 +414,25 @@ class RegistryToolExecutor(
                         code = "approval_denied"
                     )
                 }
+                is Consent.Decision.TimedOut -> {
+                    // 超时不是拒绝（2026-11-22 真机）：日志与模型提示都要说清「没人回应」，
+                    // 否则模型会把「用户没看屏幕」读成「用户不要这个操作」，换工具再试，
+                    // 用户就再收到一张卡。
+                    AgentLogger.w("Tool", "审批超时（时限内无人回应），未执行 ${call.name}")
+                    val text = DenyMessage.timedOut(call.name)
+                    return ToolCallOutcome.Completed(
+                        toolMessageOf(
+                            call,
+                            ToolResult.fail(
+                                code = "approval_timeout",
+                                message = text.message,
+                                hint = text.hint
+                            )
+                        ),
+                        emptyList(),
+                        code = "approval_timeout"
+                    )
+                }
                 is Consent.Decision.Failed -> {
                     AgentLogger.e("Tool", "审批回调异常：${decision.cause}")
                     val text = DenyMessage.channelFailed(call.name)

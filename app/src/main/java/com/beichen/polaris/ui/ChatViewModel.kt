@@ -114,6 +114,7 @@ import com.beichen.polaris.core.capability.Capability
 import com.beichen.polaris.core.capability.CapabilityResolution
 import com.beichen.polaris.automation.shizuku.ShizukuShell
 import com.beichen.polaris.core.agent.AskUserBroker
+import com.beichen.polaris.core.agent.ApprovalTurn
 import com.beichen.polaris.core.agent.AgentRunService
 import com.beichen.polaris.core.agent.AgentRunState
 import com.beichen.polaris.core.agent.AgentRunStateStore
@@ -1452,12 +1453,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 「本次会话始终允许」的授权键，按对话隔离（审计 F3），实现与理由见 [ApprovalWhitelistStore]。 */
     private val sessionAllowed: MutableSet<String> get() = ApprovalWhitelistStore.of(_activeConversationId.value)
 
-    /**
-     * W-8 P1-C：ui_screenshot 的本回合批准缓存（见 [requestApproval]）。
-     * 每个用户回合（send() 入口）重置——跨回合不继承，每次新任务首次截图仍会问一次。
-     */
-    @Volatile
-    private var screenshotApprovedThisTurn = false
+    private val approvalTurn = ApprovalTurn(onAdvice = ::showInterruptNotice)
 
     /** 审批互斥锁：并发工具调用时串行排队，保证同一时刻只有一个审批弹窗。 */
     private val approvalMutex = Mutex()
@@ -1466,7 +1462,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 向用户征求一次危险操作授权，挂起直到用户决策。
      * 已在本次会话「始终允许」过的工具直接放行，不再打扰用户。
      */
-    private suspend fun requestApproval(toolName: String, args: JsonObject): Boolean = approvalMutex.withLock {
+    private suspend fun requestApproval(toolName: String, args: JsonObject): Boolean? = approvalMutex.withLock {
         // W-36/R-08：按「同类操作」放行而非工具名；shell 再看命令内容——不可逆命令永不记忆。
         val group = ApprovalGrouping.groupOf(toolName)
         // P1-②：本回合读过私有内容之后，外发就不再是「同类操作」。
@@ -1492,12 +1488,15 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             return@withLock true
         }
         // W-8 P1-C：截图按回合缓存批准（真机日志里「看一眼点一下」被对话框反复打断）；
-        // 回合边界在 send() 入口重置 screenshotApprovedThisTurn。
         // 逐步确认档下不用这个缓存：用户点名要「每次都问」，回合缓存会让第二次静默放行。
         if (!egressNow &&
             mode != ApprovalTier.STRICT &&
-            grant.key == ApprovalGrouping.GROUP_UI_SCREENSHOT && screenshotApprovedThisTurn
+            grant.key == ApprovalGrouping.GROUP_UI_SCREENSHOT && approvalTurn.screenshotApproved
         ) return@withLock true
+        if (approvalTurn.shouldSkipDialog()) {
+            AgentLogger.w("Approval", "$toolName 跳过：本轮已有一次超时无人回应")
+            return@withLock null
+        }
         val deferred = CompletableDeferred<Boolean>()
         val preview = ApprovalPreview.of(toolName, args)
         _pendingApproval.value = ApprovalRequest(
@@ -1513,13 +1512,14 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         ApprovalBridge.publish(toolName, preview, grant.memoLabel, grant.memorizable)
         // R-03：超时归 ViewModel（切页卸载弹窗后照样生效），不在 Composable 的倒计时里。
         // finally 保证无论用户怎么关掉弹窗，pending 都会清空，不会残留卡住下一个工具。
-        val ok = try { awaitApprovalDecision(deferred) } finally {
+        val outcome: Boolean? = try { awaitApprovalDecision(deferred) } finally {
             ApprovalBridge.withdraw()
             _pendingApproval.value = null
         }
-        if (ok && grant.key == ApprovalGrouping.GROUP_UI_SCREENSHOT) screenshotApprovedThisTurn = true
-        AgentLogger.w("Approval", "$toolName ${if (ok) "允许" else "拒绝"}")
-        ok
+        // 日志说真话：超时写「无人回应」，不写「拒绝」（真机用户原话：「我没点拒绝」）
+        val note = approvalTurn.record(toolName, outcome, grant.key == ApprovalGrouping.GROUP_UI_SCREENSHOT)
+        AgentLogger.w("Approval", "$toolName $note")
+        outcome
     }
 
     /** 用户选择「允许一次」：仅放行当前这一次调用。 */
@@ -1664,12 +1664,14 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 出站确认：不复用 [requestApproval]——免审工具没有档位语义，且这件事不可记忆（发一次≠一直发）。 */
     private suspend fun requestEgressConsent(toolName: String, args: JsonObject): Boolean =
         approvalMutex.withLock {
+            // 本回合已有一次「没人回应」：外发也不再问。真机上第二次弹的正是发送类卡片。
+            if (approvalTurn.shouldSkipDialog()) return@withLock false
             val d = CompletableDeferred<Boolean>()
             val grant = ApprovalGrant("egress:$toolName", "对外发送（本回合读过私有内容）", memorizable = false)
             _pendingApproval.value = ApprovalRequest(toolName, ApprovalPreview.of(args.toString()), d, grant)
-            val ok = try { awaitApprovalDecision(d) } finally { _pendingApproval.value = null }
-            AgentLogger.w("Approval", "egress $toolName ${if (ok) "允许" else "拒绝"}")
-            ok
+            val outcome: Boolean? = try { awaitApprovalDecision(d) } finally { _pendingApproval.value = null }
+            AgentLogger.w("Approval", "egress $toolName ${approvalTurn.record(toolName, outcome, false)}")
+            outcome == true
         }
 
     private val loop = AgentLoopFactory.create(
@@ -2253,8 +2255,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 InterruptDecision.Accept -> Unit // isRunning=true 时不可能，继续走下面
             }
         }
-        // W-8 P1-C：新回合重置截图批准缓存——上个回合批准过不算数，本回合首次截图仍询问
-        screenshotApprovedThisTurn = false
+        // W-8 P1-C / 2026-11-22：新回合重置审批记账（截图缓存 + 超时标志），跨回合不继承
+        approvalTurn.reset()
         // 功能四（P0-2）/ 功能五（P1-4）：先摘走待发附件并清空，避免本轮发出后仍留在输入区
         val images = _pendingImages.value
         _pendingImages.value = emptyList()

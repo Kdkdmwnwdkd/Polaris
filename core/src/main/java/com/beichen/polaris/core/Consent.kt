@@ -61,12 +61,15 @@ sealed interface Consent {
     /**
      * 有弹窗通道：问过用户才执行。
      *
-     * [handler] 返回 `true` 表示放行。它抛出的异常一律按「拒绝」处理，唯一例外是
-     * [CancellationException]——取消是控制流，必须上抛，否则用户点了「停止」会被
-     * 记成「用户拒绝了这个操作」。
+     * [handler] 三态：`true` 允许、`false` 拒绝、**`null` 表示没人回应（超时）**。
+     * 超时不是拒绝——它有自己的文案与后续处理，混成 `false` 会让模型以为用户手动拒了，
+     * 换个工具再试，于是又弹一张卡（2026-11-22 真机）。
+     *
+     * 它抛出的异常一律按「拒绝」处理，唯一例外是 [CancellationException]——取消是控制流，
+     * 必须上抛，否则用户点了「停止」会被记成「用户拒绝了这个操作」。
      */
     class Ask(
-        val handler: suspend (tool: AgentTool, args: JsonObject) -> Boolean
+        val handler: suspend (tool: AgentTool, args: JsonObject) -> Boolean?
     ) : Consent
 
     /**
@@ -87,7 +90,12 @@ sealed interface Consent {
     suspend fun decide(tool: AgentTool, args: JsonObject): Decision = when (this) {
         is Deny -> Decision.Unavailable(reason)
         is Ask -> try {
-            if (handler(tool, args)) Decision.Allowed else Decision.Denied
+            when (handler(tool, args)) {
+                true -> Decision.Allowed
+                false -> Decision.Denied
+                // 没人回应：单独一档。见 [Ask.handler] 与 [Decision.TimedOut]。
+                null -> Decision.TimedOut
+            }
         } catch (cancel: CancellationException) {
             // 取消不是拒绝：交给调用方的结构化并发去闭合。
             throw cancel
@@ -98,7 +106,7 @@ sealed interface Consent {
         }
     }
 
-    /** [decide] 的四种结果。刻意不是布尔——布尔会把「没问成」和「问了被拒」混成一个 `false`。 */
+    /** [decide] 的五种结果。刻意不是布尔——布尔会把「没问成」「没人理」和「问了被拒」混成一个 `false`。 */
     sealed interface Decision {
 
         /** 问了，用户允许。 */
@@ -106,6 +114,14 @@ sealed interface Consent {
 
         /** 问了，用户拒绝。 */
         data object Denied : Decision
+
+        /**
+         * 问了，但时限内没人回应。
+         *
+         * 与 [Denied] 的区别是**事实层面**的（谁做的），不是轻重：用户可能只是没看屏幕。
+         * 后果也不同——拒绝意味着「这条路径用户不要」，超时只意味着「现在别打扰」。
+         */
+        data object TimedOut : Decision
 
         /** 没问成：这条通道没有审批界面。 */
         data class Unavailable(val reason: String) : Decision
@@ -117,7 +133,7 @@ sealed interface Consent {
     companion object {
 
         /** 有审批通道的简写，省掉 `Consent.Ask { … }` 的嵌套。 */
-        fun ask(handler: suspend (tool: AgentTool, args: JsonObject) -> Boolean): Consent =
+        fun ask(handler: suspend (tool: AgentTool, args: JsonObject) -> Boolean?): Consent =
             Ask(handler)
 
         /**

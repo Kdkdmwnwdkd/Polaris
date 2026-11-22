@@ -77,7 +77,7 @@ SCREEN=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
 DEADLINE=$SRC_CORE/core/agent/ApprovalDeadline.kt
 
 # G1：VM 必须真的走 awaitApprovalDecision。函数写得再对，没人调用等于没修。
-if grep -qE '^ *val ok = try \{ awaitApprovalDecision\(deferred\) \} finally' "$VM"; then
+if grep -qE 'awaitApprovalDecision\(deferred\)' "$VM"; then
   g_good "G1 requestApproval 经 awaitApprovalDecision 等待（超时归 ViewModel）"
 elif grep -q 'deferred\.await()' "$VM"; then
   g_bad "G1 仍是裸 deferred.await() —— 超时只在弹窗倒计时里，切页即永久挂起"

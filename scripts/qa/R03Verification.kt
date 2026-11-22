@@ -95,14 +95,14 @@ fun main() {
     }
 
     // ── B. 超时 ────────────────────────────────────────────────────────
-    println("\n[B] 超时等同拒绝")
-    check("B1 无人决策 → 超时返回 false（fail-safe）") {
+    println("\n[B] 超时：三态里的 null（不是 false）")
+    check("B1 无人决策 → 返回 null（超时，不是拒绝）") {
         var got: Boolean? = null
         val cost = timed {
             val d = CompletableDeferred<Boolean>()
             got = awaitApprovalDecision(d, 150)
         }
-        eq(got, false, "返回值")
+        eq(got, null, "返回值：null 才代表没人回应")
         expect(cost < 2_000) { "150ms 的时限却等了 $cost ms —— 超时没生效" }
     }
     check("B2 超时耗时不早于时限（不能提前放弃）") {
@@ -111,13 +111,13 @@ fun main() {
         }
         expect(cost >= 130) { "时限 150ms，实际 $cost ms 就返回了 —— 提前放弃等于误拒" }
     }
-    check("B3 超时之后迟到的决策改不了已返回的值") {
+    check("B3 超时之后迟到的决策改不了已返回的值（仍为 null）") {
         runBlocking {
             val d = CompletableDeferred<Boolean>()
             val first = awaitApprovalDecision(d, 120)
             // 用户在半秒后才点「允许」——此时弹窗早已关闭，必须仍然算拒绝
             d.complete(true)
-            eq(first, false, "首次返回值")
+            eq(first, null, "首次返回值")
             eq(d.await(), true, "迟到的决策只是写进 deferred，不影响已返回的结果")
         }
     }
@@ -172,7 +172,7 @@ fun main() {
             d.complete(false)
             got = awaitApprovalDecision(d, 60_000)
         }
-        eq(got, false, "返回值")
+        eq(got, false, "已完成 → 立刻返回那个决策（这里是拒绝），不该等到超时")
         expect(cost < 1_000) { "已完成却等了 $cost ms" }
     }
 

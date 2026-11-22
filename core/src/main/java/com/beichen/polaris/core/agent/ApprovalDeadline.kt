@@ -12,7 +12,25 @@ import kotlinx.coroutines.withTimeoutOrNull
 const val APPROVAL_TIMEOUT_MS: Long = 30_000L
 
 /**
- * 等一次审批决策，**超时等同拒绝**（fail-safe）。
+ * 等一次审批决策。**三态，不是布尔**：
+ *
+ * | 返回 | 含义 |
+ * |---|---|
+ * | `true` | 用户点了允许 |
+ * | `false` | 用户点了拒绝 |
+ * | `null` | **30 秒内没人回应** |
+ *
+ * ## 为什么必须把超时和拒绝分开（2026-11-22 真机）
+ *
+ * 原实现是 `withTimeoutOrNull(...) ?: false`——超时与「用户点拒绝」共用同一个 `false`。
+ * 于是三处同时说错话：
+ *
+ *  - 日志写「拒绝」，事后排查会以为用户手动拒了（真机上用户明确说「我没点拒绝」）；
+ *  - 模型收到「用户拒绝了你」，于是换个工具再试——**又弹一张卡**。用户看到的就是
+ *    「30 秒后卡片消失，紧接着又来一条」，而他只是没在看屏幕；
+ *  - 界面文案说「用户拒绝」，用户什么都没做。
+ *
+ * 三态之后「没人理」有独立去向：文案说超时、日志记超时、本回合不再弹第二张卡。
  *
  * ## 为什么超时必须在 ViewModel 侧，而不在弹窗的倒计时里
  *
@@ -25,12 +43,12 @@ const val APPROVAL_TIMEOUT_MS: Long = 30_000L
  *
  * ## 为什么取消要往外抛
  *
- * 超时返回 false 是「用户没理我」；取消（用户点停止）是另一回事。若用 `runCatching`
- * 把两者一起吞成 false，一次取消会被记成一次正常的「用户拒绝」，协程继续往下跑。
+ * 超时返回 null 是「用户没理我」；取消（用户点停止）是另一回事。若用 `runCatching`
+ * 把两者一起吞，一次取消会被记成一次正常的「用户拒绝」，协程继续往下跑。
  * `withTimeoutOrNull` 对**外部取消**抛 `CancellationException` 而非返回 null——
- * 这个区分正是本函数要保住的东西，`P4` 变异专门守它。
+ * 这个区分正是本函数要保住的东西，`R03` 变异专门守它。
  */
 suspend fun awaitApprovalDecision(
     decision: CompletableDeferred<Boolean>,
     timeoutMs: Long = APPROVAL_TIMEOUT_MS
-): Boolean = withTimeoutOrNull(timeoutMs) { decision.await() } ?: false
+): Boolean? = withTimeoutOrNull(timeoutMs) { decision.await() }
