@@ -202,6 +202,20 @@ GROUPS = {
             "com.beichen.polaris.core.agent.RetryScheduleTest",
         ],
     },
+    # 回合时钟（2026-11-22，A1 第一块）。零依赖组：TurnClock + TurnEvent 契约 + RunScope，
+    # 编 300 行不到两秒。它证明的是「事件信封」不会悄悄错位——四个字段（turnId / step /
+    # elapsed / scope）任一漂了，时间线就不能用来定位「卡在哪个 tool.start」。
+    "trace": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/agent/TurnClock.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/TurnObserver.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/journal/RunScope.kt",
+            "core/src/test/java/com/beichen/polaris/core/agent/TurnClockTest.kt",
+        ],
+        "classes": [
+            "com.beichen.polaris.core.agent.TurnClockTest",
+        ],
+    },
 }
 
 # 被测源文件。收录判据只有一条：**这段判定有能在 30 秒内跑完的真断言**。
@@ -915,6 +929,46 @@ MUTATIONS = [
         "old": "    val RATE_LIMIT_SEQUENCE_MS: List<Long> = listOf(10_000L, 30_000L, 60_000L)",
         "new": "    val RATE_LIMIT_SEQUENCE_MS: List<Long> = listOf(3_000L, 10_000L, 25_000L)",
         "expect": ["R1 限流序列每一档都比通用序列更久"],
+    },
+    {
+        "id": "M47 turn.end 的 steps 少算一步（末步号当步数，时间线尾部少一格）",
+        "group": "trace",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/TurnClock.kt",
+        "old": "                turnId, currentStep(), elapsed(), status, currentStep() + 1, scope",
+        "new": "                turnId, currentStep(), elapsed(), status, currentStep(), scope",
+        "expect": ["T3"],
+    },
+    {
+        "id": "M48 turn.end 丢掉 scope（子代理的事件被记到主代理名下）",
+        "group": "trace",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/TurnClock.kt",
+        "old": "                turnId, currentStep(), elapsed(), status, currentStep() + 1, scope",
+        "new": "                turnId, currentStep(), elapsed(), status, currentStep() + 1, \"\"",
+        "expect": ["T3"],
+    },
+    {
+        "id": "M49 step() 返回旧步号（调用方拿到的步号与已记录的不一致）",
+        "group": "trace",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/TurnClock.kt",
+        "old": "    fun step(n: Int): Int {\n        lastStep = n\n        return n\n    }",
+        "new": "    fun step(n: Int): Int {\n        val prev = lastStep\n        lastStep = n\n        return prev\n    }",
+        "expect": ["T2"],
+    },
+    {
+        "id": "M50 观察者异常穿透 emit（观测方一抛，回合就跟着炸）",
+        "group": "trace",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/TurnClock.kt",
+        "old": "        runCatching { observer.onEvent(event) }",
+        "new": "        observer.onEvent(event)",
+        "expect": ["T5"],
+    },
+    {
+        "id": "M51 回合状态默认值变成 failed（没设过状态时把成功回合记成失败）",
+        "group": "trace",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/TurnClock.kt",
+        "old": "    var value: String = \"completed\"",
+        "new": "    var value: String = \"failed\"",
+        "expect": ["T6"],
     },
 ]
 

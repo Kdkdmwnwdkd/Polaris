@@ -355,8 +355,8 @@ class RealAgentLoop(
         // 可对照」：多个回合交错时，没有回合号的时间线等于没有时间线。
         // 所以这里先造号，再按有无日志分别使用。
         val turnId = newTurnId()
-        val clock = TurnClock(turnId)
-        // R5：回合结束状态。由 [TurnClock] 记录、各出口设置，finally 统一发事件——
+        val clock = TurnClock(turnId, scope, observer)
+        // R5：回合结束状态。由 [TurnEndStatus] 承载、各出口设置，finally 统一发事件——
         // 保证「有且只有一条 turn.end」（漏发就看不出回合是被取消还是卡死）。
         val status = TurnEndStatus()
         // R7：注入的句柄优先（子代理把调用记进主回合文件），否则按 journal 开一个新回合。
@@ -411,101 +411,6 @@ class RealAgentLoop(
     /** 回合 ID：时间序（便于 prune 按名排序）+ 随机后缀（同毫秒并发也不撞）。 */
     private fun newTurnId(): String =
         "${System.currentTimeMillis().toString(36)}-${java.util.UUID.randomUUID().toString().take(8)}"
-
-    /**
-     * 回合内的时间基准（R5）。
-     *
-     * 事件里的 [TurnEvent.elapsedMs] 是**相对回合开始**的毫秒数。用相对时间而非
-     * 墙钟有两个理由：日志跨设备对照时不会因时区/自动校时错位；回合中途改系统时间
-     * 也不会让时间线出现负数或跳跃。
-     *
-     * 顺带把「回合状态」也放这里——三个出口（正常结束 / 取消 / 失败）都要写
-     * `turn.end`，放在一个地方能保证**有且只有一条**。
-     */
-    private inner class TurnClock(val turnId: String) {
-        /** R7：本执行域的作用域名（主代理 = main，子代理 = sub:<标题>）。 */
-        val scope: String = this@RealAgentLoop.scope
-        private val startMs = System.currentTimeMillis()
-        private var lastStep = 0
-
-        fun elapsed(): Long = System.currentTimeMillis() - startMs
-
-        fun step(n: Int): Int {
-            lastStep = n
-            return n
-        }
-
-        fun currentStep(): Int = lastStep
-
-        /** 发出一个事件。观察者抛异常也不能影响回合——观测不该有副作用能力。 */
-        fun emit(event: TurnEvent) {
-            runCatching { observer.onEvent(event) }
-        }
-
-        /** 发回合结束事件（整个回合唯一一条）。 */
-        fun emitTurnEnd(status: String) {
-            emit(
-                TurnEvent.TurnEnded(
-                    turnId, currentStep(), elapsed(), status, currentStep() + 1, scope
-                )
-            )
-        }
-
-        // —— 事件构造的便捷入口（P5-1）——
-        //
-        // 每个发射点原本都要重复五六个信封参数（turnId / step / elapsed / scope），
-        // 十处发射点就是八九十行纯样板。搬进来之后，发射点一行一个事件，
-        // 「这一回合在什么时机发了哪些事件」能一眼看完——而这件事在排障时
-        // 恰恰比「每个事件怎么拼出来的」重要得多。
-        fun turnStarted(inputChars: Int, tools: Int) =
-            emit(TurnEvent.TurnStarted(turnId, 0, elapsed(), inputChars, tools, scope))
-
-        fun promptPlanned(step: Int, tools: Int, tokens: Int, groups: List<String>) =
-            emit(TurnEvent.PromptPlanned(turnId, step, elapsed(), tools, tokens, groups, scope))
-
-        fun llmStarted(step: Int, attempt: Int) =
-            emit(TurnEvent.LlmCallStarted(turnId, step, elapsed(), attempt, scope))
-
-        /** @param code 归一化失败类别（见 `failureCodeOf`），成功传 null。 */
-        fun llmEnded(
-            step: Int, attempt: Int, durMs: Long, ok: Boolean, code: String? = null, calls: Int = 0
-        ) = emit(TurnEvent.LlmCallEnded(turnId, step, elapsed(), attempt, durMs, ok, code, calls, scope))
-
-        fun toolStarted(step: Int, tool: String, args: String, callId: String) =
-            emit(TurnEvent.ToolCallStarted(turnId, step, elapsed(), tool, args, callId, scope))
-
-        fun toolEnded(
-            step: Int, tool: String, code: String, isError: Boolean, durMs: Long, callId: String
-        ) = emit(TurnEvent.ToolCallEnded(turnId, step, elapsed(), tool, code, isError, durMs, callId, scope))
-
-        fun stepClosed(step: Int, toolCount: Int) =
-            emit(TurnEvent.StepClosed(turnId, step, elapsed(), toolCount, scope))
-    }
-
-    /**
-     * 回合结束状态（R5）。
-     *
-     * 为什么不用一个局部 `var`：`runTurn` 的 finally 与 `runTurnBody` 的多个 return
-     * 出口都要写它，跨方法用局部变量需要传出参数，啰嗦且容易漏。封成一个小对象后，
-     * 每个出口只调 [set]，最后由 finally 统一发事件。
-     *
-     * 状态值的意义（排障时能直接看出回合是怎么结束的）：
-     * - `completed`：模型正常给完了回答；
-     * - `cancelled`：用户点了停止，或协程被取消；
-     * - `failed`：异常（模型调用失败、executor 违约等）；
-     * - `budget_exceeded`：超出回合总预算，优雅收尾；
-     * - `max_steps`：用满步数上限；
-     * - `stopped`：中途收到停止请求（优雅停止通道）。
-     */
-    private class TurnEndStatus {
-        @Volatile
-        var value: String = "completed"
-            private set
-
-        fun set(status: String) {
-            value = status
-        }
-    }
 
     /**
      * [runTurn] 的回合体（包一层是为了让日志的「开/关」包住所有出口，

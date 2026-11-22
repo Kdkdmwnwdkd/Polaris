@@ -211,7 +211,11 @@ lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3221
 # 闸门本身（模型 / 授权 / 永久拒绝三条出路）可独立判据。
 lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3194
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
-lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1504
+lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1409
+# 2026-11-22 下调（RealAgentLoop 1504 → 1409）：R5 的回合时钟与回合状态搬到
+# core/agent/TurnClock.kt（113 行，其中搬走的正文 95 行）。
+# 不是为了行数，是为了判据：inner class 读 this@RealAgentLoop.scope，抽成顶层类
+# 之后它是零依赖纯 JVM，才有 trace 组（M47–M51，6 条断言逐条打靶）。
 # 2026-11-22 下调（RealAgentLoop 1532 → 1504）：退避的**纯数值排期**搬到
 # core/agent/RetrySchedule.kt（零依赖），对象里只留同名转发。不是为了行数——
 # 是为了判据：原对象带 networkAware(NetworkRecoveryWaiter)，而那个类型在
