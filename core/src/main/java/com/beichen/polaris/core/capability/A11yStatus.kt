@@ -7,8 +7,11 @@ package com.beichen.polaris.core.capability
  *
  * 1. `adb install` 覆盖安装会清空 `enabled_accessibility_services`——**用户每次升级，
  *    无障碍授权都会丢**。这时列表是空的，属于 [Off]，提示「去开启」是对的。
- * 2. 绑定本身是即时的：`settings put` 之后 `dumpsys accessibility` 在 t=0 就已经
+ * 2. AMS 侧的绑定是即时的：`settings put` 之后 `dumpsys accessibility` 在 t=0 就已经
  *    `Bound services: 北辰 · 自动化`，不存在几十秒的空窗。
+ *    但**进程内的实例**未必一直不动：有东西来抢无障碍通道时（云机上 `uiautomator dump`
+ *    就会），实例会走一次 `detach → attach`，中间约 1–2 秒 [EnabledNotConnected] 会闪一下。
+ *    这是真实瞬态而非误报，所以 UI 不做去抖；若真机上跳眼，再谈。
  *
  * ## 那第三态什么时候出现（2026-11-22 云机已复现）
  *
