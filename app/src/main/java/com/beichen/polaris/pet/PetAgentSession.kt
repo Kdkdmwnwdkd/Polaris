@@ -13,8 +13,10 @@ import com.beichen.polaris.core.SystemMessage
 import com.beichen.polaris.core.UserMessage
 import com.beichen.polaris.core.agent.EgressGuard
 import com.beichen.polaris.core.runtime.AgentLoopFactory
+import com.beichen.polaris.core.runtime.Quota
 import com.beichen.polaris.core.runtime.RunSource
 import com.beichen.polaris.core.runtime.RuntimeSessions
+import com.beichen.polaris.core.runtime.TaskSpec
 import com.beichen.polaris.core.agent.productionSeams
 import com.beichen.polaris.core.workspace.WorkspaceStore
 import com.beichen.polaris.skill.ModelConfig
@@ -129,21 +131,17 @@ class PetAgentSession(context: Context) {
     private val registry by lazy { ToolAssembler.pet(appContext) }
 
     private val loop by lazy {
-        AgentLoopFactory.create(
-            llmProvider = { createClient() },
-            registry = registry,
-            // 与主界面分开：两个说话人可以各跑一个回合（共用键会退化成过度串行）。
+        // 桌宠的「谁 / 什么来源 / 多少配额 / 怎么审批」写在一个对象里。
+        // 这四项必须一起改：散着传参最典型的半截配置是「换了 session、忘了改步数」，
+        // 表现成桌宠跑满 60 步（主界面的默认）才停——没人会怀疑到配额上。
+        val spec = TaskSpec(
             session = RuntimeSessions.UI_PET,
             source = RunSource.PET,
-            systemPrompt = SYSTEM_PROMPT,
+            // 构造期还没有输入：loop 是长生命周期对象，输入在 ask() 里逐次 send。
+            input = "",
             // 桌宠是「一句话问答」，不是长任务。步数上限压到 6：
             // 真需要十几步的事，用户在桌宠里也等不住，该回主应用。
-            maxSteps = MAX_STEPS,
-            maxHistoryMessages = MAX_HISTORY,
-            // 工具表只有五个，不该被「小模型核心集」再裁一遍——裁掉 read_file 它就瞎了
-            forceFullTools = true,
-            // 瞬时抖动重试一次就够：桌宠是即时交互，等 30 秒重试不如早点说「没连上」
-            providerRetry = 1,
+            quota = Quota(maxSteps = MAX_STEPS),
             // P1-3 第二阶段：确认卡已经做出来了，桌宠从 Deny 升到 Ask。
             //
             // 等待逻辑在 [PetApproval]（超时 45 秒、界面销毁即撤销），这里只声明
@@ -153,6 +151,23 @@ class PetAgentSession(context: Context) {
             //
             // 超时与撤销都返回 false（按拒绝执行），但日志分开记。细节见 ApprovalGate。
             consent = Consent.ask { tool, args -> PetApproval.ask(tool, args) },
+        )
+        AgentLoopFactory.create(
+            llmProvider = { createClient() },
+            registry = registry,
+            // 与主界面分开：两个说话人可以各跑一个回合（共用键会退化成过度串行）。
+            session = spec.session,
+            source = spec.source,
+            systemPrompt = SYSTEM_PROMPT,
+            quota = spec.quota,
+            maxHistoryMessages = MAX_HISTORY,
+            // 工具表只有五个，不该被「小模型核心集」再裁一遍——裁掉 read_file 它就瞎了
+            forceFullTools = true,
+            // 瞬时抖动重试一次就够：桌宠是即时交互，等 30 秒重试不如早点说「没连上」
+            providerRetry = 1,
+            // 审批通道随 spec 一起给——它的来龙去脉（为什么从 Deny 升到 Ask）写在
+            // 上面 TaskSpec.consent 那段注释里，不在这里重复。
+            consent = spec.consent,
             // 「有审批通道」不等于「可以外发」：这是两道独立的闸门。
             //
             // 桌宠的工具表里有 web_search（免审）与 read_file（免审）。没有这条守卫，

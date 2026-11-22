@@ -88,6 +88,17 @@ object AgentLoopFactory {
         contextBudgetTokens: Int = ContextBudget.DEFAULT_BUDGET_TOKENS,
         keepRecentImages: Int = ContextBudget.DEFAULT_KEEP_IMAGES,
         consent: Consent = LoopDefaults.CONSENT,
+        /**
+         * 回合配额。**工厂自有参数，不是 [RealAgentLoop] 的构造参数**——
+         * 它经 [QuotaResolver] 落到 `maxSteps` 与 `turnBudgetMs` 两项上（0 = 不设，
+         * 用本函数对应形参的默认值兜底）。默认 [Quota] 三项全 0，即「一个都不覆盖」，
+         * 所以主界面这类「就用默认配额」的入口不必传。
+         *
+         * 覆盖型入口（桌宠 6 步、子代理 8 步）应当构造 [TaskSpec] 并把它的
+         * `quota` 传进来：配额与回合身份、审批能力写在同一个对象里，
+         * 才不会出现「session 改了、步数忘了改」这种半截配置。
+         */
+        quota: Quota = Quota(),
         checkpoint: ((List<ChatMessage>) -> Unit)? = null,
         journal: TurnJournal? = null,
         journalTurn: TurnJournal.Turn? = null,
@@ -119,12 +130,14 @@ object AgentLoopFactory {
         // 而闸门要用「send 期间才存在的租约」做判断——所以闸门是共享的可变单元，
         // 工厂把 `gate::emit` 交给内层，把 gate 交给外层装饰器，两边同一个对象。
         // 没有 onEvent 的入口（子代理）不必绕经闸门，直接传 null。
+        // 配额只在这里换算一次：0 到不了 loop（repeat(0) 会一步都不跑）。
+        val limits = QuotaResolver.resolve(quota, maxSteps, turnBudgetMs)
         val gate = TurnEventGate(runtime, session, onEvent)
         val delegate = RealAgentLoop(
             llmProvider = llmProvider,
             registry = registry,
             systemPrompt = systemPrompt,
-            maxSteps = maxSteps,
+            maxSteps = limits.maxSteps,
             maxParallelTools = maxParallelTools,
             providerRetry = providerRetry,
             retryProfileProvider = retryProfileProvider,
@@ -154,7 +167,7 @@ object AgentLoopFactory {
             rateLimitBackoff = rateLimitBackoff,
             retryBackoff = retryBackoff,
             llmCallTimeoutMs = llmCallTimeoutMs,
-            turnBudgetMs = turnBudgetMs,
+            turnBudgetMs = limits.deadlineMs,
         )
         return RuntimeBoundAgentLoop(delegate, runtime, gate, session, source)
     }

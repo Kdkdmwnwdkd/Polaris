@@ -68,6 +68,26 @@ else
   fail "A2 TaskSpec.consent 给了默认值——「忘写审批」会静默退成默认拒绝/放行"
 fi
 
+# 2026-11-23：TaskSpec 曾长期「零构造」——类型层把配额钉死了，实际配额却由
+# LoopDefaults 常量决定，两边可以各说各话。现在两个覆盖型入口（桌宠 6 步 /
+# 子代理 8 步）用它把「身份 + 来源 + 配额 + 审批」写在一起；主界面不构造，
+# 因为它的配额就是默认值，造一个字段全等于默认的 spec 只是噪音。
+spec_sites=$(prod_matches 'TaskSpec[(]' 2>/dev/null | grep -v 'data class TaskSpec' || true)
+spec_n=$(echo "$spec_sites" | grep -c . || true)
+if [ "$spec_n" -ge 2 ]; then
+  pass "A3 TaskSpec 有 $spec_n 处生产构造——配额不再只活在类型定义里"
+else
+  fail "A3 生产代码只有 $spec_n 处 TaskSpec(...)，配额仍由常量决定（空转）"
+  echo "$spec_sites" | sed 's/^/        /'
+fi
+
+if grep -qE 'quota: Quota[[:space:]]*=[[:space:]]*Quota\(\),' "$FACTORY" \
+   && grep -qE 'QuotaResolver\.resolve\(' "$FACTORY"; then
+  pass "A4 工厂经 QuotaResolver 换算配额——0 到不了 loop（repeat(0) 一步都不跑）"
+else
+  fail "A4 工厂没接配额换算——Quota 传进来也没人用"
+fi
+
 echo ""
 echo "[B] 不变量 4：进程内仅一个 Semaphore；SubAgentRunner 不自带并发限制器"
 

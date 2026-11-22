@@ -7,8 +7,10 @@ import com.beichen.polaris.core.ToolRegistry
 import com.beichen.polaris.core.agent.journal.RunScope
 import com.beichen.polaris.core.runtime.AgentLoopFactory
 import com.beichen.polaris.core.runtime.AgentRuntime
+import com.beichen.polaris.core.runtime.Quota
 import com.beichen.polaris.core.runtime.RunSource
 import com.beichen.polaris.core.runtime.RuntimeSessions
+import com.beichen.polaris.core.runtime.TaskSpec
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -112,19 +114,30 @@ class SubAgentRunner(
             val subTurn = parent?.turn?.scoped(subScope)
             val history = runtime.withPermit("cloud") {
                 withTimeout(timeoutMs) {
-                    AgentLoopFactory.create(
-                        llmProvider = llmProvider,
-                        registry = buildRegistry(),
+                    // 子代理的「谁 / 什么来源 / 多少配额 / 怎么审批」写在一个对象里：
+                    // 这四项要一起改，散着传最容易出现「步数改了、超时没改」。
+                    val spec = TaskSpec(
                         // 按序号不按标题：同名子任务是两个独立任务，互斥会把 cloud=2 压回 1。
                         session = RuntimeSessions.subAgent(index),
                         source = RunSource.SUBAGENT,
-                        runtime = runtime,
-                        systemPrompt = SubAgentLogic.systemPrompt(task.title),
-                        maxSteps = maxSteps,
-                        maxParallelTools = 2,
-                        contextBudgetTokens = budgetTokens,
+                        // 构造期还没有输入：任务文本在下面 send(...) 里给。
+                        input = "",
+                        // 与 timeoutMs、budgetTokens 一起构成「有预算」三条。
+                        quota = Quota(maxSteps = maxSteps),
                         // R4：审批必须穿过子代理边界——见构造参数注释
                         consent = consent,
+                    )
+                    AgentLoopFactory.create(
+                        llmProvider = llmProvider,
+                        registry = buildRegistry(),
+                        session = spec.session,
+                        source = spec.source,
+                        runtime = runtime,
+                        systemPrompt = SubAgentLogic.systemPrompt(task.title),
+                        quota = spec.quota,
+                        maxParallelTools = 2,
+                        contextBudgetTokens = budgetTokens,
+                        consent = spec.consent,
                         // 白名单只有十几个工具，不能被「小模型核心集」再裁掉——
                         // 子代理拿不到 read_file 就等于瞎了
                         forceFullTools = true,

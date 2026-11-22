@@ -259,10 +259,13 @@ class AgentRuntimeTest {
     }
 
     @Test
-    fun `Quota 默认值语义——0 表示不限那一项`() {
-        // maxTokens=0 / deadlineMs=0L 都表示「不限」；maxSteps 默认 20 是兜底步数上限。
+    fun `Quota 默认全零——0 表示「这一项没表态」`() {
+        // 2026-11-23：maxSteps 默认从 20 改为 0。原断言钉的是「20 是兜底步数上限」，
+        // 但那个默认值让「没表态」和「表态成 20 步」变成同一个值——三个入口一旦有人
+        // 忘了传，看不出是默认还是覆盖。现在 0 是「没表态」的唯一表示，
+        // 具体上限由 QuotaResolver.resolve(quota, fallback) 决定（见 QuotaResolverTest）。
         val q = Quota()
-        assertEquals(20, q.maxSteps)
+        assertEquals(0, q.maxSteps)
         assertEquals(0, q.maxTokens)
         assertEquals(0L, q.deadlineMs)
     }

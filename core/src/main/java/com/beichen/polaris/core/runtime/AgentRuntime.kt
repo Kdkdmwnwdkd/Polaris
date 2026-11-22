@@ -14,21 +14,19 @@ import java.util.concurrent.atomic.AtomicLong
 enum class RunSource { MAIN, PET, SUBAGENT, AUTO_RESUME, MCP }
 
 /**
- * 一个回合的配额。
+ * 一个回合任务的描述。承载「谁、什么来源、跑什么、多少配额、怎么审批」。
  *
- * 字段默认值表示「不设上限」的那一项（0 / 0L 都是「不限」），但 [TaskSpec] 要求
- * **显式给出一个 [Quota] 实例**——不能在构造 TaskSpec 时把配额整个省掉。省掉就是
- * 「这个回合没有资源边界」，与 v4 不变量 3 直接冲突。
- */
-data class Quota(
-    val maxSteps: Int = 20,
-    val maxTokens: Int = 0,     // 0 = 不限 token
-    val deadlineMs: Long = 0L,  // 0 = 不限时
-)
-
-/**
- * 一个回合任务的描述。承载「谁、什么来源、跑什么、多少配额、怎么审批」，
- * 不承载执行体——执行体（loop 工厂）在接线轮次接入。
+ * ## 当前接线形态（2026-11-23）
+ *
+ * 两个**覆盖型**入口把四项写在一起，再逐字段传给 [AgentLoopFactory.create]：
+ * 桌宠（6 步）、子代理（8 步）。主界面刻意**不构造** TaskSpec——它的配额就是
+ * 默认值，造一个字段全等于默认的 spec 只是噪音；它只传 `session` 与 `consent`。
+ *
+ * `input` 在构造期恒为空串：loop 是长生命周期对象，真正的输入在 `send` 时给。
+ * 不给默认值，是因为「忘传输入」不该静默变成空字符串。
+ *
+ * 配额本身不在 loop 里解析，而是经 [QuotaResolver] 落成 `maxSteps` / `turnBudgetMs`——
+ * 见该类注释「0 到不了 loop」。
  *
  * ## 不变量 3（v4 §3.2）：`quota` 与 `consent` **无默认值**
  *

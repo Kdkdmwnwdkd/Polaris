@@ -164,6 +164,9 @@ GROUPS = {
     "runtime": {
         "sources": [
             "core/src/main/java/com/beichen/polaris/core/runtime/AgentRuntime.kt",
+            # 2026-11-23：Quota 从 AgentRuntime.kt 搬到独立文件（零 import），
+            # TaskSpec 仍引用它，所以这个闭包必须带上——否则整个组编译失败。
+            "core/src/main/java/com/beichen/polaris/core/runtime/Quota.kt",
             # P1 第四轮：执行权收口。RuntimeBoundAgentLoop 依赖 AgentLoop 接口
             # （→ ChatMessage / ToolRegistry），所以编译闭包从「三个文件」扩到
             # 「接口 + 契约 + registry」。多出来的文件都是纯 JVM、零 Android。
@@ -226,6 +229,18 @@ GROUPS = {
         ],
         "classes": [
             "com.beichen.polaris.ui.VoiceInputDecisionTest",
+        ],
+    },
+    # 回合配额换算（2026-11-23）。零依赖组：Quota 是纯数据类、QuotaResolver 零 import。
+    # 兜底值从参数传而不是写常量，正是为了让这组留在 kotlinc + JUnit 的闭包里。
+    "quota": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/runtime/Quota.kt",
+            "core/src/main/java/com/beichen/polaris/core/runtime/QuotaResolver.kt",
+            "core/src/test/java/com/beichen/polaris/core/runtime/QuotaResolverTest.kt",
+        ],
+        "classes": [
+            "com.beichen.polaris.core.runtime.QuotaResolverTest",
         ],
     },
 }
@@ -1021,6 +1036,46 @@ MUTATIONS = [
         "old": "        !installed -> VoiceInputNext.TellInstallModel",
         "new": "        !installed -> VoiceInputNext.OpenPanel",
         "expect": ["V5"],
+    },
+    {
+        "id": "QT1 0 步被当成合法上限（repeat(0) 一步不跑，回合直接空转）",
+        "group": "quota",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/QuotaResolver.kt",
+        "old": "            maxSteps = if (quota.maxSteps > 0) quota.maxSteps else fallbackSteps,",
+        "new": "            maxSteps = if (quota.maxSteps >= 0) quota.maxSteps else fallbackSteps,",
+        "expect": ["QT1"],
+    },
+    {
+        "id": "QT2 兜底步数写死 60（换了入口仍按主界面的上限跑）",
+        "group": "quota",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/QuotaResolver.kt",
+        "old": "            maxSteps = if (quota.maxSteps > 0) quota.maxSteps else fallbackSteps,",
+        "new": "            maxSteps = if (quota.maxSteps > 0) quota.maxSteps else 60,",
+        "expect": ["QT1"],
+    },
+    {
+        "id": "QT3 0 预算不落兜底（回合一到点就被判超时）",
+        "group": "quota",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/QuotaResolver.kt",
+        "old": "            deadlineMs = if (quota.deadlineMs > 0L) quota.deadlineMs else fallbackDeadlineMs,",
+        "new": "            deadlineMs = if (quota.deadlineMs >= 0L) quota.deadlineMs else fallbackDeadlineMs,",
+        "expect": ["QT1"],
+    },
+    {
+        "id": "QT4 预算的兜底借了步数的值（两项串线，7 毫秒就超时）",
+        "group": "quota",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/QuotaResolver.kt",
+        "old": "            deadlineMs = if (quota.deadlineMs > 0L) quota.deadlineMs else fallbackDeadlineMs,",
+        "new": "            deadlineMs = if (quota.deadlineMs > 0L) quota.deadlineMs else fallbackSteps.toLong(),",
+        "expect": ["QT1"],
+    },
+    {
+        "id": "QT5 兜底非正不再拦（调用方传 0，静默变成一步不跑）",
+        "group": "quota",
+        "file": "core/src/main/java/com/beichen/polaris/core/runtime/QuotaResolver.kt",
+        "old": "        require(fallbackSteps > 0) {",
+        "new": "        require(true) {",
+        "expect": ["QT6"],
     },
 ]
 
