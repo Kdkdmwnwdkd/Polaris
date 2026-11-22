@@ -1,6 +1,7 @@
 package com.beichen.polaris.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -39,6 +40,13 @@ import com.beichen.polaris.audio.asr.AsrDirectory
  * 第 3 条的后半段是重点：没有它，「永久拒绝」的用户会掉进和旧实现一样的死路，
  * 只是换成点一次弹一次 Toast 而已。
  *
+ * ## 分支判定不在这里
+ *
+ * 「走哪条路」由 [VoiceInputDecision.next]（同目录，纯函数）决定，本文件只负责
+ * 把结论落到副作用上。原因是旧版的判据只能靠 grep 看「`open()` 是否出现在
+ * `if (granted)` 后面」——把 `open()` 挪进 `else` 分支，grep 全绿而真机不工作。
+ * 判定搬进纯函数后才有 JUnit 与变异门禁，grep 只再管「接线」。
+ *
  * ## 为什么放在单独文件
  *
  * `ChatScreen.kt` 有 1500 行上限（arch-guard [B]），且只减不增。这段逻辑带注释二十多行，
@@ -69,30 +77,46 @@ fun rememberVoiceInputGate(onOpen: () -> Unit): () -> Unit {
 
     return remember {
         {
-            when {
-                !AsrDirectory.of(ctx).isInstalled() -> Toast.makeText(
+            val installed = AsrDirectory.of(ctx).isInstalled()
+            val granted =
+                ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) ==
+                    PackageManager.PERMISSION_GRANTED
+
+            // 分支判定在 VoiceInputDecision（纯函数，有 JUnit + 变异门禁）。
+            // 这里只负责把结论落到副作用上——`when` 不写 else，枚举漏一支就编译不过。
+            when (VoiceInputDecision.next(installed, granted, asked)) {
+                VoiceInputNext.TellInstallModel -> Toast.makeText(
                     ctx,
                     "还没下载离线识别模型。到 设置 → 语音识别 里下「更准识别」（约 74MB），下完就能说话",
                     Toast.LENGTH_LONG,
                 ).show()
 
-                ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) ==
-                    PackageManager.PERMISSION_GRANTED -> open()
+                VoiceInputNext.OpenPanel -> open()
 
-                asked -> runCatching {
-                    ctx.startActivity(
-                        Intent(
-                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                            Uri.fromParts("package", ctx.packageName, null),
-                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                }
+                VoiceInputNext.GoSettings -> openAppSettings(ctx)
 
-                else -> {
+                VoiceInputNext.RequestPermission -> {
                     asked = true
                     launcher.launch(Manifest.permission.RECORD_AUDIO)
                 }
             }
         }
+    }
+}
+
+/**
+ * 跳到本应用详情页（权限开关在这里）。
+ *
+ * `startActivity` 可能抛（部分 ROM 缺该 Activity），故 runCatching——跳不过去顶多
+ * 停在原地，不该把整个点击事件炸掉。
+ */
+private fun openAppSettings(ctx: Context) {
+    runCatching {
+        ctx.startActivity(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", ctx.packageName, null),
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 }

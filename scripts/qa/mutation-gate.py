@@ -216,6 +216,18 @@ GROUPS = {
             "com.beichen.polaris.core.agent.TurnClockTest",
         ],
     },
+    # 语音入口的分支判定（2026-11-23）。零依赖组：判定文件没有一行 import，
+    # 所以它能进这个只认 kotlinc + JUnit 的门禁——这正是当初抽它的理由。
+    # 注意源文件在 app/ 下，但**不含 Compose**：ui 是包名，不是「要编界面」。
+    "ui": {
+        "sources": [
+            "app/src/main/java/com/beichen/polaris/ui/VoiceInputDecision.kt",
+            "app/src/test/java/com/beichen/polaris/ui/VoiceInputDecisionTest.kt",
+        ],
+        "classes": [
+            "com.beichen.polaris.ui.VoiceInputDecisionTest",
+        ],
+    },
 }
 
 # 被测源文件。收录判据只有一条：**这段判定有能在 30 秒内跑完的真断言**。
@@ -969,6 +981,46 @@ MUTATIONS = [
         "old": "    var value: String = \"completed\"",
         "new": "    var value: String = \"failed\"",
         "expect": ["T6"],
+    },
+    {
+        "id": "U1 未装模型不再优先（没下模型的人被推去授权，授完还是用不了）",
+        "group": "ui",
+        "file": "app/src/main/java/com/beichen/polaris/ui/VoiceInputDecision.kt",
+        "old": "        !installed -> VoiceInputNext.TellInstallModel\n        granted -> VoiceInputNext.OpenPanel",
+        "new": "        granted -> VoiceInputNext.OpenPanel\n        !installed -> VoiceInputNext.TellInstallModel",
+        "expect": ["V1"],
+    },
+    {
+        "id": "U2 问过之后再点仍弹框（系统不再弹，用户永远拿不到权限）",
+        "group": "ui",
+        "file": "app/src/main/java/com/beichen/polaris/ui/VoiceInputDecision.kt",
+        "old": "        asked -> VoiceInputNext.GoSettings",
+        "new": "        asked -> VoiceInputNext.RequestPermission",
+        "expect": ["V4"],
+    },
+    {
+        "id": "U3 已授权却送去设置页（能用了还折腾用户）",
+        "group": "ui",
+        "file": "app/src/main/java/com/beichen/polaris/ui/VoiceInputDecision.kt",
+        "old": "        granted -> VoiceInputNext.OpenPanel",
+        "new": "        granted -> VoiceInputNext.GoSettings",
+        "expect": ["V2"],
+    },
+    {
+        "id": "U4 首次点击不弹框直接跳设置（等于把授权流程整个跳过）",
+        "group": "ui",
+        "file": "app/src/main/java/com/beichen/polaris/ui/VoiceInputDecision.kt",
+        "old": "        else -> VoiceInputNext.RequestPermission",
+        "new": "        else -> VoiceInputNext.GoSettings",
+        "expect": ["V3"],
+    },
+    {
+        "id": "U5 未装模型时去开面板（面板里只剩一行红字，就是旧实现的死路）",
+        "group": "ui",
+        "file": "app/src/main/java/com/beichen/polaris/ui/VoiceInputDecision.kt",
+        "old": "        !installed -> VoiceInputNext.TellInstallModel",
+        "new": "        !installed -> VoiceInputNext.OpenPanel",
+        "expect": ["V5"],
     },
 ]
 

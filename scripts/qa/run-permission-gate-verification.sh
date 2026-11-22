@@ -12,6 +12,10 @@
 # 这类缺陷的共同点：编译过、JVM 单测过、真机上只是「某个按钮点了没反应」，
 # 静态读代码也看不出来。所以判据必须同时盯住「声明」和「申请点」两侧。
 #
+# 2026-11-23：这条判据原先有个洞——「授予后开面板」用 grep 看 open() 是否跟
+# 在 if (granted) 后面，把 open() 挪进 else 分支照样全绿。判定的语义已搬到
+# VoiceInputDecision（纯函数，有 JUnit 与变异门禁 ui 组），本脚本只守接线。
+#
 # 退出码：0 通过 / 1 有违规。
 set -uo pipefail
 cd "$(dirname "$0")/../.."
@@ -36,15 +40,23 @@ voice_gate_ok() {
   grep -q 'ActivityResultContracts.RequestPermission()' "$f" || return 1
   grep -q 'launch(Manifest.permission.RECORD_AUDIO)' "$f" || return 1
   grep -q 'ACTION_APPLICATION_DETAILS_SETTINGS' "$f" || return 1
-  # 授予后必须真的把面板打开——否则申请了也没用（这类「申请完忘了继续」最隐蔽）
-  grep -A3 'if (granted) {' "$f" | grep -q 'open()' || return 1
+  # 分支判定必须交给纯函数（2026-11-23）。
+  # 旧判据是 `grep -A3 'if (granted) {' | grep 'open()'`，只看字面顺序不看语义——
+  # 把 open() 挪进 else 分支，六条 grep 全绿而真机「授权了也不开面板」，已实测复现。
+  # 语义现在由 VoiceInputDecisionTest + mutation-gate 的 ui 组守；这里只守接线。
+  grep -q 'VoiceInputDecision.next(' "$f" || return 1
+  # 四条出路都要有落点，且 when 不许写 else 兜底：加了 else，新枚举值会被静默吞掉。
+  for a in TellInstallModel OpenPanel GoSettings RequestPermission; do
+    grep -q "VoiceInputNext.$a" "$f" || return 1
+  done
+  if grep -q 'else ->' "$f"; then return 1; fi
   return 0
 }
 
 say "=== 权限闸门判据 ==="
 say ""
 
-say "[A] 聊天页语音入口：未授权时必须能拿到授权"
+say "[A] 聊天页语音入口：未授权时必须能拿到授权（结构 + 接线；语义由 ui 组守）"
 if [ ! -f "$GATE" ]; then
   bad "找不到 $GATE"
 elif voice_gate_ok "$GATE"; then
@@ -56,7 +68,11 @@ else
   grep -q 'ActivityResultContracts.RequestPermission()' "$GATE" || bad "  └ 缺 RequestPermission launcher"
   grep -q 'launch(Manifest.permission.RECORD_AUDIO)' "$GATE"  || bad "  └ 缺 launch(RECORD_AUDIO)"
   grep -q 'ACTION_APPLICATION_DETAILS_SETTINGS' "$GATE"       || bad "  └ 缺永久拒绝后的设置页兜底"
-  grep -A3 'if (granted) {' "$GATE" | grep -q 'open()'        || bad "  └ 授予后没打开面板"
+  grep -q 'VoiceInputDecision.next(' "$GATE"                  || bad "  └ 分支判定没交给 VoiceInputDecision（又回到 if/else 手写）"
+  for a in TellInstallModel OpenPanel GoSettings RequestPermission; do
+    grep -q "VoiceInputNext.$a" "$GATE"                       || bad "  └ 缺分支落点：$a"
+  done
+  if grep -q 'else ->' "$GATE"; then bad "  └ when 写了 else 兜底（新枚举值会被静默吞掉）"; fi
 fi
 
 say ""
@@ -144,6 +160,22 @@ else
   good "旧实现被判红"
 fi
 rm -f "$TMP"
+
+# 第二种坏样本：调了纯函数，但把「跳设置页」写成 else 兜底（漏一支、且加了 else）。
+TMP2=$(mktemp)
+cat > "$TMP2" <<'EOF'
+    when (VoiceInputDecision.next(installed, granted, asked)) {
+        VoiceInputNext.TellInstallModel -> toast()
+        VoiceInputNext.OpenPanel -> open()
+        else -> goSettings()
+    }
+EOF
+if voice_gate_ok "$TMP2"; then
+  bad "自检失败：漏分支 + else 兜底的样本通过了判据"
+else
+  good "漏分支 / else 兜底被判红"
+fi
+rm -f "$TMP2"
 
 say ""
 if [ "$fail" -eq 0 ]; then
