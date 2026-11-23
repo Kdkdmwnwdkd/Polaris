@@ -1372,9 +1372,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                         history.filterIsInstance<AssistantMessage>().map { it.usage }
                     ),
                     // W-RT7：重生成可能换了模型，归属按完成时的当前模型记
-                    modelId = currentModelLabel(),
-                    // 占位文案是界面写的，不是模型的回答：落盘要让用户看见，喂模型时要滤掉
-                    synthetic = final.isBlank()
+                    modelId = currentModelLabel(), synthetic = final.isBlank()
                 )
                 // hotfix30：变体落盘按 owner（切走期间 regenerate 的后台结果仍写回原会话）
                 conversationStore.appendVariant(
@@ -1389,11 +1387,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     AgentLogger.i("Chat", "重新生成已停止")
                 } else {
                     AgentLogger.e("Chat", "重新生成失败", it)
-                    val err = UiItem.Assistant(
-                        friendlyMessage(it),
-                        timeMs = System.currentTimeMillis(),
-                        synthetic = true
-                    )
+                    val err = UiItem.Assistant(friendlyMessage(it), timeMs = System.currentTimeMillis(), synthetic = true)
                     // hotfix30：失败变体同样按 owner 落盘
                     conversationStore.appendVariant(
                         owner, turnIndex, err.toMsgRecord()
@@ -2434,13 +2428,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     // 本轮没有任何文字输出（无论有没有工具调用），必须补一条明确提示。
                     if (lastAnswer == null) {
                         val hadTool = history.any { it is ToolMessage }
-                        // synthetic=true：这是界面写的提示，不是模型说的话。它要上屏、
-                        // 要落盘（用户回看知道这轮发生了什么），但**不能进下一轮的上下文**
-                        // ——见 UiItem.Assistant.synthetic 里记的 2026-11-23 真机事故。
                         val emptyItem = UiItem.Assistant(
                             emptyReplyHint(hadTool),
-                            timeMs = System.currentTimeMillis(),
-                            synthetic = true
+                            timeMs = System.currentTimeMillis(), synthetic = true
                         )
                         if (isOwnerActive()) appendUiItem(emptyItem)
                         appendToStore(emptyItem)
@@ -2480,10 +2470,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                         }
                         val stopItem = UiItem.Assistant(
                             stopText,
-                            timeMs = System.currentTimeMillis(),
-                            // synthetic=true：停止提示是界面文案。落进历史会让模型学会
-                            // 「遇到这类请求就回已停止」——2026-11-23 真机上就是这么坏的。
-                            synthetic = true
+                            timeMs = System.currentTimeMillis(), synthetic = true
                         )
                         // hotfix30：停止气泡只上屏当前显示的正是 owner 会话时（切走期间只落盘）
                         if (isOwnerActive()) appendUiItem(stopItem)
@@ -2499,12 +2486,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                         appendToStore(kept)
                     }
                     // 气泡面向用户：技术异常在此映射成可读文案（完整堆栈已在日志里落盘）
-                    // synthetic=true：失败说明同样是界面文案，不该被模型当成自己的回答复述。
-                    val errItem = UiItem.Assistant(
-                        friendlyMessage(it),
-                        timeMs = System.currentTimeMillis(),
-                        synthetic = true
-                    )
+                    val errItem = UiItem.Assistant(friendlyMessage(it), timeMs = System.currentTimeMillis(), synthetic = true)
                     if (isOwnerActive()) appendUiItem(errItem)
                     appendToStore(errItem) // 功能三：失败气泡也进聊天记录
                 }
