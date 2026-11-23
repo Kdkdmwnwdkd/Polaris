@@ -149,7 +149,18 @@ data class MsgRecord(
      *
      * 旧文件没有该字段 → 0（未截断，与改动前一致）。
      */
-    val truncatedChars: Int = 0
+    val truncatedChars: Int = 0,
+    /**
+     * 界面合成标记（2026-11-23）：这条 assistant 记录是 App 自己写的提示
+     * （停止提示 / 空回答兜底 / 失败说明），不是模型的输出。
+     *
+     * 落盘的目的是让用户回看时知道「这一轮发生了什么」；但 [com.beichen.polaris.core.agent.PriorTurnMapping]
+     * 构造模型上下文时必须把它当**没有回答**——否则模型会把这些系统文案当成自己说过的话去模仿。
+     * 真机事故：两条「已停止」进了历史，模型随后对任何 shell 命令都回「已停止」。
+     *
+     * 旧文件没有该字段 → false（历史记录按模型输出看待，与改动前一致）。
+     */
+    val synthetic: Boolean = false
 )
 
 /**
@@ -219,7 +230,9 @@ fun UiItem.toMsgRecord(): MsgRecord = when (this) {
         // 正文与推理过程各自独立截断，丢弃量必须**都**计入：只看正文的话，
         // 「正文很短 + 思维链超长」的历史消息会显示「完整」，而推理过程已经被砍掉一半。
         truncatedChars = truncatedChars +
-            droppedChars(text) + droppedChars(reasoning.orEmpty())
+            droppedChars(text) + droppedChars(reasoning.orEmpty()),
+        // 2026-11-23：界面合成文案随记录落盘，读回历史时按它决定「算不算模型的话」
+        synthetic = synthetic
     )
 
     is UiItem.Tool -> MsgRecord(
@@ -269,7 +282,9 @@ internal fun MsgRecord.toUiItem(): UiItem = when (role) {
         timeMs = timeMs,
         // W-RT7：还原模型归属（空 = 旧数据，下钻里归到「未知模型」）
         modelId = modelId,
-        truncatedChars = truncatedChars
+        truncatedChars = truncatedChars,
+        // 2026-11-23：还原「这是界面造的提示」——读回后仍要能把它挡在模型上下文之外
+        synthetic = synthetic
     )
     // 未知 role 兜底按 assistant 渲染：宁可显示不错丢（历史数据兼容）
     else -> UiItem.Assistant(content)
@@ -319,7 +334,9 @@ fun ConversationRecord.toUiItems(): List<UiItem> = buildList {
                     // W-RT7：选中变体的模型归属一起还原
                     modelId = sel.modelId,
                     // 2026-11-18：变体正文被截断时，读盘端同样要能看出来
-                    truncatedChars = sel.truncatedChars
+                    truncatedChars = sel.truncatedChars,
+                    // 2026-11-23：界面合成文案在渲染路径上也要保住标记
+                    synthetic = sel.synthetic
                 )
             )
         }

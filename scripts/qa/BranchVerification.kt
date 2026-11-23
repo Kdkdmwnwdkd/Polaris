@@ -28,7 +28,9 @@ import com.beichen.polaris.core.ROLE_ASSISTANT
 import com.beichen.polaris.core.ROLE_TOOL
 import com.beichen.polaris.core.ROLE_USER
 import com.beichen.polaris.core.TurnRecord
+import com.beichen.polaris.core.toMsgRecord
 import com.beichen.polaris.core.toUiItems
+import com.beichen.polaris.core.agent.toPriorTurn
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -69,7 +71,8 @@ private fun assertNotContains(name: String, haystack: String, needle: String) {
 /* ------------------------------ 构造助手 ------------------------------ */
 
 private fun user(content: String, id: String = "u-$content") = MsgRecord(id, ROLE_USER, content)
-private fun asst(content: String, id: String = "a-$content") = MsgRecord(id, ROLE_ASSISTANT, content)
+private fun asst(content: String, id: String = "a-$content", synthetic: Boolean = false) =
+    MsgRecord(id, ROLE_ASSISTANT, content, synthetic = synthetic)
 
 /** 从 [ConversationBranch.flatten] 展开出的「下一次请求的历史」取全部内容文本。 */
 private fun historyText(turns: List<TurnRecord>): List<String> =
@@ -388,6 +391,70 @@ private fun testTurnCap() {
     }
 }
 
+/* ------------------------- 8. 合成提示不进历史 ------------------------- */
+
+/**
+ * 2026-11-23 真机事故的回归断言。
+ *
+ * 用户两次误点停止，App 落了两条「⏹ 已停止。本次没有生成任何内容。」。它们被当作
+ * assistant 的真实回答喂给下一轮，模型学会后对任何 shell 命令都回「已停止」，一个工具都不调。
+ *
+ * 断言点就是那条唯一的闸门：`toPriorTurn()` 见到 `synthetic=true` 必须给出空答案。
+ * 空答案在 [HistoryCompactor.buildPriorMessages] 里只发 user 一条，
+ * 所以「用户问过这件事」的上下文还在，但模型不会收到一条伪造的助手发言。
+ * 同时必须有对照用例——否则「把所有答案都置空」也能让主用例通过。
+ */
+private fun testSyntheticNotInHistory() {
+    println("\n== ⑦ 合成提示（已停止/空回答/失败说明）不算回答 ==")
+
+    check("SYN1 合成回答在构造历史时被置空，问题保留") {
+        val turns = listOf(
+            TurnRecord(
+                user = user("执行 shell 命令 sleep 20"),
+                variants = listOf(asst("⏹ 已停止。本次没有生成任何内容。", synthetic = true)),
+                selectedIndex = 0
+            )
+        )
+        val prior = turns.map { it.toPriorTurn() }.single()
+        assertEquals("合成答案必须为空", "", prior.answer)
+        assertEquals("问题不能一起丢", "执行 shell 命令 sleep 20", prior.question)
+    }
+
+    check("SYN2 对照：普通回答原样保留（防止「一律置空」的过度修复）") {
+        val turns = listOf(
+            TurnRecord(
+                user = user("读三个文件"),
+                variants = listOf(asst("三个文件都读到了，共 39 字符。")),
+                selectedIndex = 0
+            )
+        )
+        assertEquals("普通答案不该被动", "三个文件都读到了，共 39 字符。",
+            turns.map { it.toPriorTurn() }.single().answer)
+    }
+
+    check("SYN3 落盘往返保住 synthetic 标记（旧文件缺字段时为 false）") {
+        val rec = MsgRecord("a1", ROLE_ASSISTANT, "⏹ 已停止。", synthetic = true)
+        val back = json.decodeFromString<MsgRecord>(json.encodeToString(rec))
+        assertEquals("标记必须随 JSON 往返", true, back.synthetic)
+        // 旧文件没有这个字段：按「模型输出」看待，与改动前一致
+        val legacy = json.decodeFromString<MsgRecord>("""{"id":"a0","role":"assistant","content":"旧记录"}""")
+        assertEquals("旧数据默认 false", false, legacy.synthetic)
+    }
+
+    check("SYN4 渲染路径还原标记（界面上仍然要显示这条提示）") {
+        val items = listOf(
+            TurnRecord(
+                user = user("执行命令"),
+                variants = listOf(asst("⏹ 已停止。", synthetic = true)),
+                selectedIndex = 0
+            )
+        ).let { ConversationRecord("c1", "t", 0, 0, turns = it).toUiItems() }
+        val bubble = items.filterIsInstance<com.beichen.polaris.core.UiItem.Assistant>().single()
+        assertEquals("界面仍要显示", "⏹ 已停止。", bubble.text)
+        assertEquals("标记要还原，否则读回后再进历史又污染", true, bubble.synthetic)
+    }
+}
+
 /* ------------------------------ 7. 边界 ------------------------------ */
 
 private fun testBoundaries() {
@@ -445,6 +512,7 @@ fun main() {
     testSelectedVariantWritesHistory()
     testTurnCap()
     testBoundaries()
+    testSyntheticNotInHistory()
 
     println("\n=== 结果：$passed passed, ${failures.size} failed ===")
     if (failures.isNotEmpty()) {

@@ -61,6 +61,8 @@ sealed interface UiItem {
      * @param modelId 产生本回答的模型标识（W-RT7）；空 = 旧数据/未记录，费用下钻归「未知模型」。
      *   本地推理统一记 `local-llama`——它价格表里是 0，且不会误撞云端模型名。
      * @param truncatedChars 落盘截断标记：正文被丢弃的字符数，0 = 完整。只由读盘路径填。
+     * @param synthetic 这条气泡是**界面造的**，不是模型说的（停止提示 / 空回答兜底 / 失败说明）。
+     *   为真时它照样上屏、照样落盘，但**不进模型上下文**——见 [synthetic] 的说明。
      */
     data class Assistant(
         val text: String,
@@ -71,7 +73,21 @@ sealed interface UiItem {
         val reasoning: String? = null,
         val timeMs: Long = 0,
         val modelId: String = "",
-        val truncatedChars: Int = 0
+        val truncatedChars: Int = 0,
+        /**
+         * 界面合成文案标记（2026-11-23 真机事故后加）。
+         *
+         * 事故经过：用户两次误点停止，App 落了两条「⏹ 已停止。本次没有生成任何内容。」。
+         * 这两条进了会话历史，下一轮被当作 assistant 的**真实回答**喂给模型，
+         * 模型于是学会了这个模式——用户发「执行 shell 命令 sleep 20」，它照抄「已停止」，
+         * 一个工具都不调。用户看到的是「一发出去就自己停了」，实际是模型在复述界面的文案。
+         *
+         * 判据很硬：那条气泡带着 `↑7.0k ↓13 tokens`，而界面造的气泡从来不传 usage。
+         *
+         * 所以合成气泡必须能被识别：显示要留（用户回看知道发生过什么），上下文要滤
+         * （模型不该把系统提示当成自己说过的话）。
+         */
+        val synthetic: Boolean = false
     ) : UiItem
 
     /**

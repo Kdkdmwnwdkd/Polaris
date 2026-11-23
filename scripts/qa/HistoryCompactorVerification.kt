@@ -188,6 +188,29 @@ fun main() {
             "DIGEST_MARK: String = ContextBudget.FOLD_MARK" in compactor)
     }
 
+    // —— B4/B5：界面合成文案不得进模型上下文（2026-11-23 真机事故）——
+    //
+    // 事故：用户两次误点停止，App 落了两条「⏹ 已停止。本次没有生成任何内容。」。
+    // 它们被当成 assistant 的真实回答喂给下一轮，模型学会后对任何 shell 命令都回
+    // 「已停止」，一个工具都不调——用户看到的是「一发出去就自己停了」。
+    //
+    // 这条约束用源码形态断言而不是行为断言：PriorTurnMapping 依赖 TurnRecord，
+    // 拖进来就等于让本 harness 背上整个 ConversationStore（见 B2 的理由）。
+    // 行为断言在 BranchVerification 里（它本来就编译存储层）。
+    check("B4 构造历史时把合成提示当成「没有回答」") {
+        val mapping = read("core/src/main/java/com/beichen/polaris/core/agent/PriorTurnMapping.kt")
+        assertTrue("PriorTurnMapping 未判断 synthetic，界面文案会被当成模型的话",
+            "synthetic == true" in mapping && "answer = if (" in mapping)
+    }
+
+    check("B5 三处合成气泡都标了 synthetic=true") {
+        // 停止提示 / 空回答兜底 / 失败说明——少标一处就留一条污染源
+        val synthCount = Regex("synthetic = true").findAll(vm).count()
+        assertTrue("ChatViewModel 里 synthetic=true 只有 $synthCount 处，应 >= 4（send 的停止/空回答/失败 + regenerate 的失败）",
+            synthCount >= 4)
+        assertTrue("停止提示未标记", "⏹ 已停止。本次没有生成任何内容。" in vm)
+    }
+
     println("\n=== 结果：$passed 通过 / ${failures.size} 失败 ===")
     if (failures.isNotEmpty()) {
         println("失败项：")
