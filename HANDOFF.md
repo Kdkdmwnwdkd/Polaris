@@ -757,9 +757,43 @@ P2/P9 两条，正好是「改了工具面缓存却不动」的那一对。
 价值全在判据）；变异体 99 → **105**；分组 12 → **13**。
 
 **还没做的**：`logPromptPrefix` 仍在 loop 里（日志分类不可测，抽出去只是搬家）；
-`ExposurePlanner`（58 行）与 `ToolBatchExecutor`（237 行）原样未动。下一块做
-`ExposurePlanner`——它只有 5 行真逻辑（`scopedRegistry`），但「被裁工具在该视图里
-查无此工具」是真实失败模式，值得一条断言；`currentExposure` 仍要读 `registry.list()`。
+`ToolBatchExecutor`（237 行）原样未动。
+
+### 3.22 暴露面 → 回合视图的构造搬出 loop（2026-11-23 上午，接 3.21）
+
+`scopedRegistry` 只有 5 行，两种错法都不报错：
+
+- **视图不收紧**（直接 `return registry`）：`RegistryToolExecutor` 靠「`fullRegistry`
+  里有它、本回合视图里没有」来区分「模型记错了名字」与「名字对、只是没开组」。
+  视图一旦等于全量，后一条分支永远命中不了——被裁工具照常直接执行，裁剪只是没省到
+  token，**更糟的是本该先 `__use_tools` 的那次调用被静默放行**，审批层看到的是一次
+  正常调用。
+- **视图收紧过头**（连元工具一起滤掉）：`__use_tools` 的 description 里塞着全部分组
+  清单，几百字符，看起来最该"优化"掉。滤掉之后模型再也开不了组，而它唯一能看到的
+  反馈是「未知工具」，于是开始猜工具名——一次开组能解决的往返变成若干次瞎猜。
+
+**改法**：搬进 `core/agent/ToolScope.kt`（48 行）。`ToolScope.viewOf(full, plan)` 只看
+`plan.trimmed` 一个字段决定是否收紧，不从 `visible.size` 反推——裁剪与否的真相源只有
+`Plan.hiddenCount > 0` 一处。未裁剪时返回**同一实例**，不做等价副本。
+
+**判据**：`ToolScopeTest` 6 用例：
+- **S4 被裁工具在视图里查无此工具**——`get` 与 `descriptorOf` 都为 null，全量里仍在；
+- **S3 元工具仍在**（死锁守卫）；
+- **S6 是否裁剪只看 `plan.trimmed`**——构造 `hiddenCount=0` 但 `visible` 偏少的畸形
+  plan，实现必须返回同一实例，自己再算一遍就分叉。
+
+新增 `toolscope` 组 + TS1–TS6，**全部 CAUGHT**。TS5（用 `visible.size` 反推裁剪）
+只多红 S6 一条，正好是它该钉的那条。
+
+**数字**：`RealAgentLoop` 1395 → **1388**（只减 7 行——规划本来就在 KernelExposure
+里，这里只剩「造视图」）；变异体 105 → **111**；分组 13 → **14**。
+
+**没搬的**：`currentExposure` 一行，读 `registry.list()` + `llmProvider()`，是取数
+不是判断；`logExposure` 是日志。`ExposurePlanner` 这个名在原计划里指的是「规划 +
+造视图」整体，实际规划早已是 `KernelExposure.plan` 的活并有 harness 判据，所以这一块
+只落地了造视图那半边——**计划里 58 行的估算偏乐观，可搬的只有 5 行**。
+
+**还剩**：`ToolBatchExecutor`（237 行，最热路径，**必须先有真机回归**）。
 
 
 ## 4. 代码红线（碰了会立刻红）
@@ -767,7 +801,7 @@ P2/P9 两条，正好是「改了工具面缓存却不动」的那一对。
 | 红线 | 为什么 | 谁在守 |
 |---|---|---|
 | `:core` 不许 import `ui` / `tools` / Compose / `MainActivity` | 分层边界 | 编译器 + `run-arch-guard-verification.sh` |
-| `arch-baseline.txt` **只减不增** | 加一条等于把已知违规合法化 | 同上。当前上限：`ChatViewModel` 3221、`ChatScreen` 3194、`RealAgentLoop` 1395 |
+| `arch-baseline.txt` **只减不增** | 加一条等于把已知违规合法化 | 同上。当前上限：`ChatViewModel` 3221、`ChatScreen` 3194、`RealAgentLoop` 1388 |
 | `harness-baseline.txt` 只增不减（当前 **149**） | 数字变小说明有大面积 SKIP 被当成通过 | `gate.sh` 门禁 5/6 |
 | 守卫裁决**不许加 Allow** | 只能拦不能放行，是这套设计唯一的安全性质 | `run-agent-seams-verification.sh` |
 | 新 harness 必须「静态断言 + 自编译真跑」两段 | 只 grep 不断言行为 = 假绿 | `gate.sh` |

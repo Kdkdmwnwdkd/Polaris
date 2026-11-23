@@ -275,6 +275,33 @@ GROUPS = {
             "com.beichen.polaris.core.agent.RequestViewTest",
         ],
     },
+    # 暴露面 → 回合级工具视图（2026-11-23）。规划本身由 KernelExposure 负责、
+    # 有 harness 判据；这一组只守「拿规划造视图」那两步，两个错法都不报错：
+    # 　视图不收紧（被裁工具照常执行，裁剪白做且本该开组的调用被静默放行）、
+    # 　视图收紧过头（连元工具一起滤掉，模型再也开不了组）。
+    #
+    # 闭包是这一组里最大的一个：ToolRegistry 连带 ToolDescriptor / ToolCatalog /
+    # CapabilityManifest 全要编进来，还要序列化插件（ToolRegistry.descriptors 用
+    # JsonSchema.serializer）。实测仍不到 5 秒，值得——它守的是一条安全路径。
+    "toolscope": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/AgentContract.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolResult.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolLimits.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolLoadProfiler.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolRegistry.kt",
+            "core/src/main/java/com/beichen/polaris/core/ExposureTypes.kt",
+            "core/src/main/java/com/beichen/polaris/core/tool/ToolCatalog.kt",
+            "core/src/main/java/com/beichen/polaris/core/capability/CapabilityManifest.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/ToolDescriptor.kt",
+            "core/src/main/java/com/beichen/polaris/core/KernelExposure.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/ToolScope.kt",
+            "core/src/test/java/com/beichen/polaris/core/agent/ToolScopeTest.kt",
+        ],
+        "classes": [
+            "com.beichen.polaris.core.agent.ToolScopeTest",
+        ],
+    },
 }
 
 # 被测源文件。收录判据只有一条：**这段判定有能在 30 秒内跑完的真断言**。
@@ -1240,6 +1267,54 @@ MUTATIONS = [
         "old": "            keepLast = keepRecentImages,",
         "new": "            keepLast = 2,",
         "expect": ["V3"],
+    },
+    {
+        "id": "TS1 视图永不收紧（被裁工具照常执行，裁剪白做）",
+        "group": "toolscope",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ToolScope.kt",
+        "old": "        if (!plan.trimmed) return full",
+        "new": "        if (true) return full",
+        "expect": ["S2", "S4"],
+    },
+    {
+        "id": "TS2 裁剪判定反转（该收紧时给全量，该给全量时反而收紧）",
+        "group": "toolscope",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ToolScope.kt",
+        "old": "        if (!plan.trimmed) return full",
+        "new": "        if (plan.trimmed) return full",
+        "expect": ["S1", "S4"],
+    },
+    {
+        "id": "TS3 视图里滤掉元工具（模型再也开不了组）",
+        "group": "toolscope",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ToolScope.kt",
+        "old": "        return ToolRegistry().apply { plan.visible.forEach { register(it) } }",
+        "new": "        return ToolRegistry().apply { plan.visible.filterNot { it.name.startsWith(\"__\") }.forEach { register(it) } }",
+        "expect": ["S3"],
+    },
+    {
+        "id": "TS4 新建视图改成就地塞进全量（视图不收紧且污染全量）",
+        "group": "toolscope",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ToolScope.kt",
+        "old": "        return ToolRegistry().apply { plan.visible.forEach { register(it) } }",
+        "new": "        return full.apply { plan.visible.forEach { register(it) } }",
+        "expect": ["S2", "S4"],
+    },
+    {
+        "id": "TS5 裁剪与否从 visible 数量反推，不信 plan.trimmed",
+        "group": "toolscope",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ToolScope.kt",
+        "old": "        if (!plan.trimmed) return full",
+        "new": "        if (plan.visible.size >= full.names().size) return full",
+        "expect": ["S6"],
+    },
+    {
+        "id": "TS6 只注册第一个可见工具（其余被裁工具一起消失）",
+        "group": "toolscope",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/ToolScope.kt",
+        "old": "        return ToolRegistry().apply { plan.visible.forEach { register(it) } }",
+        "new": "        return ToolRegistry().apply { plan.visible.take(1).forEach { register(it) } }",
+        "expect": ["S2", "S3"],
     },
 ]
 

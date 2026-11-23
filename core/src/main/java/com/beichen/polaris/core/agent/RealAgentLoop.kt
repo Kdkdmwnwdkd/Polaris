@@ -1176,19 +1176,12 @@ class RealAgentLoop(
         KernelExposure.plan(registry.list(), llmProvider().providerId, forceFullTools, active)
 
     /**
-     * 由暴露面构造「回合级工具视图 registry」：
-     *  - 未裁剪（全量）→ 原样返回 [registry]，零开销；
-     *  - 发生裁剪 → 新建仅含暴露工具的 registry，使被裁工具在该视图内「查无此工具」，
-     *    从而 descriptor 解析为 null、executor 走「未启用」路径（指出所属组 + 开组指引），不抛异常。
+     * 由暴露面构造「回合级工具视图 registry」——两种错法都不会报错，判据在 [ToolScope]。
      *
      * 注：仅影响本回合的「工具视图」，全局 [registry]（Skill 桥等复用）不变。
      */
     private fun scopedRegistry(plan: KernelExposure.Plan): ToolRegistry =
-        if (!plan.trimmed) {
-            registry
-        } else {
-            ToolRegistry().apply { plan.visible.forEach { register(it) } }
-        }
+        ToolScope.viewOf(registry, plan)
 
     /**
      * 裁剪发生时打一条 INFO：写明模式、暴露数、裁掉数与已启用组。

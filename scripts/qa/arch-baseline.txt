@@ -219,7 +219,11 @@ lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 # core/agent/RequestView.kt（75 行）。只减 4 行——这块本来就没多少可搬的，
 # 价值全在判据：先剥图再压历史这条顺序，只有连起来才看得出错（request 组）
 # 与「未超限返回同一实例」的零分配承诺，此前都只有注释。
-lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1395
+# 2026-11-23 再下调（RealAgentLoop 1399 → 1388）：暴露面 → 回合视图的**构造**搬到
+# core/agent/ToolScope.kt（48 行）。只减 7 行，因为规划本来就在 KernelExposure 里。
+# 价值全在判据：视图不收紧 → 被裁工具照常执行（裁剪白做，且本该开组的调用被静默放行）；
+# 视图收紧过头 → 元工具消失，模型再也开不了组，只能猜工具名。两个都不报错。
+lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1388
 # 2026-11-22 下调（RealAgentLoop 1504 → 1409）：R5 的回合时钟与回合状态搬到
 # core/agent/TurnClock.kt（113 行，其中搬走的正文 95 行）。
 # 不是为了行数，是为了判据：inner class 读 this@RealAgentLoop.scope，抽成顶层类
