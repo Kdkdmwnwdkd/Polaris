@@ -902,10 +902,13 @@ class RealAgentLoop(
             // R5：取消闭合也要补 tool.end。这些调用在时间线里已经有 tool.start
             // （执行前埋的），若这里不补终态，时间线就会留下「有 start 无 end」的
             // 假卡点——把「用户点了停止」误报成「卡住了」。
+            // dur 取「从 start 到取消判定」的真实跨度：以前写死 0L，于是真机上
+            // 跑了 9.7 秒的 `shell sleep 30` 被记成 dur=0，遥测里「用户等了多久」
+            // 这个信号彻底消失。没有派发记录（还没轮到就被取消）时它返回 0，正确。
             clock.toolEnded(
                 step, call.name,
                 if (verdict is ToolCallOutcome.Unknown) "cancelled_unknown" else "cancelled",
-                true, 0L, call.id
+                true, clock.elapsedSinceToolStart(call.id), call.id
             )
             // R1：取消也要落终态。否则重启后修复器看到「已派发、无结果」，
             // 会把它判成 OUTCOME_UNKNOWN——用户明明点了停止，下一轮却被要求「先核对」。

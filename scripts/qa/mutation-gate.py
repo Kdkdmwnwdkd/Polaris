@@ -211,6 +211,7 @@ GROUPS = {
     "trace": {
         "sources": [
             "core/src/main/java/com/beichen/polaris/core/agent/TurnClock.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/CallIdShort.kt",
             "core/src/main/java/com/beichen/polaris/core/agent/TurnObserver.kt",
             "core/src/main/java/com/beichen/polaris/core/agent/journal/RunScope.kt",
             "core/src/test/java/com/beichen/polaris/core/agent/TurnClockTest.kt",
@@ -1055,6 +1056,22 @@ MUTATIONS = [
         "old": "    var value: String = \"completed\"",
         "new": "    var value: String = \"failed\"",
         "expect": ["T6"],
+    },
+    {
+        "id": "M52 取消路径的时长退回 0L（用户等了多久又变成不可见）",
+        "group": "trace",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/TurnClock.kt",
+        "old": "        return (System.currentTimeMillis() - began).coerceAtLeast(0L)",
+        "new": "        return 0L",
+        "expect": ["T7"],
+    },
+    {
+        "id": "M53 日志短 id 退回 6 位（同批并行调用又全部打印成 call_0）",
+        "group": "trace",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/CallIdShort.kt",
+        "old": "    if (id.isEmpty()) \"-\" else id.take(SHORT_CALL_ID_LEN)",
+        "new": "    if (id.isEmpty()) \"-\" else id.take(6)",
+        "expect": ["T8"],
     },
     {
         "id": "U1 未装模型不再优先（没下模型的人被推去授权，授完还是用不了）",

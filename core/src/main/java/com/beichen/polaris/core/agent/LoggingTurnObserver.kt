@@ -68,13 +68,15 @@ class LoggingTurnObserver(
             is TurnEvent.ToolCallStarted ->
                 append(" step=").append(event.step)
                     .append(" tool=").append(event.tool)
-                    .append(" call=").append(shortId(event.callId))
+                    // 短 id 的长度与理由见 [shortCallId]：6 位时同批并行调用全是
+                    // `call_0`，这个字段等于白加（2026-11-23 真机验证踩过）。
+                    .append(" call=").append(shortCallId(event.callId))
                     .append(" args=").append(event.argsSummary)
 
             is TurnEvent.ToolCallEnded ->
                 append(" step=").append(event.step)
                     .append(" tool=").append(event.tool)
-                    .append(" call=").append(shortId(event.callId))
+                    .append(" call=").append(shortCallId(event.callId))
                     .append(" code=").append(event.code)
                     .append(" error=").append(event.isError)
                     .append(" dur=").append(event.durationMs).append("ms")
@@ -88,12 +90,4 @@ class LoggingTurnObserver(
                     .append(" steps=").append(event.steps)
         }
     }
-
-    /**
-     * 调用 id 的前 6 位。
-     *
-     * 不打印全长：一行日志里出现两个 36 位 uuid 会让人一眼看不出哪行是哪行，
-     * 而前 6 位在同一回合内撞车的概率低到可以忽略。配不上对的时候再用流水查全长。
-     */
-    private fun shortId(id: String): String = if (id.isEmpty()) "-" else id.take(6)
 }

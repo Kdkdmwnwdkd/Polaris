@@ -1,5 +1,7 @@
 package com.beichen.polaris.core.agent
 
+import java.util.concurrent.ConcurrentHashMap
+
 /**
  * 回合时钟：一条回合的**时间基准 + 事件拼装**（R5 落地物）。
  *
@@ -32,6 +34,16 @@ internal class TurnClock(
 ) {
     private val startMs = System.currentTimeMillis()
     private var lastStep = 0
+
+    /**
+     * 已派发调用的开始时刻（callId -> 墙钟毫秒）。
+     *
+     * 为什么要在这里记：取消收尾（`closePendingToolResults`）手里只有 callId，
+     * 而 `tool.start` 的真实时刻只有本类知道。没有这张表，取消路径只能写 `dur=0`。
+     * 生命周期天然有界——`TurnClock` 是每回合新建的，表随回合对象一起被回收，
+     * 不存在跨回合增长。（同一步的多个工具并行执行时会并发写，故用 ConcurrentHashMap。）
+     */
+    private val startedAt = ConcurrentHashMap<String, Long>()
 
     fun elapsed(): Long = System.currentTimeMillis() - startMs
 
@@ -76,8 +88,25 @@ internal class TurnClock(
         step: Int, attempt: Int, durMs: Long, ok: Boolean, code: String? = null, calls: Int = 0
     ) = emit(TurnEvent.LlmCallEnded(turnId, step, elapsed(), attempt, durMs, ok, code, calls, scope))
 
-    fun toolStarted(step: Int, tool: String, args: String, callId: String) =
+    fun toolStarted(step: Int, tool: String, args: String, callId: String) {
+        // 先记时刻再发事件：事件出口可能抛（被 emit 吞掉），但开始时刻不能被它影响。
+        startedAt[callId] = System.currentTimeMillis()
         emit(TurnEvent.ToolCallStarted(turnId, step, elapsed(), tool, args, callId, scope))
+    }
+
+    /**
+     * 该调用从 `tool.start` 到**此刻**的毫秒数。取消路径用它补真实的等待时长。
+     *
+     * 这条数值是遥测里唯一能回答「用户等了多久才按停止」的东西——真机上两次
+     * `shell sleep 30` 分别跑了 2.2s 和 9.7s，全被记成 `dur=0`，等于把这个信号丢了。
+     *
+     * 没有派发记录时返回 0：批次里排在后面、还没轮到就被取消的调用确实一秒没跑，
+     * 0 对它是事实，不是缺失。
+     */
+    fun elapsedSinceToolStart(callId: String): Long {
+        val began = startedAt[callId] ?: return 0L
+        return (System.currentTimeMillis() - began).coerceAtLeast(0L)
+    }
 
     fun toolEnded(
         step: Int, tool: String, code: String, isError: Boolean, durMs: Long, callId: String

@@ -97,4 +97,48 @@ class TurnClockTest {
         status.set("failed")
         assertEquals("failed", status.value)
     }
+
+    /**
+     * T7：取消收尾要拿得到「从 start 到此刻」的真实时长。
+     *
+     * 真机上两次 `shell sleep 30` 分别跑了 2.2s / 9.7s，取消路径写死 0L，全被记成
+     * dur=0——遥测里「用户等了多久才按停止」就此消失。这里断言两件事：派发过的
+     * 调用能给出正数，没派发的给 0（它确实一秒没跑，0 是事实不是缺失）。
+     */
+    @Test
+    fun `T7 取消时能取到从 start 起的真实时长`() {
+        val clock = TurnClock("t-7", "main", Recorder())
+
+        assertEquals("没派发过的调用应为 0", 0L, clock.elapsedSinceToolStart("call_从未派发"))
+
+        clock.toolStarted(step = 0, tool = "shell_run", args = "{}", callId = "call_00_aaa")
+        Thread.sleep(5)
+        val waited = clock.elapsedSinceToolStart("call_00_aaa")
+        assertTrue("派发过的调用必须有正时长，实际 $waited", waited >= 5L)
+
+        // 同批并行的另一个调用不能被这笔记录影响（按 callId 分开，不是按 step）
+        clock.toolStarted(step = 0, tool = "read_file", args = "{}", callId = "call_01_bbb")
+        assertEquals("不同 callId 互不串账", 0L, clock.elapsedSinceToolStart("call_02_从未"))
+    }
+
+    /**
+     * T8：日志短 id 必须能区分同批并行调用。
+     *
+     * 真实 id 是 `call_00_...` / `call_01_...` / `call_02_...`。截 6 位时三者全是
+     * `call_0`，日志看着有值实则全一样——2026-11-23 的真机验证正是被它误导，
+     * 差点把一个不存在的「call id 重复」缺陷当成真问题去改 UI 的归并键。
+     */
+    @Test
+    fun `T8 短 id 能区分同批的三个并行调用`() {
+        val a = "call_00_ny3UxcMRXPYSqmrW54W09467"
+        val b = "call_01_24jFmEeHoRWosChWFM5r8187"
+        val c = "call_02_igDt5Wn26OWfuRW41pfT1641"
+
+        val shorts = listOf(a, b, c).map { shortCallId(it) }
+        assertEquals("三个并行调用的短 id 必须互不相同，实际 $shorts", 3, shorts.toSet().size)
+        // 长度有界：不能退化成打印全 id（一行两个 30 位长串就看不出哪行是哪行）
+        assertTrue("短 id 不得长于 ${SHORT_CALL_ID_LEN}：$shorts", shorts.all { it.length <= SHORT_CALL_ID_LEN })
+        // 空 id 有占位符，不能打印成空串（否则日志里 call= 后面什么都没有）
+        assertEquals("-", shortCallId(""))
+    }
 }
