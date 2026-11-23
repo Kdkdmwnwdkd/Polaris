@@ -259,6 +259,22 @@ GROUPS = {
             "com.beichen.polaris.core.SystemPromptPlanTest",
         ],
     },
+    # 请求视图的编排（2026-11-23）。ContextBudget 的三个纯函数各有 harness 判据，
+    # 但「它们怎么连起来」没有——先剥图还是先压历史，只有连起来才看得出对错。
+    # 闭包比 ContextBudget 的 harness 小一圈：不要 ui / tools，只要契约 + 预算 + 编排。
+    "request": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/AgentContract.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolResult.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolLimits.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/ContextBudget.kt",
+            "core/src/main/java/com/beichen/polaris/core/agent/RequestView.kt",
+            "core/src/test/java/com/beichen/polaris/core/agent/RequestViewTest.kt",
+        ],
+        "classes": [
+            "com.beichen.polaris.core.agent.RequestViewTest",
+        ],
+    },
 }
 
 # 被测源文件。收录判据只有一条：**这段判定有能在 30 秒内跑完的真断言**。
@@ -1149,6 +1165,81 @@ MUTATIONS = [
         "old": "            out += Section(KEY_MEMORY_USAGE, memoryUsagePrompt, Stability.TURN)",
         "new": "            out += Section(KEY_MEMORY_USAGE, memoryUsagePrompt, Stability.SESSION)",
         "expect": ["P6"],
+    },
+    # --------------------------------------------------------------- request 组
+    {
+        "id": "RV1 先压历史再剥图（按 900 token 的图算体积，白丢一步结果）",
+        "group": "request",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/RequestView.kt",
+        "old": """        val pruned = ContextBudget.pruneImages(
+            messages,
+            keepLast = keepRecentImages,
+            anchorIndex = anchorIndex
+        )
+        val fitted = ContextBudget.fitToBudget(
+            pruned,
+            budgetTokens = budgetTokens,
+            maxMessages = maxMessages
+        )
+        return RequestView(
+            messages = fitted,
+            // 条数比较用 pruned 而不是 messages：剥图不改条数，拿 messages 比也成立，
+            // 但用 pruned 能把「上一段真的动了手」这件事留在比较里，语义更直白。
+            dropped = fitted.size < pruned.size,""",
+        "new": """        val preFitted = ContextBudget.fitToBudget(
+            messages,
+            budgetTokens = budgetTokens,
+            maxMessages = maxMessages
+        )
+        val fitted = ContextBudget.pruneImages(
+            preFitted,
+            keepLast = keepRecentImages,
+            anchorIndex = anchorIndex
+        )
+        return RequestView(
+            messages = fitted,
+            dropped = fitted.size < messages.size,""",
+        "expect": ["V3"],
+    },
+    {
+        "id": "RV2 锚点没透传（退回首条 UserMessage，本轮输入的图被剥）",
+        "group": "request",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/RequestView.kt",
+        "old": "            anchorIndex = anchorIndex",
+        "new": "            anchorIndex = null",
+        "expect": ["V4"],
+    },
+    {
+        "id": "RV3 dropped 恒 false（丢了历史却报没丢，日志与 UI 都静默）",
+        "group": "request",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/RequestView.kt",
+        "old": "            dropped = fitted.size < pruned.size,",
+        "new": "            dropped = false,",
+        "expect": ["V2"],
+    },
+    {
+        "id": "RV4 条数上限不透传（maxMessages 形同虚设）",
+        "group": "request",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/RequestView.kt",
+        "old": "            maxMessages = maxMessages",
+        "new": "            maxMessages = Int.MAX_VALUE",
+        "expect": ["V6"],
+    },
+    {
+        "id": "RV5 folded 恒 false（折叠了却说是丢弃，排障看错方向）",
+        "group": "request",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/RequestView.kt",
+        "old": "            folded = fitted.any { it is UserMessage && it.content.startsWith(ContextBudget.FOLD_MARK) }",
+        "new": "            folded = false",
+        "expect": ["V5"],
+    },
+    {
+        "id": "RV6 保留张数写死 2（配置 0 也不剥，预算照爆）",
+        "group": "request",
+        "file": "core/src/main/java/com/beichen/polaris/core/agent/RequestView.kt",
+        "old": "            keepLast = keepRecentImages,",
+        "new": "            keepLast = 2,",
+        "expect": ["V3"],
     },
 ]
 

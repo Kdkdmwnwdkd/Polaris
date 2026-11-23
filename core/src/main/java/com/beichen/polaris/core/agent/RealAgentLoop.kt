@@ -1270,8 +1270,8 @@ class RealAgentLoop(
     /**
      * W-10：为本轮 LLM 请求构建**只读视图**——先剥旧截图，再按 token 预算压历史。
      *
-     * 顺序有意为之：先剥图再算预算。一张 768px JPEG 的 base64 约 6~12 万字符，若先按
-     * 字符预算压历史，会把「只是图片大」误判成「文字太多」，白白丢掉有用的工具结果。
+     * 「先剥图再压历史」的顺序与不变量在 [RequestViewBuilder]（零依赖，带断言）；
+     * 这里只管按通道算预算与打日志。
      *
      * 产物只用于 `chatOnce`，不写回 [runTurn] 的 messages——取消/落盘/UI 仍是完整历史。
      * 无超限时 [ContextBudget] 原样返回入参（零分配）。
@@ -1289,28 +1289,24 @@ class RealAgentLoop(
         val budget = ContextBudget.budgetForProvider(
             pid, contextBudgetTokens, com.beichen.polaris.core.llm.ProviderCatalog.contextWindowOf(pid)
         )
-        val pruned = ContextBudget.pruneImages(
-            messages,
-            keepLast = keepRecentImages,
+        val view = RequestViewBuilder.build(
+            messages = messages,
+            budgetTokens = budget,
+            keepRecentImages = keepRecentImages,
+            maxMessages = maxHistoryMessages,
             anchorIndex = turnInputIndex
         )
-        val fitted = ContextBudget.fitToBudget(
-            pruned,
-            budgetTokens = budget,
-            maxMessages = maxHistoryMessages
-        )
-        if (fitted.size != pruned.size || pruned.size != messages.size) {
+        if (view.dropped) {
             // 折叠与单纯丢弃要能分开看：前者留了摘要，后者什么也没留。用户问「它怎么忘了
             // 前面做过什么」时，先看这一行有没有「已折叠」。
-            val folded = fitted.any { it is UserMessage && it.content.startsWith(ContextBudget.FOLD_MARK) }
             AgentLogger.i(
                 "ContextBudget",
                 "请求视图：${messages.size} 条 / 估算 ${ContextBudget.totalTokens(messages)} tok" +
-                    " → ${fitted.size} 条 / 估算 ${ContextBudget.totalTokens(fitted)} tok" +
-                    "（预算 $budget tok，${if (folded) "早期对话已折叠" else "早期对话已丢弃"}）"
+                    " → ${view.messages.size} 条 / 估算 ${ContextBudget.totalTokens(view.messages)} tok" +
+                    "（预算 $budget tok，${if (view.folded) "早期对话已折叠" else "早期对话已丢弃"}）"
             )
         }
-        return fitted
+        return view.messages
     }
 }
 

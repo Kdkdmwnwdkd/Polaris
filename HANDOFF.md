@@ -729,13 +729,45 @@ P2/P9 两条，正好是「改了工具面缓存却不动」的那一对。
 `logPromptPrefix`（跨回合可变字段 `lastPromptSignature`）与 `buildRequestMessages`
 （`ContextBudget` 三连）仍在 loop 里，下一块再动。
 
+### 3.21 请求视图的编排搬出 loop（2026-11-23 凌晨，接 3.20）
+
+`buildRequestMessages` 里有一条只有注释的规则：**先 `pruneImages`，再 `fitToBudget`**。
+反过来的后果不是「多丢一条」，是**按错误的体积判据丢**：旧截图剥掉后每张只剩约
+20 token，先剥图能让 fit 多留下一整步真实结果；先压历史则把 900 token 的图算进去，
+白丢一步。真机表现是「上下文明明没满，它却忘了上一步做了什么」——两处调用各自看
+都合理，只有连起来才看得出错。
+
+**改法**：编排搬进 `core/agent/RequestView.kt`（75 行）。`RequestViewBuilder.build`
+按固定顺序做两步，返回 `RequestView(messages, dropped, folded)`；`RealAgentLoop`
+只剩「按通道算预算」与「打一条日志」。预算值不从外部注入——`budgetForProvider`
+需要 providerId 与模型窗口，那是接线职责。
+
+**判据**：`RequestViewTest` 7 用例，三条是核心：
+- **V3 先剥图再压历史**——构造「图多字少」的历史（每步 942 token，其中 900 是图），
+  预算 1000：正确顺序剥完图剩 192，一条不丢；顺序反了是 2832 对 1000，必丢一步；
+- **V1 未超限返回同一实例**——零分配不是优化，是每轮都跑；改成 `toList()` 就是
+  每轮多一次 O(n) 拷贝；
+- **V4 `anchorIndex` 真透传**——W-49 修过一次，漏传就退回首条 UserMessage，
+  多轮会话里用户本轮贴的三张图会被整条剥掉。
+
+新增 `request` 组 + RV1–RV6，**全部 CAUGHT**。RV1（顺序反了）只红 V3 一条，
+正好是它该钉的那一条。
+
+**数字**：`RealAgentLoop` 1399 → **1395**（只减 4 行——这块本来没多少可搬的，
+价值全在判据）；变异体 99 → **105**；分组 12 → **13**。
+
+**还没做的**：`logPromptPrefix` 仍在 loop 里（日志分类不可测，抽出去只是搬家）；
+`ExposurePlanner`（58 行）与 `ToolBatchExecutor`（237 行）原样未动。下一块做
+`ExposurePlanner`——它只有 5 行真逻辑（`scopedRegistry`），但「被裁工具在该视图里
+查无此工具」是真实失败模式，值得一条断言；`currentExposure` 仍要读 `registry.list()`。
+
 
 ## 4. 代码红线（碰了会立刻红）
 
 | 红线 | 为什么 | 谁在守 |
 |---|---|---|
 | `:core` 不许 import `ui` / `tools` / Compose / `MainActivity` | 分层边界 | 编译器 + `run-arch-guard-verification.sh` |
-| `arch-baseline.txt` **只减不增** | 加一条等于把已知违规合法化 | 同上。当前上限：`ChatViewModel` 3221、`ChatScreen` 3194、`RealAgentLoop` 1399 |
+| `arch-baseline.txt` **只减不增** | 加一条等于把已知违规合法化 | 同上。当前上限：`ChatViewModel` 3221、`ChatScreen` 3194、`RealAgentLoop` 1395 |
 | `harness-baseline.txt` 只增不减（当前 **149**） | 数字变小说明有大面积 SKIP 被当成通过 | `gate.sh` 门禁 5/6 |
 | 守卫裁决**不许加 Allow** | 只能拦不能放行，是这套设计唯一的安全性质 | `run-agent-seams-verification.sh` |
 | 新 harness 必须「静态断言 + 自编译真跑」两段 | 只 grep 不断言行为 = 假绿 | `gate.sh` |

@@ -215,7 +215,11 @@ lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 # core/SystemPromptPlan.kt（78 行）。不是为了行数，是为了判据：
 # 稳定性分级错了不报错、只会变慢（记忆段混进 FROZEN → 每轮前缀作废），
 # 这种错只能靠断言守。搬成零依赖纯函数后才有 prompt 组（PT1–PT7）。
-lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1399
+# 2026-11-23 再下调（RealAgentLoop 1399 → 1395）：请求视图的**编排**搬到
+# core/agent/RequestView.kt（75 行）。只减 4 行——这块本来就没多少可搬的，
+# 价值全在判据：先剥图再压历史这条顺序，只有连起来才看得出错（request 组）
+# 与「未超限返回同一实例」的零分配承诺，此前都只有注释。
+lines core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt 1395
 # 2026-11-22 下调（RealAgentLoop 1504 → 1409）：R5 的回合时钟与回合状态搬到
 # core/agent/TurnClock.kt（113 行，其中搬走的正文 95 行）。
 # 不是为了行数，是为了判据：inner class 读 this@RealAgentLoop.scope，抽成顶层类
