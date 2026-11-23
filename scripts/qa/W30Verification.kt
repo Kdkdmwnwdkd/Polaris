@@ -41,36 +41,53 @@ fun main() {
     println("== W-30 harness：聊天体验批 ==")
 
     // ——————————————— ChatTime ———————————————
+    //
+    // 全部显式传 offsetMs = 0（UTC）：断言不随跑 harness 的机器时区漂移。
+    // 原来这些用例不传时区、实现按 UTC 拆，两者恰好一致；现在实现默认跟随设备，
+    // 不写死 0 就会在 CI（UTC）与开发者机（+8）给出不同结果。
     check("今天：只显示时分") {
-        val got = ChatTime.format(NOW, NOW)
+        val got = ChatTime.format(NOW, NOW, 0)
         assertTrue("期望 22:13，实际 $got", got == "22:13")
     }
     check("一小时内：仍显示时分（不出现「刚刚」）") {
-        val got = ChatTime.format(NOW - 3_600_000L, NOW)
+        val got = ChatTime.format(NOW - 3_600_000L, NOW, 0)
         assertTrue("期望 21:13，实际 $got", got == "21:13")
     }
     check("昨天：带「昨天」前缀") {
-        val got = ChatTime.format(NOW - DAY, NOW)
+        val got = ChatTime.format(NOW - DAY, NOW, 0)
         assertTrue("期望 昨天 22:13，实际 $got", got == "昨天 22:13")
     }
     check("三天前：显示周几（11-11 是周六）") {
-        val got = ChatTime.format(NOW - 3 * DAY, NOW)
+        val got = ChatTime.format(NOW - 3 * DAY, NOW, 0)
         assertTrue("期望 周六 22:13，实际 $got", got == "周六 22:13")
     }
     check("十天前：显示日期（11-04）") {
-        val got = ChatTime.format(NOW - 10 * DAY, NOW)
+        val got = ChatTime.format(NOW - 10 * DAY, NOW, 0)
         assertTrue("期望 11月4日，实际 $got", got == "11月4日")
     }
     check("时间戳为 0：返回空串（UI 据此不渲染）") {
-        assertTrue("0 应返回空", ChatTime.format(0, NOW).isEmpty())
+        assertTrue("0 应返回空", ChatTime.format(0, NOW, 0).isEmpty())
     }
     check("未来时间：按今天处理，不显示「明天」") {
-        val got = ChatTime.format(NOW + 3_600_000L, NOW)
+        val got = ChatTime.format(NOW + 3_600_000L, NOW, 0)
         assertTrue("期望 23:13，实际 $got", got == "23:13")
     }
     check("precise：yyyy-MM-dd HH:mm") {
-        val got = ChatTime.precise(NOW)
+        val got = ChatTime.precise(NOW, 0)
         assertTrue("期望 2023-11-14 22:13，实际 $got", got == "2023-11-14 22:13")
+    }
+    // —— 时区（CT1~CT3）：2026-11-23 真机 bug，UTC 拆解把 21:45 显示成 13:45 ——
+    check("CT1 北京时间：UTC 22:13 应显示次日 06:13，不是 22:13") {
+        val got = ChatTime.format(NOW, NOW, ChatTime.OFFSET_BEIJING_MS)
+        assertTrue("期望 06:13，实际 $got", got == "06:13")
+    }
+    check("CT2 北京时间 precise：跨日要进位（11-15 06:13）") {
+        val got = ChatTime.precise(NOW, ChatTime.OFFSET_BEIJING_MS)
+        assertTrue("期望 2023-11-15 06:13，实际 $got", got == "2023-11-15 06:13")
+    }
+    check("CT3 北京时间周几：UTC 11-11 22:13 已是本地 11-12 周日") {
+        val got = ChatTime.format(NOW - 3 * DAY, NOW, ChatTime.OFFSET_BEIJING_MS)
+        assertTrue("期望 周日 06:13，实际 $got", got == "周日 06:13")
     }
     check("normalizeToMillis：秒级自动乘 1000，毫秒级不动") {
         assertTrue("秒级应放大", ChatTime.normalizeToMillis(1_700_000_000L) == 1_700_000_000_000L)

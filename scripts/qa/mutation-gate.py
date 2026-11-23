@@ -234,6 +234,21 @@ GROUPS = {
     },
     # 回合配额换算（2026-11-23）。零依赖组：Quota 是纯数据类、QuotaResolver 零 import。
     # 兜底值从参数传而不是写常量，正是为了让这组留在 kotlinc + JUnit 的闭包里。
+    # 聊天时间显示（2026-11-23 真机 bug）。零依赖组：ChatTime 一行 import 都没有
+    # （时区走 java.util.TimeZone，JDK 自带，不是 Android）。
+    #
+    # 它守的是一条「看着没问题、实际全错」的规则：partsOf 若忘了加 offsetMs，
+    # 代码照样跑、测试照样绿（只要断言也只按 UTC 写），而用户看到的是
+    # 21:45 显示成 13:45。真机上就是这么被发现的。
+    "chattime": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/text/ChatTime.kt",
+            "core/src/test/java/com/beichen/polaris/core/text/ChatTimeTest.kt",
+        ],
+        "classes": [
+            "com.beichen.polaris.core.text.ChatTimeTest",
+        ],
+    },
     "quota": {
         "sources": [
             "core/src/main/java/com/beichen/polaris/core/runtime/Quota.kt",
@@ -1072,6 +1087,22 @@ MUTATIONS = [
         "old": "    if (id.isEmpty()) \"-\" else id.take(SHORT_CALL_ID_LEN)",
         "new": "    if (id.isEmpty()) \"-\" else id.take(6)",
         "expect": ["T8"],
+    },
+    {
+        "id": "M54 时间拆解丢掉时区偏移（21:45 又显示成 13:45）",
+        "group": "chattime",
+        "file": "core/src/main/java/com/beichen/polaris/core/text/ChatTime.kt",
+        "old": "        val totalSec = Math.floorDiv(ms + offsetMs, 1000L)",
+        "new": "        val totalSec = Math.floorDiv(ms, 1000L)",
+        "expect": ["CT1", "CT2", "CT3"],
+    },
+    {
+        "id": "M55 周几按 UTC 天数算（跨日那一晚标错星期）",
+        "group": "chattime",
+        "file": "core/src/main/java/com/beichen/polaris/core/text/ChatTime.kt",
+        "old": "        val days = Math.floorDiv(ms + offsetMs, DAY)",
+        "new": "        val days = Math.floorDiv(ms, DAY)",
+        "expect": ["CT3"],
     },
     {
         "id": "U1 未装模型不再优先（没下模型的人被推去授权，授完还是用不了）",
