@@ -949,6 +949,30 @@ assertTrue("删索引备份", File(root, indexFile().name + AtomicJsonFile.BACKU
 「两份都不可用」（否则 recover 会走 `.bak` 而不是分片扫描），不是「备份一定存在」。
 「有 .bak 但内容坏」由 `corruptIndexAndBackup` 那条用例覆盖，两条合起来才是完整分支覆盖。
 
+### 5.5.3 待观察（2026-11-23）：`run-t01-probe2.sh` 的 300ms 取消窗口
+
+现象：`scripts/qa/run-t01-probe2.sh` 红了一条——
+`streamChat：增量先达 → 取消窗口有界（读返回前不上抛）→ …`（`T01AdversarialProbe2.kt:334`），
+同一 commit 重跑即过。该次只改了 `scopedRegistry` → `ToolScope.viewOf`，与 `OpenAIClient`
+的 channelFlow 无关；mutation-gate job 当时是 success（111 条全捕获）。
+
+可疑点是它自带的一条**时序断言**，而不是缺陷：
+
+```kotlin
+job.cancel()
+delay(300)
+assertTrue("cancel window: not surfaced while read blocked", thrown == null)
+```
+
+这条断言语义上要求「300ms 后 producer 仍阻塞在 gate 上」。它成立与否取决于
+`delay(300)` 与「取消传播到 producer」的先后——CI 负载高、GC 停顿、调度抖动时，
+producer 有可能在这 300ms 内就退出了，`thrown` 便不再是 null。断言方向是**反的**
+（把「还没发生」当成必须成立），所以任何加速都会让它红。
+
+目前只遇到一次，暂不改。**下次再红先看是不是这条**，若是，修法是把它从
+「必须为 null」改成「null 或已是 CancellationException」的二选一——那才是这条用例
+真正想守的东西（不悬挂、不吞取消），而不是「必须在 300ms 前保持沉默」。
+
 ### 5.6 坑四：沙箱清理后 45 个 runner 集体 SKIP
 
 症状：`run-all.sh` 汇总变成 `PASS=97 SKIP=45`（当时基线是 `PASS=104 SKIP=38`；
