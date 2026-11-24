@@ -96,6 +96,28 @@ lines_over_limit() { # $1=文件 $2=上限 → 0 表示超限
   [ "$(wc -l < "$1")" -gt "$2" ]
 }
 
+# 条目数判定也抽成函数，理由同 lines_over_limit：① 与自检必须共用，
+# 否则「自检能跑通」只能证明自检自己写对了。
+lines_entries_ok() { # $1=基线文件 → 0 表示条目数合理
+  local parsed declared
+  parsed=$(awk '$1=="lines"{print $2}' "$1" | awk 'NF' | wc -l | tr -d ' ')
+  declared=$(grep -c '^lines' "$1" || true)
+  [ "$parsed" -eq "$declared" ] && [ "$parsed" -ge 5 ]
+}
+
+# ①.0 条目数自检：解析结果必须与基线里 `lines` 开头的行数相等，且不少于 5。
+#
+# 为什么需要：① 的循环喂进来的是 awk 解析结果。一旦解析坏掉（字段顺序改了、
+# 前缀写成 Lines），循环跑 0 次，而结尾那句「基线内 0 个受管文件均未超各自上限」
+# 仍然是绿的——守卫静默失效，比报红难发现得多。这与 run-all 里那条
+# 「检查器自己失效时表现是一切正常」是同一类洞。
+if lines_entries_ok "$BASELINE"; then
+  good "[B] 条目数自检：声明 $(grep -c '^lines' "$BASELINE" || true) 条 = 解析 $(awk '$1=="lines"{print $2}' "$BASELINE" | awk 'NF' | wc -l | tr -d ' ') 条（≥5）"
+else
+  bad "[B] 基线 lines 条目解析异常：声明 $(grep -c '^lines' "$BASELINE" || true) 条，解析出 $(awk '$1=="lines"{print $2}' "$BASELINE" | awk 'NF' | wc -l | tr -d ' ') 条（应 ≥5 且相等）"
+  oversize=$((oversize + 1))
+fi
+
 # ① 基线里的每一条 lines 都必须生效，**不看它当前是否还 >1500**。
 #
 # 原来这里只有一个循环（find + awk '$1>1500'），于是「拆到 1500 以下」等于自动退管：
@@ -152,6 +174,24 @@ else
   bad "[B] 守卫自检失败：基线里找不到可用的受管文件"
 fi
 rm -rf "$selftest_dir"
+
+# ③.b 条目数自检的反向验证：走同一个 lines_entries_ok，两种坏基线都必须判不 ok。
+# 一条覆盖「条数不足 5」，一条覆盖「前缀写坏 → 声明与解析同时变 0」——
+# 后者是最阴的一种：两边都是 0，若只比「相等」就会放行。
+entries_probe=$(mktemp)
+grep '^lines' "$BASELINE" | head -2 > "$entries_probe"
+if lines_entries_ok "$entries_probe"; then
+  bad "[B] 条目数自检失败：只有 2 条 lines 仍被判 ok"
+else
+  good "[B] 条目数自检：条目不足 5 会被判红"
+fi
+grep '^lines' "$BASELINE" | sed 's/^lines/Lines/' > "$entries_probe"
+if lines_entries_ok "$entries_probe"; then
+  bad "[B] 条目数自检失败：前缀写坏（声明 0 / 解析 0）仍被判 ok"
+else
+  good "[B] 条目数自检：前缀写坏会被判红"
+fi
+rm -f "$entries_probe"
 
 say ""
 say "[C] 单点：工具 schema 序列化只允许一处实现"
