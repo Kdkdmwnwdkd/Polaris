@@ -414,11 +414,10 @@ private suspend fun testT03Concurrency() = runBlocking {
         )
     }
     check("派发遥测：并行与串行两条路径都真的写日志") {
-        // 先清空缓冲：只数本次产生的行。T02T06 跑了四十多个用例，日志早已把
-        // recent(200) 的窗口挤满——按窗口计数会「明明写了却数不到」。
-        AgentLogger.clear()
-        fun dispatched(): Int =
-            AgentLogger.recent(500).count { it.message.startsWith("派发 step=") }
+        // 用**独特的 callId** 认领本轮那行，不数总数：T02T06 前面几十个用例
+        // 已经写了五六十条同样的「派发 …」，按条数断言只会数到它们。
+        fun logged(tag: String): Boolean =
+            AgentLogger.recent(500).any { it.message.endsWith("$tag]") }
         val readReg = ToolRegistry().apply {
             register(FakeTool("r0", readOnly = true))
             register(FakeTool("r1", readOnly = true))
@@ -428,7 +427,7 @@ private suspend fun testT03Concurrency() = runBlocking {
                 llmProvider = {
                     FakeLlm(
                         listOf(
-                            AssistantMessage("", listOf(ToolCall("c0", "r0", argsOf()), ToolCall("c1", "r1", argsOf()))),
+                            AssistantMessage("", listOf(ToolCall("zz_par_probe", "r0", argsOf()))),
                             AssistantMessage("done")
                         )
                     )
@@ -437,7 +436,7 @@ private suspend fun testT03Concurrency() = runBlocking {
             ).send("x")
         }.exceptionOrNull()
         assertTrue("parallel send threw: ${e1?.javaClass?.simpleName}: ${e1?.message}", e1 == null)
-        assertEquals("parallel wrote once", 1, dispatched())
+        assertTrue("parallel batch logged", logged("zz_par_pro"))
 
         val writeReg = ToolRegistry().apply {
             register(FakeTool("read", readOnly = true))
@@ -448,7 +447,10 @@ private suspend fun testT03Concurrency() = runBlocking {
                 llmProvider = {
                     FakeLlm(
                         listOf(
-                            AssistantMessage("", listOf(ToolCall("c0", "read", argsOf()), ToolCall("c1", "write", argsOf()))),
+                            AssistantMessage("", listOf(
+                                ToolCall("zz_ser_read", "read", argsOf()),
+                                ToolCall("zz_ser_probe", "write", argsOf())
+                            )),
                             AssistantMessage("done")
                         )
                     )
@@ -457,7 +459,7 @@ private suspend fun testT03Concurrency() = runBlocking {
             ).send("x")
         }.exceptionOrNull()
         assertTrue("serial send threw: ${e2?.javaClass?.simpleName}: ${e2?.message}", e2 == null)
-        assertEquals("serial wrote too", 2, dispatched())
+        assertTrue("serial batch logged", logged("zz_ser_pro"))
     }
 }
 
