@@ -321,7 +321,8 @@ GROUPS = {
     # 输入区状态收口（2026-11-24，批 1）。
     #
     # 零依赖组：ComposerState.kt 只 import kotlinx.coroutines——PendingFile 特意与它同文件
-    # 定义，就是为了让这个闭包不带 ChatUiTypes 那条 ApprovalGrant 链。编两个文件不到两秒。
+    # 定义，就是为了让这个闭包不带 ChatUiTypes 那条 ApprovalGrant 链。
+    # ComposerAttachmentParking.kt 同样零 Android（附件按会话暂存，自测 A3），一并编进来。
     #
     # 为什么值得单独成组：它守的两条判据（原子读改写 / 取走即清空）用 grep 完全测不出来。
     # 非原子的 `edit` 在单线程下与原子版**逐字节相同**，只有并发才暴露；而它一旦退回去，
@@ -329,9 +330,14 @@ GROUPS = {
     "composer": {
         "sources": [
             "app/src/main/java/com/beichen/polaris/ui/ComposerState.kt",
+            "app/src/main/java/com/beichen/polaris/ui/ComposerAttachmentParking.kt",
             "app/src/test/java/com/beichen/polaris/ui/ComposerStateTest.kt",
+            "app/src/test/java/com/beichen/polaris/ui/ComposerAttachmentParkingTest.kt",
         ],
-        "classes": ["com.beichen.polaris.ui.ComposerStateTest"],
+        "classes": [
+            "com.beichen.polaris.ui.ComposerStateTest",
+            "com.beichen.polaris.ui.ComposerAttachmentParkingTest",
+        ],
     },
     # 用户气泡的附件回执（2026-11-24）。
     #
@@ -1444,13 +1450,33 @@ MUTATIONS = [
     },
     {
         # 真机反馈「我选的照片会跟着我换话题跑到另一个话题去」：换会话时文本换了、附件没换。
-        # 只读不清 = dropAttachments 什么都不做，新会话的输入框照样挂着上个会话的图。
-        "id": "CS5 dropAttachments 只读不清（换会话后附件跟着走）",
+        # 不 park = 切走就丢，自测 A3 的后半句（切回原会话图还在）当场复发。
+        "id": "CS5 换会话不暂存（切回来图没了，A3 后半句复发）",
+        "group": "composer",
+        "file": "app/src/main/java/com/beichen/polaris/ui/ComposerAttachmentParking.kt",
+        "old": "        if (!taken.isEmpty()) evicted = parking.park(prev, taken)",
+        "new": "        if (!taken.isEmpty()) evicted = 0",
+        "expect": ["切走再切回：附件原样回来"],
+    },
+    {
+        # 取出不删：切回 A 拿一次，去 B 再回 A 又拿到同一张——用户只选过一次，
+        # 发送时却会把同一张图发两遍，看起来像「附件自己翻倍」。
+        "id": "CS6 take 取出不删（同一张图重复出现）",
+        "group": "composer",
+        "file": "app/src/main/java/com/beichen/polaris/ui/ComposerAttachmentParking.kt",
+        "old": "fun take(convId: String): ComposerState.Attachments? = slots.remove(convId)",
+        "new": "fun take(convId: String): ComposerState.Attachments? = slots[convId]",
+        "expect": ["取走后槽位为空，不会重复出现"],
+    },
+    {
+        # 恢复用整体赋值：切过来那一瞬用户已经选了一张，赋值把它吞掉——
+        # 与 W-31 同一类丢写（界面看着正常，图少了一张）。
+        "id": "CS7 恢复用整体赋值（吞掉用户刚选的图）",
         "group": "composer",
         "file": "app/src/main/java/com/beichen/polaris/ui/ComposerState.kt",
-        "old": "        val images = _pendingImages.drain()\n        val files = _pendingFiles.drain()",
-        "new": "        val images = _pendingImages.value\n        val files = _pendingFiles.value",
-        "expect": ["dropAttachments 清空附件但不动文本"],
+        "old": "        if (attachments.images.isNotEmpty()) _pendingImages.casUpdate { it + attachments.images }",
+        "new": "        if (attachments.images.isNotEmpty()) _pendingImages.value = attachments.images",
+        "expect": ["restoreAttachments 放回附件且保留已有的"],
     },
     {
         # 落盘时丢掉附件：当场看一切正常，切走再切回来图没了。

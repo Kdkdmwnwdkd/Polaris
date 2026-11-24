@@ -68,6 +68,10 @@ SOURCES=(
   "$SRC_CORE/core/telemetry/TraceSink.kt"
   "$SRC_CORE/core/llm/JsonSafe.kt"
   "$SRC_CORE/core/DraftStore.kt"
+  # 附件交接（自测 A3）：ComposerState 与暂存层都是零 Android，能在这里真跑。
+  # 用真对象而不是计数桩——「切回来那张图还在吗」只有真槽位答得上来。
+  "$SRC/ui/ComposerState.kt"
+  "$SRC/ui/ComposerAttachmentParking.kt"
   "$SRC/ui/ConversationEditor.kt"
 )
 for f in "${SOURCES[@]}" "$HARNESS"; do
@@ -154,14 +158,14 @@ else
   g_bad "G5 删除入口没有接到 editor.delete"
 fi
 
-# G6：换会话必须真的把待发附件丢掉（真机报的「照片跟着换话题跑过去」）。
-# 只判回调接上还不够——回调体里那行 `composer.dropAttachments()` 要是被删了，
-# 界面在别的方面完全正常，只是图继续跟着走；这种「少了一行」正是要在 CI 拦住的。
-if grep -q 'onAttachmentsDropped = ::dropComposerAttachments' "$VM" \
-   && grep -q 'composer.dropAttachments()' "$VM"; then
-  g_good "G6 换会话丢弃待发附件已接线（editor 回调 + ComposerState.dropAttachments）"
+# G6：换会话必须走附件交接（真机报的「照片跟着换话题跑过去」/ 自测 A3）。
+# 三处一起判：回调接上、交接函数真的被调、暂存对象真的传进去。
+# 只判其中一处不够——把 park 换成「直接丢」也能让前两条成立，而 A3 会当场复发。
+if grep -q 'onComposerHandoff = ::handoffComposerAttachments' "$VM" \
+   && grep -q 'handoffAttachments(composer, attachmentParking' "$VM"; then
+  g_good "G6 换会话走附件交接（回调 + handoffAttachments + 暂存槽）"
 else
-  g_bad "G6 换会话没丢弃待发附件 —— 上个会话的图会跟到新会话"
+  g_bad "G6 换会话没走附件交接 —— 上个会话的图会跟到新会话，或切回时图没了"
 fi
 
 total_pass=$((jp + gp))

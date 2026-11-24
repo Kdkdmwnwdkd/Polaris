@@ -144,8 +144,13 @@ internal class ComposerState(initialText: String = "") {
         _pendingFiles.casUpdate { list -> list.filterNot { it.name == name } }
     }
 
-    /** 一次 [takeAttachments] 的产物。 */
-    data class Attachments(val images: List<String>, val files: List<PendingFile>)
+    /** 一次 [takeAttachments] 的产物。也用于按会话暂存（[ComposerAttachmentParking]）。 */
+    data class Attachments(val images: List<String>, val files: List<PendingFile>) {
+        fun isEmpty(): Boolean = images.isEmpty() && files.isEmpty()
+
+        /** 条数（图片张数 + 文件个数）——提示文案与上限判定用。 */
+        val count: Int get() = images.size + files.size
+    }
 
     /**
      * 摘走待发附件：返回当前值并清空，两步原子完成。
@@ -160,24 +165,16 @@ internal class ComposerState(initialText: String = "") {
     )
 
     /**
-     * 丢弃待发附件（换会话时）。返回丢掉的条数——0 表示本来就没有，调用方据此决定要不要提示。
+     * 把暂存的附件放回输入区（切回某条会话时）。
      *
-     * ## 为什么附件不跟会话走（与文本不对称是**有意的**）
+     * 用追加而不是赋值：切会话的瞬间用户可能已经在新的输入区选了图，赋值会把它吞掉。
+     * 这与 W-31 是同一类错误——「读到当前值、在调用方算好、整体写回」在并发下会丢写。
      *
-     * 文本有 [DraftStore] 落盘，所以切走能存、切回能取。附件没有对应的持久化：它只有内存里的
-     * data URL（[com.beichen.polaris.ui.AttachmentIo.MAX_PENDING_IMAGES] 张，每张可达数 MB），
-     * 若按会话暂存，等于把十几 MB 的 base64 常驻内存；写进 drafts.json 更糟——草稿文件会
-     * 从几 KB 涨到几十 MB，而备份会把整份带走。
-     *
-     * 语义就定为：**附件属于「正在编辑的这一条消息」**，换会话即作废。真机反馈的
-     * 「我选的照片会跟着我换话题跑到另一个话题去」正是旧行为：文本按会话换了，附件没换，
-     * 于是新会话的输入框空着字、上面却挂着一张上个会话的图。
-     *
-     * 调用方必须提示（[ChatViewModel] 里那条瞬时提示）：静默丢用户的图比丢不了更让人困惑。
+     * 与 [takeAttachments] 对称：一个负责「取走并清空」，一个负责「放回」，
+     * 中间的保管在 [ComposerAttachmentParking]。
      */
-    fun dropAttachments(): Int {
-        val images = _pendingImages.drain()
-        val files = _pendingFiles.drain()
-        return images.size + files.size
+    fun restoreAttachments(attachments: Attachments) {
+        if (attachments.images.isNotEmpty()) _pendingImages.casUpdate { it + attachments.images }
+        if (attachments.files.isNotEmpty()) _pendingFiles.casUpdate { it + attachments.files }
     }
 }

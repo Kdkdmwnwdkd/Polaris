@@ -136,27 +136,42 @@ class ComposerStateTest {
     }
 
     /**
-     * 换会话时丢弃待发附件。
+     * 取走 → 放回：切会话交接用的两条基本动作。
      *
-     * 真机反馈：「我选的照片会跟着我换话题跑到另一个话题去」。原因是文本按会话换
-     * （drafts），附件没换——新会话空着字、上面却挂着上个会话的图。
-     *
-     * 三条一起判：① 真的清空；② 返回的条数对得上（调用方靠它决定要不要提示）；
-     * ③ **文本不能动**——换会话时文本要按草稿存/取，顺手清掉等于把用户的草稿删了。
+     * 真机反馈「我选的照片会跟着我换话题跑到另一个话题去」：切走时取、切回时放，
+     * 中间的保管在 ComposerAttachmentParking。这里只判 ComposerState 这一半——
+     * ① 放回后条数与内容都对得上；② **放回是追加不是覆盖**（切过来的瞬间用户可能
+     * 已经在新的输入区选了图，覆盖会把它吞掉，与 W-31 同一类丢写）。
      */
     @Test
-    fun `dropAttachments 清空附件但不动文本`() {
+    fun `restoreAttachments 放回附件且保留已有的`() {
         val composer = ComposerState()
         composer.set("说到一半的话")
         composer.addImages(listOf("data:a", "data:b"))
         composer.addFile(PendingFile("a.txt", "aaa"))
 
-        assertEquals(3, composer.dropAttachments())
-        assertTrue("图片必须被清空", composer.pendingImages.value.isEmpty())
-        assertTrue("文件必须被清空", composer.pendingFiles.value.isEmpty())
-        assertEquals("说到一半的话", composer.text)
+        val taken = composer.takeAttachments()
+        assertEquals("取走后图片应为空", 0, composer.imageCount)
+        assertEquals("取走后文件应为空", 0, composer.pendingFiles.value.size)
 
-        assertEquals("本来就空时返回 0（调用方据此不弹提示）", 0, composer.dropAttachments())
+        // 期间用户在新会话里又选了一张
+        composer.addImages(listOf("data:c"))
+        composer.restoreAttachments(taken)
+
+        assertEquals(listOf("data:c", "data:a", "data:b"), composer.pendingImages.value)
+        assertEquals(listOf("a.txt"), composer.pendingFiles.value.map { it.name })
+        assertEquals("说到一半的话", composer.text)
+    }
+
+    @Test
+    fun `Attachments 的条数与空判定`() {
+        assertTrue(ComposerState.Attachments(emptyList(), emptyList()).isEmpty())
+        assertEquals(0, ComposerState.Attachments(emptyList(), emptyList()).count)
+        assertEquals(2, ComposerState.Attachments(listOf("a", "b"), emptyList()).count)
+        assertEquals(
+            3,
+            ComposerState.Attachments(listOf("a", "b"), listOf(PendingFile("x.txt", "1"))).count
+        )
     }
 
     /**

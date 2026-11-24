@@ -13,8 +13,8 @@
  *  C. 删除：在途会话禁删、运行中禁删当前会话、删完不留孤儿草稿、删非 active 不动显示态
  *  D. 不守卫的动作：rename / setPinned / bindWorkspace 在运行中照常生效
  *  E. adopt：恢复/删除路径的迁移不保存旧草稿
- *  F. 附件：换会话（新建/切换/删当前/恢复）都丢弃待发附件，删非 active 与同 id 切换不丢
- *     （附件本身「真的清空了」由 ComposerStateTest 守，这里只判触发点与触发次数）
+ *  F. 附件交接：切换/新建时旧会话的附件被暂存、新会话里看不到、切回原会话取回；
+ *     删除当前会话与 adopt 不暂存；同 id 切换无副作用（真机自测 A3 的两半）
  *
  * 运行：scripts/qa/run-conversation-editor-verification.sh
  * （kotlinc 编译真实源码 + java 运行，不需要 AGP 产物）
@@ -22,7 +22,10 @@
 
 import com.beichen.polaris.core.ConversationStore
 import com.beichen.polaris.core.DraftStore
+import com.beichen.polaris.ui.ComposerAttachmentParking
+import com.beichen.polaris.ui.ComposerState
 import com.beichen.polaris.ui.ConversationEditor
+import com.beichen.polaris.ui.handoffAttachments
 import java.io.File
 
 /* ------------------------------ 迷你断言框架 ------------------------------ */
@@ -68,25 +71,36 @@ private class Rig(conversations: Int = 1) {
     val draftsFile = File(dir, "drafts.json")
 
     var active: String = ""
-    var text: String = ""
     var running: Boolean = false
     var owner: String? = null
+
+    /**
+     * 真实的输入区与附件暂存。
+     *
+     * 用真对象而不是计数桩：A3 要判的是「切回来那张图还在吗」，
+     * 计数只能证明回调被调过，证明不了槽位里躺的是不是刚才那张。
+     */
+    val composer = ComposerState()
+    val parking = ComposerAttachmentParking()
+
+    /** 文本读写代理到 [composer]——现有用例都断言 `r.text`，不必逐个改。 */
+    var text: String
+        get() = composer.text
+        set(value) { composer.set(value) }
 
     val loaded = mutableListOf<String>()
     var staleCount = 0
     var refreshCount = 0
     var freshCount = 0
     var freshSawConversations = -1
-    /** 输入区换主人时丢弃待发附件的次数（附件本身由 ComposerStateTest 守）。 */
-    var attachmentDrops = 0
 
     val editor = ConversationEditor(
         store = store,
         drafts = drafts,
         activeId = { active },
         setActiveId = { active = it },
-        inputText = { text },
-        setInputText = { text = it },
+        inputText = { composer.text },
+        setInputText = { composer.set(it) },
         running = { running },
         ownerId = { owner },
         onConversationLoaded = { loaded += it },
@@ -97,7 +111,9 @@ private class Rig(conversations: Int = 1) {
             // 记录回调发生时 store 里已有几条——用来判定「重置先于 create」
             freshSawConversations = store.list().size
         },
-        onAttachmentsDropped = { attachmentDrops++ },
+        onComposerHandoff = { prev, next, keep ->
+            handoffAttachments(composer, parking, prev, next, keep)
+        },
     )
 
     init {
@@ -148,10 +164,17 @@ fun main() {
         eq(r.freshCount, 1, "onFreshConversation 次数")
     }
 
-    check("A4 新建：丢弃待发附件（附件不跟会话走）") {
+    check("A4 新建：旧会话的附件被暂存，新会话干净，切回去还在") {
         val r = Rig()
+        val first = r.active
+        r.composer.addImages(listOf("data:a"))
         r.editor.create()
-        eq(r.attachmentDrops, 1, "新建后丢弃次数")
+        eq(r.composer.imageCount, 0, "新会话不该带着旧附件")
+        eq(r.parking.conversations, 1, "旧会话的附件应已暂存")
+
+        r.editor.switchTo(first)
+        eq(r.composer.pendingImages.value, listOf("data:a"), "切回旧会话后的附件")
+        eq(r.parking.conversations, 0, "取回后槽位应为空")
     }
 
     println("\n[B] 切换")
@@ -197,21 +220,29 @@ fun main() {
 
     // 真机反馈「我选的照片会跟着我换话题跑到另一个话题去」：
     // 文本按会话换（drafts），附件没换，于是新会话空着字、上面挂着上个会话的图。
-    check("B4 切换会话：丢弃待发附件，但文本照旧存进旧会话草稿") {
+    // 自测 A3 的期望是**两半都要**：新会话里没有它，切回原会话它还在。
+    check("B4 切换会话：新会话看不到旧图，切回来还在（自测 A3）") {
         val r = Rig()
         val a = r.active
         val b = r.other()
+        r.composer.addImages(listOf("data:a"))
         r.text = "带着图的话"
+
         eq(r.editor.switchTo(b), null, "switchTo 返回值")
-        eq(r.attachmentDrops, 1, "丢弃次数")
+        eq(r.composer.imageCount, 0, "新会话不该出现旧会话的图")
         eq(r.drafts.get(a), "带着图的话", "文本仍要存回旧会话")
         eq(r.text, "", "新会话输入框")
+
+        eq(r.editor.switchTo(a), null, "切回原会话")
+        eq(r.composer.pendingImages.value, listOf("data:a"), "切回原会话后图应还在")
     }
 
-    check("B5 切到同一条会话：不丢附件（无操作不该有副作用）") {
+    check("B5 切到同一条会话：不暂存、不动附件（无操作不该有副作用）") {
         val r = Rig()
+        r.composer.addImages(listOf("data:a"))
         eq(r.editor.switchTo(r.active), null, "switchTo 返回值")
-        eq(r.attachmentDrops, 0, "同 id 仍丢了一次")
+        eq(r.composer.pendingImages.value, listOf("data:a"), "同 id 不该动附件")
+        eq(r.parking.conversations, 0, "同 id 不该产生暂存")
     }
 
     println("\n[C] 删除")
@@ -280,19 +311,23 @@ fun main() {
         eq(r.store.load(r.active) != null, true, "active 指向不存在的会话")
     }
 
-    check("C6 删当前会话：迁到新会话时丢弃待发附件") {
+    check("C6 删当前会话：旧附件不暂存（会话已不存在，存下来也取不回）") {
         val r = Rig()
         r.other()
         val a = r.active
+        r.composer.addImages(listOf("data:a"))
         eq(r.editor.delete(a), null, "delete 返回值")
-        eq(r.attachmentDrops, 1, "丢弃次数")
+        eq(r.composer.imageCount, 0, "输入区")
+        eq(r.parking.conversations, 0, "已删会话的附件不该占槽位")
     }
 
-    check("C7 删非 active 会话：显示态没变，不丢附件") {
+    check("C7 删非 active 会话：显示态没变，附件不动也不暂存") {
         val r = Rig()
         val b = r.other()
+        r.composer.addImages(listOf("data:a"))
         eq(r.editor.delete(b), null, "delete 返回值")
-        eq(r.attachmentDrops, 0, "显示态没变却丢了附件")
+        eq(r.composer.pendingImages.value, listOf("data:a"), "显示态没变却动了附件")
+        eq(r.parking.conversations, 0, "显示态没变却产生了暂存")
     }
 
     println("\n[D] 不守卫的动作")
@@ -326,7 +361,7 @@ fun main() {
         eq(r.active, b, "active")
         eq(r.drafts.get(a), "", "旧会话被写入了孤儿草稿")
         eq(r.text, "B 的草稿", "输入框")
-        eq(r.attachmentDrops, 1, "adopt 换了输入区却没丢附件")
+        eq(r.parking.conversations, 0, "adopt 不该留下暂存（旧 id 可能已不存在）")
         val raw = if (r.draftsFile.exists()) r.draftsFile.readText() else ""
         expect(a !in raw, "drafts.json 里出现了旧会话 $a 的键：$raw")
     }

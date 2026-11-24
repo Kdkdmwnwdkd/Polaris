@@ -1141,6 +1141,18 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 输入区（文本 / 待发图片 / 待发文件）的唯一 owner；为什么这样收，见 [ComposerState]。 */
     private val composer = ComposerState()
 
+    /**
+     * 待发附件的按会话暂存（内存，进程结束即失——附件本来就没落盘）。
+     *
+     * 必须声明在 [composer] 旁边、[editor] 之前：editor 的构造会捕获交接回调，
+     * Kotlin 按声明顺序初始化，字段排到 editor 后面就在构造期拿到未初始化对象
+     * （与架构守卫 G4 守的「editor 晚于它捕获的字段」同一条规则）。
+     *
+     * 上限 3 条会话 / 16 张图：8 张 base64 就可能十几 MB，叠几个会话会把后台的 App 顶掉，
+     * 而用户完全不知道是「几张没发的图」干的。淘汰规则与理由见 [ComposerAttachmentParking]。
+     */
+    private val attachmentParking = ComposerAttachmentParking()
+
     override val input: StateFlow<String> = composer.input
     override fun setInput(text: String) = composer.set(text)
     override fun editInput(transform: (String) -> String) = composer.edit(transform)
@@ -2714,7 +2726,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         onTranslationsStale = { _translations.value = emptyMap() },
         onListChanged = { refreshConversations() },
         onFreshConversation = { resetToolGroups() },
-        onAttachmentsDropped = ::dropComposerAttachments,
+        onComposerHandoff = ::handoffComposerAttachments,
     )
 
     /**
@@ -2753,17 +2765,17 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     }
 
     /**
-     * 换会话时丢弃待发附件，并告诉用户。
+     * 换会话时交接待发附件，并在暂存超限时提示。
      *
-     * 附件没有按会话的草稿存储（体积与备份代价，见 [ComposerState.dropAttachments]），
-     * 所以「切走」等于「这几张图不要了」。不提示的话，用户切回来只看到空输入框，
-     * 会以为是自己没选上；提示一次，他至少知道图是被换会话带走的。
+     * 真机反馈「我选的照片会跟着我换话题跑到另一个话题去」，自测 A3 的期望是
+     * 「新会话没有它、切回原会话它还在」。两条都要满足，所以既不能留着不管，
+     * 也不能一丢了之——实现是 [handoffAttachments]（纯 JVM，harness 真跑）。
      *
-     * 只在真丢了东西时提示（条数为 0 时安静），否则每次切会话都弹一条就成了噪音。
+     * 只有真的淘汰了东西才提示：正常切走切回不弹任何东西，用户看到图回来了就够。
      */
-    private fun dropComposerAttachments() {
-        val n = composer.dropAttachments()
-        if (n > 0) showInterruptNotice("已清空上一个会话的 $n 个待发附件")
+    private fun handoffComposerAttachments(prev: String, next: String, keepPrevious: Boolean) {
+        val evicted = handoffAttachments(composer, attachmentParking, prev, next, keepPrevious)
+        if (evicted > 0) showInterruptNotice("待发附件暂存已满，丢弃了 $evicted 个较早的")
     }
 
     /**
