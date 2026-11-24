@@ -79,7 +79,24 @@ private val editor = ConversationEditor(
 也就是说，"写者唯一"= **所有者唯一（这个 StateFlow 只归某一个协作者管）+ 写点只在 ChatViewModel 内**，
 **不是**字面上的"文件里只有一处 `=`"。
 
-> 这一条必须写进验收口径。否则审核方按字面 grep 写点数，批 3 抽完 `ConversationEditor` 会出现
+**验收口径（2026-11-24 审核确认，按这两句判）**：
+
+> 「写者唯一」= **每个 `StateFlow` 只有一个 owner，且所有写点都经过该 owner 的命名方法**
+> （`composer.set` / `editor.setActiveId` / `skill.setStatus`）。
+
+机械化三条：
+
+| 判据 | 怎么查 |
+|---|---|
+| **lambda 里的 `_x.value = it` 算 1 个写点，不算 0**（它在 ViewModel 内、由 ViewModel 执行） | 字面 grep |
+| 本批负责的流在 `ChatViewModel.kt` 里**恰好剩 1 条**（注入回调）**或 0 条**（已搬空）。不是"越少越好"，是**只能 0 或 1** | `grep -c '_x\.value *='` |
+| 搬走的类内部，`_x.value =` 只允许出现在它自己的方法里，不允许被外部 lambda 直接写 | `grep -n '_x\.value *=' <新文件>`，逐条看在不在方法体内 |
+
+> 为什么 lambda 算 1 条而不是 0：`setInputText = { input.value = it }` 字面上是
+> 「View 层能写」，实际执行者却是 ViewModel 自己的回调。算 0 会得出「已经收口」的假象；
+> 算 1 才能保证每批结束时数得清。
+>
+> 这条口径必须写进文档。否则审核方按字面 grep 写点数，批 3 抽完 `ConversationEditor` 会出现
 > 「`activeConversationId` 有 1 个写点但它在 lambda 里」这种争议，每批都要吵一次。
 
 ### 3.2 `input` 不是"最独立"的那一个
@@ -123,12 +140,27 @@ private fun onBackupRestored(items: List<PromptItem>) {
 
 再加 `editor` 的 `onTranslationsStale`（`_translations.value = emptyMap()`）——恢复后旧译文作废。
 
-**这是整个切分里唯一无法归批的东西。** 两条路：
+**这是整个切分里唯一无法归批的东西。** 三条路：
 
-- **A（推荐）**：承认它会改 6 次，每批只改属于自己那 1–2 行，并在每批的提交信息里写明"本批改动了 `onBackupRestored` 的哪一行"。改动小、可逐批回滚。
+- **A′（2026-11-24 审核指定，优先）**：批 1 先做一次**纯搬家**，按批归属拆成四个私有函数，
+  函数体原样不动、调用顺序不变：
+
+  ```kotlin
+  private fun onBackupRestored(items: List<PromptItem>) {
+      reloadPrompts(items)      // 杂项：_prompts
+      reloadConversations()     // 批 3：refreshConversations + editor.adopt
+      refreshMemories()         // 已有
+      reloadProfiles()          // 批 4：_profiles + _activeProfileId
+  }
+  ```
+
+  横切函数只被改这一次，之后每批只动自己那个 `reloadXxx()`，不会出现「同一函数被四批反复改」
+  的审阅噪声。**硬约束**：零逻辑变化，`git diff -w` 里只允许看到切/贴与函数签名；
+  `refreshConversations` 与 `editor.adopt` 的先后不能换（adopt 会重建消息列表）。
+
+- **A（保底）**：承认它会改几次，每批只改属于自己那 1–2 行，并在每批提交信息里写明
+  "本批改动了 `onBackupRestored` 的哪一行"。改动小、可逐批回滚。
 - **B**：先把"恢复后重载"抽成一个 `RestoreReloader`，由它调各批的接口。但那要求各批先存在——顺序上做不了第一批。
-
-> 需要审核方确认走 A。若审核方认为"横切函数被改 6 次 = 夹带逻辑改动"，那这个文件在现有结构下无法切分。
 
 ---
 
@@ -156,31 +188,59 @@ private fun onBackupRestored(items: List<PromptItem>) {
 ## 5. 每批的验收（可机械执行）
 
 ```bash
-# ① 本批负责的 StateFlow，在 ChatViewModel 里必须只剩「注入给 owner 的回调」这一条写路径
-grep -n '_activeConversationId.value *=' app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt
-# 期望：1 条，且在 `editor = ConversationEditor(...)` 的实参里
+# ① 本批负责的 StateFlow：在 ChatViewModel.kt 里恰好剩 0 条或 1 条
+#    （1 条必须落在 owner 的构造实参里；0 条表示已完全搬空）
+F=app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt
+grep -n '_input\.value *=\|_pendingImages\.value *=\|_pendingFiles\.value *=' "$F"
+# 批 1 期望：0 条（全部收敛到 composer.set/edit/clear 与 composer.addImages 等）
 
-# ② 行数只减不增（新守卫已能查出来）
+# ② 搬走的类：写点只允许在它自己的方法体内，不许出现在构造参数 / lambda 里
+grep -n '_input\.value *=' app/src/main/java/com/beichen/polaris/ui/ComposerState.kt
+# 期望：每条都在 fun set / edit / clear 的方法体内
+
+# ③ 行数只减不增（新守卫已能查出来，且带条目数自检）
 bash scripts/qa/run-arch-guard-verification.sh
 
-# ③ 抽出的类必须零 android / 零 Compose，才能进变异门禁
-grep -nE '^import (android|androidx\.compose)' <新文件>   # 期望：空
+# ④ 抽出的类必须零 android / 零 Compose，才能进变异门禁
+grep -nE '^import (android|androidx\.compose)' app/src/main/java/com/beichen/polaris/ui/ComposerState.kt
+# 期望：空
 
-# ④ 每批一次真机主流程（发消息 / 切会话 / 打断 / 审批 / 语音 / 杀进程续跑）
+# ⑤ 每批一次真机主流程（发消息 / 切会话 / 打断 / 审批 / 语音 / 杀进程续跑）
 ```
 
 ---
 
 ## 6. 我不确定、需要裁决的三处
 
-1. **`serviceConnected` 归谁**。它唯一的写点在 `refreshCapabilityPlans` 里（`AutomationBridge.onConnectionChanged` 回调），
+1. ~~**`serviceConnected` 归谁**。它唯一的写点在 `refreshCapabilityPlans` 里（`AutomationBridge.onConnectionChanged` 回调），
    但它是"服务连接"状态，语义上不属于技能。若批 2 抽走 `refreshCapabilityPlans`，它会被动跟着走。
-   建议：留在 ViewModel（它只有一个写点，不值得为它建控制器），批 2 只搬函数体、把回调尾部留在原处。
-2. **`interruptedNotice` 在 `refreshCapabilityPlans` 里也有写点**（无障碍连接变化要清中断提示）。
-   这与 1 是同一个位置。若两条建议冲突，以"批 2 不碰 `_interruptedNotice`"为准。
+   建议：留在 ViewModel（它只有一个写点，不值得为它建控制器），批 2 只搬函数体、把回调尾部留在原处。~~
+2. ~~**`interruptedNotice` 在 `refreshCapabilityPlans` 里也有写点**（无障碍连接变化要清中断提示）。
+   这与 1 是同一个位置。若两条建议冲突，以"批 2 不碰 `_interruptedNotice`"为准。~~
+
+   **2026-11-24 更正（审核方实读源码）**：上面两条的前提是错的。
+
+   `refreshCapabilityPlans()` 是**一行转发**，没有函数体可搬：
+
+   ```
+   729:  fun refreshCapabilityPlans() = capabilityReadiness.refresh()
+   ```
+
+   `_serviceConnected` 与 `_interruptedNotice` 的真实写点都在 **`init {}`（835 起）**：
+
+   ```
+   851:  _interruptedNotice.value = when { … }          ← 冷启动恢复协程
+   873:  AutomationBridge.onConnectionChanged = { connected ->
+   874:      _serviceConnected.value = connected
+   ```
+
+   **裁决**：`init {}` 里的写点一律不搬，直到批 6 处理启动恢复为止。
+   （`init` 内还有声明顺序的坑——`workflowFacade` 那条 NPE 注释就是证据。搬它属于换一种风险，
+   收益为零。）→ `serviceConnected` 留在 ViewModel，**批 2 不碰它**；
+   `interruptedNotice` 批 1–5 一条都不许改。
 3. **`send()` 的归属**。它是全文件最大的函数之一，同时又写 `input` / `pendingImages` / `pendingFiles`。
    批 1 之后它会瘦一圈，但仍然是核心。**我不建议把它整体搬走**——它是"回合推进"的入口，
-   与批 6 咬合；单独立一个 `SendPipeline` 属于第 3 轮的事。
+   与批 6 咬合；单独立一个 `SendPipeline` 属于第 3 轮的事（审核已批准不建）。
 
 ---
 
