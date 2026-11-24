@@ -82,7 +82,111 @@ class HttpRequestToolTest {
             .build()
     }
 
-    private fun args(url: String) = JsonObject(mapOf("url" to JsonPrimitive(url)))
+    private fun args(
+        url: String,
+        method: String? = null,
+        body: String? = null,
+    ): JsonObject = JsonObject(
+        buildMap {
+            put("url", JsonPrimitive(url))
+            method?.let { put("method", JsonPrimitive(it)) }
+            body?.let { put("body", JsonPrimitive(it)) }
+        }
+    )
+
+    /**
+     * GET 配空 body 必须能发出去（2026-11-24 真机回归）。
+     *
+     * ## 为什么这条最重要
+     *
+     * schema 默认把所有 prop 标必填，模型看到 `body` 必填就给 GET 填了 `""`；
+     * 而修前 `body0` 非 null 即视为「有请求体」，OkHttp 抛
+     * `method GET must not have a request body`，请求一个字节都没发。
+     *
+     * 更糟的是它被归成「网络异常」并计入撞墙，于是第 4 次尝试后模型被告知
+     * 「该地址已连续失败，可能超时/连不上」——一个纯参数问题伪装成了网络故障。
+     * 真机上四次 GET 全部卡在这里，连 401 都没机会拿到。
+     */
+    @Test
+    fun `GET 带空 body 照样能发出去`() = runBlocking {
+        val r = HttpRequestTool(clientReturning(200, "{}"))
+            .execute(args("https://a.com/x", method = "GET", body = ""))
+        assertTrue("GET + 空 body 必须能发出去：${r.message}", r.ok)
+        assertEquals("http_200", r.code)
+    }
+
+    /** 不传 method 时默认 GET，空 body 同样不该出问题。 */
+    @Test
+    fun `不传 method 时空 body 也不报错`() = runBlocking {
+        val r = HttpRequestTool(clientReturning(200, "{}"))
+            .execute(args("https://a.com/x", body = ""))
+        assertTrue(r.ok)
+    }
+
+    /**
+     * GET 带**非空** body：明确报参数错误，且请求真的不发出。
+     *
+     * 判「没发出」靠 intercept 计数，不是靠看返回值——早先的写法里 r.ok 也可能是 false，
+     * 但那是因为异常，不是因为有拦截。这两种在用户那里看起来一样，在排查时完全不同。
+     */
+    @Test
+    fun `GET 带非空 body 直接报参数错误且不发请求`() = runBlocking {
+        var hits = 0
+        val counting = OkHttpClient.Builder()
+            .retryOnConnectionFailure(false)
+            .addInterceptor { chain ->
+                hits++
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("stub")
+                    .body("{}".toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+        val tool = HttpRequestTool(counting)
+
+        val r = tool.execute(args("https://a.com/x", method = "GET", body = """{"a":1}"""))
+        assertFalse("GET 带 body 必须判失败", r.ok)
+        assertEquals("invalid_param", r.code)
+        assertEquals("请求不该被发出去", 0, hits)
+
+        // 参数错误不该计入「撞墙」：这个地址可能一次都没真正请求过，
+        // 计入就会劝模型换掉一个其实正常的源。
+        val again = tool.execute(args("https://a.com/x", method = "GET", body = """{"a":2}"""))
+        assertFalse(
+            "参数错误不该被记成网络失败：${again.message}",
+            again.message.contains("已连续失败"),
+        )
+    }
+
+    /** POST 没带 body：同样提前拦下，别让 OkHttp 抛一句看不懂的英文。 */
+    @Test
+    fun `POST 缺 body 报参数错误`() = runBlocking {
+        val r = HttpRequestTool(clientReturning(200, "{}"))
+            .execute(args("https://a.com/x", method = "POST"))
+        assertFalse(r.ok)
+        assertEquals("invalid_param", r.code)
+        assertTrue("提示要告诉它补什么：${r.hint}", r.hint.orEmpty().contains("body"))
+    }
+
+    /** POST 带 body 正常，别把合法用法一起误伤。 */
+    @Test
+    fun `POST 带 body 正常`() = runBlocking {
+        val r = HttpRequestTool(clientReturning(200, """{"ok":1}"""))
+            .execute(args("https://a.com/x", method = "POST", body = """{"q":1}"""))
+        assertTrue(r.ok)
+        assertEquals("http_200", r.code)
+    }
+
+    /** 非法 URL 归「参数不合法」，不归「这个地址不通」。 */
+    @Test
+    fun `非法 url 归参数错误`() = runBlocking {
+        val r = HttpRequestTool(clientReturning(200, "{}")).execute(args("这不是地址"))
+        assertFalse(r.ok)
+        assertEquals("invalid_param", r.code)
+    }
 
     @Test
     fun `2xx 才算成功`() = runBlocking {

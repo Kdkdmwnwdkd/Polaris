@@ -82,10 +82,21 @@ class HttpRequestTool(
         "向指定 URL 发起 HTTP 请求，返回状态码与响应体（自动截断到前 8000 字符）。"
 
     override val parameters = JsonSchema.objectSchema(
-        JsonSchema.prop("method", "string", "HTTP 方法", enum = listOf("GET", "POST", "PUT", "DELETE", "PATCH")),
+        JsonSchema.prop(
+            "method", "string", "HTTP 方法，不填默认 GET",
+            enum = listOf("GET", "POST", "PUT", "DELETE", "PATCH")
+        ),
         JsonSchema.prop("url", "string", "请求目标地址"),
         JsonSchema.prop("headers", "object", "请求头，键值均为字符串（可选）"),
-        JsonSchema.prop("body", "string", "请求体，通常与 POST/PUT 配合使用（可选）")
+        JsonSchema.prop("body", "string", "请求体，通常与 POST/PUT 配合使用（可选）"),
+        // 只把 url 标必填。
+        //
+        // `objectSchema` 的默认是「所有 prop 都必填」，而这里 method 有 GET 兜底、
+        // headers / body 本来就可选。后果不只是「多问一句」，而是真故障：
+        // 模型看到 body 必填，就给 GET 塞一个空字符串，OkHttp 拒绝「GET 带请求体」，
+        // 请求一个字节都发不出去。2026-11-24 真机连撞四次
+        // `method GET must not have a request body`，还被归成「网络超时」。
+        required = listOf("url")
     )
 
     /**
@@ -134,11 +145,31 @@ class HttpRequestTool(
                     message = "缺少 url",
                     hint = "http_request 必须提供 url 参数（如 https://example.com/api），请补充后重试。"
                 )
-            val body0 = args["body"]?.primOrNull()?.contentOrNull
+            // 空串等同「没传」：模型看到 body 必填时最常见的填法就是 `""`。
+            // 原样当作「有 body」的话，GET 会被 OkHttp 直接拒绝（见下方校验）。
+            val body0 = args["body"]?.primOrNull()?.contentOrNull?.takeIf { it.isNotBlank() }
             val headers = buildList {
                 (args["headers"] as? JsonObject)?.forEach { (k, v) ->
                     v.primOrNull()?.contentOrNull?.let { add(k to it) }
                 }
+            }
+
+            // 方法与请求体的相容性，提前拦下来给一句能照着改的话。
+            // 不拦的话 OkHttp 会抛 IllegalArgumentException，被 getOrElse 当成「网络异常」，
+            // 用户看到「连不上 / 超时」——实际一个字节都没发出去，排查方向全错。
+            if (body0 != null && (method0 == "GET" || method0 == "HEAD")) {
+                return@withContext ToolResult.fail(
+                    code = "invalid_param",
+                    message = "$method0 不能带请求体",
+                    hint = "去掉 body 参数（留空也不行，直接不传）；若确实要提交数据，改用 POST 或 PUT。",
+                )
+            }
+            if (body0 == null && (method0 == "POST" || method0 == "PUT" || method0 == "PATCH")) {
+                return@withContext ToolResult.fail(
+                    code = "invalid_param",
+                    message = "$method0 需要请求体",
+                    hint = "补充 body 参数（JSON 字符串）；若只是读取数据，改用 GET。",
+                )
             }
 
             var currentUrl = url
@@ -231,9 +262,19 @@ class HttpRequestTool(
             // 循环的每个出口都已经 return；这一行只为让 lambda 的类型是 ToolResult 而不是 Unit。
             error("unreachable: 请求循环必然以 return 结束")
         }.getOrElse {
-            // 走到这里 = 连响应都没拿到（DNS / 连接 / 读超时 / TLS）。
-            val n = failStreak.noteFailure(probeKey)
+            // 参数形状错误（URL 写错、方法名不认识）不该算「这个地址不通」：
+            // 那个地址可能一次都没被请求过，计入撞墙会劝模型换掉一个其实正常的源。
+            val paramError = it is IllegalArgumentException
+            val n = if (paramError) 0 else failStreak.noteFailure(probeKey)
             val reason = it.message.orEmpty().ifBlank { it::class.java.simpleName }
+            if (paramError) {
+                return@withContext ToolResult.fail(
+                    code = "invalid_param",
+                    message = "请求参数不合法：$reason",
+                    hint = "检查 url 是否是完整地址（带 https://）、method 是否是支持的动词" +
+                        "（GET/POST/PUT/DELETE/PATCH），以及 GET 是否误带了请求体。",
+                )
+            }
             ToolResult.fail(
                 code = "http_error",
                 message = "HTTP 请求异常：$reason",
