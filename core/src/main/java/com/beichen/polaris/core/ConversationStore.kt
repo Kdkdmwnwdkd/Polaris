@@ -160,7 +160,19 @@ data class MsgRecord(
      *
      * 旧文件没有该字段 → false（历史记录按模型输出看待，与改动前一致）。
      */
-    val synthetic: Boolean = false
+    val synthetic: Boolean = false,
+    /**
+     * 用户消息附带的图片（data URL，**已缩到气泡尺寸**）。
+     *
+     * 为什么存缩略图而不是原图：一张相机原图 base64 后在 1~3MB，8 张就顶得上一整部小说，
+     * 而这个字段的唯一用途是让用户回看时确认「我发的是这张」。气泡里只有 56dp，
+     * 缩略图足够；原图在发送那一刻已经见过模型，不需要为回看再存一份。
+     *
+     * 旧文件没有该字段 → 空列表（历史消息按纯文本显示，与改动前一致）。
+     */
+    val images: List<String> = emptyList(),
+    /** 用户消息附带的文件名（正文已拼进 content 前缀，这里只留名字用于回看）。 */
+    val fileNames: List<String> = emptyList()
 )
 
 /**
@@ -212,6 +224,9 @@ fun UiItem.toMsgRecord(): MsgRecord = when (this) {
         role = ROLE_USER,
         content = text.take(MAX_FIELD_CHARS),
         timeMs = timeMs,
+        // 气泡里那几张图与文件名随消息落盘（存的是缩略图，见 MsgRecord.images）
+        images = images,
+        fileNames = fileNames,
         truncatedChars = truncatedChars + droppedChars(text)
     )
 
@@ -267,7 +282,13 @@ internal fun MsgRecord.toUiItem(): UiItem = when (role) {
         truncatedChars = truncatedChars
     )
 
-    ROLE_USER -> UiItem.User(content, timeMs = timeMs, truncatedChars = truncatedChars)
+    ROLE_USER -> UiItem.User(
+        content,
+        timeMs = timeMs,
+        images = images,
+        fileNames = fileNames,
+        truncatedChars = truncatedChars
+    )
 
     // 功能五（P1-5）：还原 token 用量；两个计数都 0 = 无数据（旧文件/供应商没给）→ null
     ROLE_ASSISTANT -> UiItem.Assistant(
@@ -310,6 +331,10 @@ fun ConversationRecord.toUiItems(): List<UiItem> = buildList {
                 turn.user.content,
                 turnIndex,
                 timeMs = turn.user.timeMs,
+                // 逐轮渲染是切会话/变体切换后的**主路径**：漏了这两行，结果是
+                // 「发完能看到图，切走再回来就没了」——比一开始就不显示更难查。
+                images = turn.user.images,
+                fileNames = turn.user.fileNames,
                 truncatedChars = turn.user.truncatedChars
             )
         )

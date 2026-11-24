@@ -465,9 +465,15 @@ private fun testFileAttachment() {
         assertContains("N7", chat, "ActivityResultContracts.OpenDocument()")
     }
     check("N8 文件 chip 行可移除，且文件名截断留出「×」位置") {
-        assertContains("N8", chat, "private fun AttachedFilesRow(")
-        assertContains("N8", chat, "widthIn(max = 180.dp)")
+        // 2026-11-24：附件三种视图（待发 / 已发 / 工具返回）从 ChatScreen 抽到
+        // AttachmentViews.kt——它们共享同一套解码预算，散在三处时要改三遍。
+        val views = readSource("ui/AttachmentViews.kt")
+        assertContains("N8", views, "internal fun AttachedFilesRow(")
+        assertContains("N8", views, "widthIn(max = 180.dp)")
         assertContains("N8", chat, "onRemoveFile = { vm.removePendingFile(it) }")
+    }
+    check("N9 已发出的消息在气泡里显示附件回执（缩略图 + 文件名）") {
+        assertContains("N9", chat, "BubbleAttachments(")
     }
 }
 

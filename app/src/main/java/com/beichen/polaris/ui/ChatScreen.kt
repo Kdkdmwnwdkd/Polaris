@@ -1824,7 +1824,7 @@ private fun ChatInputBar(
             }
             // 功能四（P0-2）/ 功能五（P1-4）：待发附件（缩略图行 + 文件行，有才占位）
             if (images.isNotEmpty()) AttachedImagesRow(images, onRemoveImage)
-            if (files.isNotEmpty()) AttachedFilesRow(files, onRemoveFile)
+            if (files.isNotEmpty()) AttachedFilesRow(files.map { it.name }, onRemoveFile)
             // 能否发送：文字或附件任一非空，与 ComposerState.canSend 是同一判据。
             val canSend = text.isNotBlank() || images.isNotEmpty() || files.isNotEmpty()
             Row(
@@ -1931,103 +1931,6 @@ private fun ChatInputBar(
                         onClick = onSend
                     )
                 }
-            }
-        }
-    }
-}
-
-/**
- * 功能四（P0-2）：待发附件缩略图行。
- *
- * 横向滚动的 64dp 圆角缩略图 + 右上角移除按钮（外描边圆点 20dp，× 用文字规避
- * material-icons-extended）。放在输入框上方——附件是「随消息一起走的东西」，
- * 视觉上必须贴着输入框，不能丢到别处。
- *
- * 缩略图只做预览；真正发给模型的是 [images] 里的 data URL 原文。
- */
-@Composable
-private fun AttachedImagesRow(images: List<String>, onRemove: (String) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = AgentSpacing.space3, vertical = AgentSpacing.space2),
-        horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)
-    ) {
-        images.forEach { dataUrl ->
-            val bitmap = remember(dataUrl) { decodeDataUrl(dataUrl) }
-            Box(modifier = Modifier.size(64.dp)) {
-                if (bitmap != null) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "待发图片",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(RoundedCornerShape(12.dp))
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .size(20.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surface)
-                        .clickable { onRemove(dataUrl) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "×",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * 功能五（P1-4）：待发文件行——文件 chip（文件名 + 移除）。
- *
- * 与 [AttachedImagesRow] 并排在同一区域：图片看缩略图、文件看名字。
- * 名字截断到 180dp（长文件名不能把「×」挤出屏幕——那是唯一能取消的入口）。
- */
-@Composable
-private fun AttachedFilesRow(files: List<PendingFile>, onRemove: (String) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = AgentSpacing.space3, vertical = AgentSpacing.space2),
-        horizontalArrangement = Arrangement.spacedBy(AgentSpacing.space2)
-    ) {
-        files.forEach { file ->
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(horizontal = AgentSpacing.space3, vertical = AgentSpacing.space2),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "文件 · ${file.name}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 180.dp)
-                )
-                Spacer(Modifier.width(AgentSpacing.space2))
-                Text(
-                    text = "×",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .clickable { onRemove(file.name) }
-                        .padding(horizontal = AgentSpacing.space1)
-                )
             }
         }
     }
@@ -2147,23 +2050,6 @@ private fun RoundIconAction(
     }
 }
 
-/** 预览图长边上限：约等于常见手机屏幕宽度，再大也显示不出来。 */
-private const val PREVIEW_MAX_EDGE_PX = 1080
-
-/**
- * 功能四（P0-1/P0-2）：把 data URL 解码成缩略图位图。
- *
- * 缩略图只用于预览，不参与请求——请求始终带 data URL 原文，避免二次编码损耗。
- */
-private fun decodeDataUrl(dataUrl: String): Bitmap? {
-    val comma = dataUrl.indexOf(',')
-    if (!dataUrl.startsWith("data:") || comma < 0) return null
-    val bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT)
-    // 采样解码：这张图只用于界面预览（fillMaxWidth ≈ 1080px），
-    // 按原始尺寸解一张 4000×3000 就是 48MB 堆，连续几张直接 OOM。
-    return AttachmentIo.decodeSampled(bytes, PREVIEW_MAX_EDGE_PX)
-}
-
 /** 停止按钮：触控 48dp / 视觉 40dp，error 底 + 24dp on-error 停止图标；运行时常驻可点。 */
 @Composable
 private fun ChatStopButton(onClick: () -> Unit) {
@@ -2264,7 +2150,10 @@ private fun MessageRow(item: UiItem, streaming: Boolean) {
                 text = item.text,
                 isUser = true,
                 streaming = false,
-                maxWidth = (maxWidth * 0.76f).coerceIn(240.dp, 400.dp)
+                maxWidth = (maxWidth * 0.76f).coerceIn(240.dp, 400.dp),
+                // 发过的图与文件名：气泡里显示的是缩小后的副本（见 AttachmentViews.userBubbleItem）
+                images = item.images,
+                fileNames = item.fileNames
             )
 
             is UiItem.Assistant -> MessageBubble(
@@ -2308,7 +2197,10 @@ private fun MessageBubble(
      * 只在「从磁盘读回的会话」上非 0——实时上屏的消息永远是全量。没有这一行时，
      * 重启后看到的是半截回答，用户会以为模型话说一半，冷启动续跑也会基于残文继续。
      */
-    truncatedChars: Int = 0
+    truncatedChars: Int = 0,
+    /** 用户气泡里的附图缩略图（data URL）与文件名；助手气泡恒空。 */
+    images: List<String> = emptyList(),
+    fileNames: List<String> = emptyList()
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -2351,13 +2243,21 @@ private fun MessageBubble(
         ) {
             SelectionContainer {
                 when {
-                    // 用户气泡保持纯文本（用户输入不作 Markdown 解释）
-                    isUser -> Text(
-                        text = text,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = meColors.text,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                    )
+                    // 用户气泡正文保持纯文本（用户输入不作 Markdown 解释）；
+                    // 附图与文件名铺在正文下方——发完看不见自己发了什么，等于功能只做了一半
+                    isUser -> Column {
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = meColors.text,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                        )
+                        BubbleAttachments(
+                            images = images,
+                            fileNames = fileNames,
+                            modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp)
+                        )
+                    }
                     // 助手气泡：Markdown 渲染；流式时末尾带光标（流式全 App 唯一循环动画，§6.2）
                     streaming -> Column {
                         // 功能五（P1-9）：思考中默认展开——用户实时围观模型在推理什么
@@ -2530,34 +2430,6 @@ private fun StreamCursor() {
             .background(MaterialTheme.colorScheme.primary)
     )
 }
-
-/** 把 data URL（base64）解码成可显示的位图，异步避免阻塞主线程。 */
-@Composable
-private fun DataImage(dataUrl: String) {
-    val bitmap by produceState<ImageBitmap?>(null, dataUrl) {
-        value = withContextIo {
-            runCatching {
-                val comma = dataUrl.indexOf(',')
-                if (comma < 0 || !dataUrl.startsWith("data:image")) return@runCatching null
-                val bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT)
-                AttachmentIo.decodeSampled(bytes, PREVIEW_MAX_EDGE_PX)?.asImageBitmap()
-            }.getOrNull()
-        }
-    }
-    bitmap?.let {
-        Image(
-            bitmap = it,
-            contentDescription = "工具返回的图片",
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-        )
-    }
-}
-
-/** 切 IO 线程解码位图（小工具函数，避免每个文件都写 withContext(Dispatchers.IO) 样板）。 */
-private suspend fun <T> withContextIo(block: () -> T): T =
-    withContext(Dispatchers.IO) { block() }
 
 /** 工具调用五态（§6.3 状态文字双编码）。 */
 private enum class ToolStatus { RUNNING, DONE, FAILED, REJECTED, INTERRUPTED }

@@ -2352,7 +2352,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 }
                 // Hotfix2：用户消息立即上屏；工具调用过程由 handleAgentEvent 实时渲染
                 // （执行中卡 → 终态卡）；最终历史只补文本回答，工具卡按 call.id 去重
-                val userItem = UiItem.User(text, timeMs = System.currentTimeMillis())
+                val userItem = userBubbleItem(text, images, files.map { it.name }, System.currentTimeMillis())
                 appendUiItem(userItem)
                 appendToStore(userItem) // 功能三：聊天记录同步落盘
                 // W-26：首轮对话后异步生成标题。

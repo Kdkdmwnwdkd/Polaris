@@ -333,6 +333,31 @@ GROUPS = {
         ],
         "classes": ["com.beichen.polaris.ui.ComposerStateTest"],
     },
+    # 用户气泡的附件回执（2026-11-24）。
+    #
+    # 守的是「落盘 ↔ 读回」这条往返：写得进、读得出、旧文件不炸。
+    # 只在写入侧加字段、读回侧忘了带，是这类改动最典型的错法——当场看一切正常，
+    # 切走再切回来图就没了，而 CI 里没有任何东西会红。
+    #
+    # 闭包比 composer 组大（ConversationStore 连带 AtomicJsonFile / 生命周期钩子 /
+    # 写盘遥测），但都是一次性编译，跑起来仍是秒级。
+    "attachment": {
+        "sources": [
+            "core/src/main/java/com/beichen/polaris/core/UiItem.kt",
+            "core/src/main/java/com/beichen/polaris/core/AgentContract.kt",
+            "core/src/main/java/com/beichen/polaris/core/ToolResult.kt",
+            "core/src/main/java/com/beichen/polaris/core/ConversationBranch.kt",
+            "core/src/main/java/com/beichen/polaris/core/ConversationShard.kt",
+            "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
+            "core/src/main/java/com/beichen/polaris/core/io/AtomicJsonFile.kt",
+            "core/src/main/java/com/beichen/polaris/core/lifecycle/AppBackgroundHooks.kt",
+            "core/src/main/java/com/beichen/polaris/core/telemetry/StoreWriteTrace.kt",
+            "core/src/main/java/com/beichen/polaris/core/telemetry/TraceSink.kt",
+            "core/src/main/java/com/beichen/polaris/core/llm/JsonSafe.kt",
+            "core/src/test/java/com/beichen/polaris/core/ConversationUserAttachmentTest.kt",
+        ],
+        "classes": ["com.beichen.polaris.core.ConversationUserAttachmentTest"],
+    },
 }
 
 # 被测源文件。收录判据只有一条：**这段判定有能在 30 秒内跑完的真断言**。
@@ -1416,6 +1441,35 @@ MUTATIONS = [
         "old": "    fun canSend(): Boolean = _input.value.isNotBlank() || hasAttachments()",
         "new": "    fun canSend(): Boolean = _input.value.isNotBlank()",
         "expect": ["canSend 只有图片可发"],
+    },
+    {
+        # 落盘时丢掉附件：当场看一切正常，切走再切回来图没了。
+        "id": "AT1 落盘丢掉用户气泡的附图与文件名（切回来空空如也）",
+        "group": "attachment",
+        "file": "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
+        "old": "        // 气泡里那几张图与文件名随消息落盘（存的是缩略图，见 MsgRecord.images）\n        images = images,\n        fileNames = fileNames,",
+        "new": "        images = emptyList(),\n        fileNames = emptyList(),",
+        "expect": ["图片与文件名能在落盘读回之间保住"],
+    },
+    {
+        # 读回侧漏带：写入是对的，但 toUiItem 的 ROLE_USER 分支没把字段接上。
+        # 与 AT1 分开，因为这两个错法出现在不同函数，只测一个不会发现另一个。
+        "id": "AT2 读回时丢附件（写入正确、显示为空）",
+        "group": "attachment",
+        "file": "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
+        "old": "        images = images,\n        fileNames = fileNames,\n        truncatedChars = truncatedChars\n    )",
+        "new": "        images = emptyList(),\n        fileNames = emptyList(),\n        truncatedChars = truncatedChars\n    )",
+        "expect": ["图片与文件名能在落盘读回之间保住"],
+    },
+    {
+        # 逐轮重建（切会话 / 变体切换的主路径）漏带字段：
+        # 当场看正常，切走再回来图没了——只有这条测试能发现。
+        "id": "AT3 切回会话重建时漏带附件（图只在当场可见）",
+        "group": "attachment",
+        "file": "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
+        "old": "                images = turn.user.images,\n                fileNames = turn.user.fileNames,",
+        "new": "                images = emptyList(),\n                fileNames = emptyList(),",
+        "expect": ["切回会话时逐轮重建也带附件"],
     },
 ]
 

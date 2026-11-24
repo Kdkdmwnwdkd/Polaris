@@ -107,6 +107,28 @@ internal object AttachmentIo {
     }
 
     /**
+     * data URL → 更小的 data URL（长边 ≤ [maxEdge]，JPEG [quality]）。
+     *
+     * 给「用户气泡里那张图」用：发送时存一份缩到 320px 的副本进会话文件，
+     * 原图仍然只发给模型、不落盘——否则一条带 8 张图的会话 JSON 就是几 MB，
+     * 每次切会话都要解析一遍。320px 在 56dp 的缩略图里已经看不出差别。
+     *
+     * 失败一律返回入参：缩略图是「锦上添花」，不该因为某张图解码失败就让整条消息落不了库。
+     */
+    fun shrink(dataUrl: String, maxEdge: Int = 320, quality: Int = 60): String = runCatching {
+        val comma = dataUrl.indexOf(',')
+        if (comma < 0 || !dataUrl.startsWith("data:image")) return dataUrl
+        val bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT)
+        val decoded = decodeSampled(bytes, maxEdge) ?: return dataUrl
+        val scaled = scaleDown(decoded, maxEdge)
+        val out = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
+        if (scaled !== decoded) scaled.recycle()
+        decoded.recycle()
+        "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+    }.getOrDefault(dataUrl)
+
+    /**
      * PDF → 图片 data URL（前 [maxPages] 页，长边 ≤ [maxEdge]）。
      * 渲染前铺白底：PDF 页面本身透明，不铺白会得到黑底图（视觉模型也读不清）。
      *

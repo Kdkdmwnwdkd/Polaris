@@ -105,6 +105,8 @@ internal class ConversationProjection(
      */
     fun appendMessage(msg: ChatMessage, usage: TokenUsage? = null) {
         val item = when (msg) {
+            // 用户气泡的图与文件名由 send() 直接构造（那里才有缩略图）；这条路只回放历史协议消息，
+            // 不在这里重复实现——UserMessage.images 是**原图**，灌进 UI 项会让落盘大十倍。
             is UserMessage -> UiItem.User(msg.content, timeMs = System.currentTimeMillis())
             // 功能五（P1-5/P1-9）：usage 与 reasoning 随消息透传，气泡可折叠展示推理过程
             is AssistantMessage -> UiItem.Assistant(

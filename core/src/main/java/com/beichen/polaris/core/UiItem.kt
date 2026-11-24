@@ -35,6 +35,21 @@ sealed interface UiItem {
         val turnIndex: Int = -1,
         val timeMs: Long = 0,
         /**
+         * 本条附带的图片（data URL）。
+         *
+         * **存的是缩到气泡尺寸的副本，不是发给模型的原图**——原图动辄几百 KB，
+         * 落进会话 JSON 会让每次切会话的解析都变慢，而气泡里只显示 56dp 的小图。
+         * 发给模型的那一份走 `loop.send(input, images, …)` 的原图列表，与本字段无关。
+         */
+        val images: List<String> = emptyList(),
+        /**
+         * 本条附带的文件名。
+         *
+         * 只存名字不存正文：正文已经在发送时拼进 `content` 的前缀块里发过一次，
+         * 再存一份等于每条消息都翻倍。读回历史时气泡能显示「发了这个文件」即可。
+         */
+        val fileNames: List<String> = emptyList(),
+        /**
          * 落盘截断标记（2026-11-18）：本条正文被丢弃的字符数，0 = 完整。
          *
          * 只由「从磁盘读回」这条路径填——实时上屏的消息永远是全量。
