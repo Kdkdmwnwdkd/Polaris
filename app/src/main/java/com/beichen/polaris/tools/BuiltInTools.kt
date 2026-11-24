@@ -17,17 +17,20 @@ import com.beichen.polaris.core.ToolResult
 import com.beichen.polaris.core.io.AtomicJsonFile
 import com.beichen.polaris.core.net.BoundedBody
 import com.beichen.polaris.core.net.BodySlice
+import com.beichen.polaris.core.net.HttpFailStreak
 import com.beichen.polaris.core.net.RedirectPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /*
  * T02：全部工具改返回统一契约 ToolResult{ok, code, message, hint, data}——
@@ -51,10 +54,29 @@ class HttpRequestTool(
     // [RedirectPolicy] 判定：跨域 / 跨端口 / https 降级 / 超跳数一律停下并如实报告，
     // 由模型或脚本对**新地址**重新发起（那就是一次新的、用户可见的授权）。
     private val client: OkHttpClient = LlmHttp.short.newBuilder()
+        // 读超时 30s → 15s（只改这一处，不动 [LlmHttp.short]）。
+        //
+        // short 是共享档，还喂着余额查询、技能市场、git API；那些接口慢一点是正常的，
+        // 全局收紧会把它们误杀。而 http_request 是模型自己挑地址，撞到不通的源是常态，
+        // 一次白等 30 秒、连着撞 6 次就是三分多钟——2026-11-24 那轮天气任务 94 秒里
+        // 有 60 秒全耗在这种等待上。
+        //
+        // 15 秒的判断依据：日志里成功的请求最快 0.4 秒、最慢 2.0 秒，快了整整一个量级；
+        // 真需要更久的（大文件、慢接口）应该走 shell_run + curl，那里能自己给 --max-time。
+        .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
 ) : AgentTool {
+
+    /**
+     * 同一地址「又失败了」的记忆（进程内，见 [HttpFailStreak]）。
+     *
+     * 放在工具实例上而不是全局单例：一个工具实例的生命周期就是一次会话的装配周期，
+     * 用户换会话后旧的撞墙记录不该继续影响新对话的判断。
+     */
+    private val failStreak = HttpFailStreak()
+
     override val name = "http_request"
     override val description =
         "向指定 URL 发起 HTTP 请求，返回状态码与响应体（自动截断到前 8000 字符）。"
@@ -100,9 +122,13 @@ class HttpRequestTool(
     override val timeoutBudgetMs: Long = 90_000L
 
     override suspend fun execute(args: JsonObject): ToolResult = withContext(Dispatchers.IO) {
+        val urlArg = args["url"]?.primOrNull()?.contentOrNull
+        // 提到 runCatching 外面：异常分支（getOrElse）要拿它去记「同一个 host 又栽了」。
+        // 定义在 lambda 内部的话，那里只能看到 Throwable，看不到撞的是谁。
+        val probeKey = hostKeyOf(urlArg.orEmpty())
         runCatching {
             val method0 = args["method"]?.primOrNull()?.contentOrNull?.trim()?.uppercase().orEmpty().ifBlank { "GET" }
-            val url = args["url"]?.primOrNull()?.contentOrNull
+            val url = urlArg
                 ?: return@withContext ToolResult.fail(
                     code = "missing_param",
                     message = "缺少 url",
@@ -166,9 +192,36 @@ class HttpRequestTool(
                             "${slice.bytesRead} 字节；完整内容请用 shell_run 下载到工作区再读）"
                         else -> slice.text
                     }
+                    val where = if (hop > 0) "（跟随 $hop 次同源跳转）" else ""
+                    // 修前这里对**任何**状态码都返回 ok：服务器回 403/404/500 时卡片照样写
+                    // 「已完成」，模型据此把错误页当数据编答案，用户看到的是「查到了」。
+                    // 现在 ≥400 一律判失败；但 data 仍保留响应体——不少接口的错误体才是
+                    // 真正的诊断信息（{"error":"invalid city"}），丢掉它模型只能瞎猜。
+                    if (resp.code >= 400) {
+                        // 也计入「撞墙」次数：对模型来说这次同样没拿到数据，换个参数再撞
+                        // 同一个 host 的行为一模一样，该劝的时候要劝。
+                        failStreak.noteFailure(probeKey)
+                        return@withContext ToolResult.fail(
+                            code = "http_${resp.code}",
+                            message = if (resp.code in 400..499) {
+                                "HTTP ${resp.code}$where：地址被拒或资源不存在"
+                            } else {
+                                "HTTP ${resp.code}$where：服务端出错"
+                            },
+                            hint = if (resp.code in 400..499) {
+                                "检查路径、查询参数与鉴权头；若这是第三方公开接口，" +
+                                    "先确认它有没有改版或开始要求 key。不要原样重试同一地址。"
+                            } else {
+                                "服务端故障，不是调用方的问题：稍后重试，或直接换一个数据源。"
+                            },
+                            data = out,
+                        )
+                    }
+                    // 只有 2xx/3xx 才算「这个地址活着」，并清掉历史失败。
+                    failStreak.noteSuccess(probeKey)
                     return@withContext ToolResult.ok(
                         code = "http_${resp.code}",
-                        message = if (hop > 0) "HTTP ${resp.code}（跟随 $hop 次同源跳转）" else "HTTP ${resp.code}",
+                        message = "HTTP ${resp.code}$where",
                         data = out
                     )
                 } finally {
@@ -178,12 +231,45 @@ class HttpRequestTool(
             // 循环的每个出口都已经 return；这一行只为让 lambda 的类型是 ToolResult 而不是 Unit。
             error("unreachable: 请求循环必然以 return 结束")
         }.getOrElse {
+            // 走到这里 = 连响应都没拿到（DNS / 连接 / 读超时 / TLS）。
+            val n = failStreak.noteFailure(probeKey)
+            val reason = it.message.orEmpty().ifBlank { it::class.java.simpleName }
             ToolResult.fail(
                 code = "http_error",
-                message = "HTTP 请求异常：${it.message}",
-                hint = "检查 URL 是否可达、网络是否正常；必要时更换方法或稍后重试。"
+                message = "HTTP 请求异常：$reason",
+                hint = if (n >= REPEAT_THRESHOLD) {
+                    // 关键的一句：模型看不到「刚才那三次也是这个地址」，
+                    // 只看到「这次超时了」，于是换个参数继续撞。
+                    "该地址已连续失败 $n 次（超时 / 连不上），说明它当前不可用：" +
+                        "请直接换一个数据源或换域名，不要再请求同一地址；" +
+                        "如果确实需要这个源，改用 shell_run + curl --max-time 20 单独试一次。"
+                } else {
+                    "检查 URL 是否可达、网络是否正常；换方法或稍后重试。" +
+                        "若同一地址再失败一次，请改换数据源，不要重复撞同一个地址。"
+                }
             )
         }
+    }
+
+    /**
+     * 失败计数用的地址标识：只取 host。
+     *
+     * 不取完整 URL：模型撞墙时最常见的动作是换查询参数（换城市、换日期），host 不变。
+     * 按 URL 记的话每次参数一改就是新 key，「连续失败」永远累计不起来。
+     * 解析失败（地址写错、缺 scheme）返回空串，[HttpFailStreak] 会跳过计数——
+     * 那种情况下该改的是地址本身，提示「换源」反而误导。
+     */
+    private fun hostKeyOf(url: String): String =
+        runCatching { url.toHttpUrlOrNull()?.host.orEmpty() }.getOrDefault("")
+
+    private companion object {
+        /**
+         * 连续失败到几次开始劝模型换源。
+         *
+         * 2 而不是 1：单次超时很可能只是网络抖一下，第一次就喊「这个源不能用」会让模型
+         * 过早放弃一个其实正常的接口。2 次（通常已过去 30 秒）才认定它当前确实不通。
+         */
+        const val REPEAT_THRESHOLD = 2
     }
 }
 
