@@ -89,27 +89,69 @@ say ""
 say "[B] 行数：单文件上限 1500 行，存量只减不增"
 
 oversize=0
-while read -r n f; do
-  [ -z "${f:-}" ] && continue
-  base=$(printf '%s\n' "$lines_paths" | grep -Fx "$f" || true)
-  if [ -z "$base" ]; then
-    bad "新增超标文件：$f（$n 行 > 1500）——请拆分，或先想清楚为什么不能拆"
+
+# 超限判定抽成函数：下面 ① 与反向自检必须走**同一段逻辑**。
+# 自检若另写一遍 if，验的只是「自检自己写得对不对」，不是守卫。
+lines_over_limit() { # $1=文件 $2=上限 → 0 表示超限
+  [ "$(wc -l < "$1")" -gt "$2" ]
+}
+
+# ① 基线里的每一条 lines 都必须生效，**不看它当前是否还 >1500**。
+#
+# 原来这里只有一个循环（find + awk '$1>1500'），于是「拆到 1500 以下」等于自动退管：
+# RealAgentLoop 从 1532 拆到 1391 之后不再被 ② 扫到，而基线仍写着 1388——
+# 实际超 3 行，门禁全绿。拆分成果就这样被静默还了回去，几十天也发现不了。
+while read -r p max; do
+  [ -z "${p:-}" ] && continue
+  if [ ! -f "$p" ]; then
+    bad "[B] 基线条目指向不存在的文件：$p"
     oversize=$((oversize + 1))
     continue
   fi
-  limit=$(awk -v p="$f" '$1=="lines" && $2==p {print $3}' "$BASELINE")
-  if [ "$n" -gt "$limit" ]; then
-    bad "文件又长了：$f 现 $n 行 > 冻结上限 $limit（只减不增）"
+  if lines_over_limit "$p" "$max"; then
+    bad "[B] 文件又长了：$p 现 $(wc -l < "$p") 行 > 冻结上限 $max（只减不增）"
     oversize=$((oversize + 1))
-  elif [ "$n" -lt "$limit" ]; then
-    say "  NOTE  $f 已降到 $n 行（上限 $limit），可同步下调基线"
+  else
+    n=$(wc -l < "$p")
+    [ "$n" -lt "$max" ] && say "  NOTE  $p 已降到 $n 行（上限 $max），可同步下调基线"
   fi
+done < <(awk '$1=="lines"{print $2" "$3}' "$BASELINE")
+
+# ② 新出现的超标文件：>1500 且基线里**没有**条目 → 判红（语义与原来一致）
+while read -r n f; do
+  [ -z "${f:-}" ] && continue
+  if printf '%s\n' "$lines_paths" | grep -Fxq "$f"; then continue; fi
+  bad "[B] 新增超标文件：$f（$n 行 > 1500）——请拆分，或先想清楚为什么不能拆"
+  oversize=$((oversize + 1))
 done < <(find app/src/main/java core/src/main/java -name '*.kt' -exec wc -l {} + | awk '$1>1500 && $2!="total"{print $1" "$2}')
 
 if [ "$oversize" -eq 0 ]; then
-  n=$(find app/src/main/java core/src/main/java -name '*.kt' -exec wc -l {} + | awk '$1>1500 && $2!="total"' | wc -l | tr -d ' ')
-  good "超标文件 $n 个，均未超过冻结上限"
+  n=$(printf '%s\n' "$lines_paths" | awk 'NF' | wc -l | tr -d ' ')
+  good "[B] 基线内 $n 个受管文件均未超各自上限；无新增超标文件"
 fi
+
+# ③ 反向自检：复制一条受管文件、人为加 3 行，喂给**同一个判定函数**，必须判红。
+# 不做这一步，① 里比较方向写反（-gt 写成 -lt）、wc 取错文件，全都照样绿。
+selftest_dir=$(mktemp -d)
+managed=$(printf '%s\n' "$lines_paths" | awk 'NF' | head -1)
+if [ -n "$managed" ] && [ -f "$managed" ]; then
+  cp "$managed" "$selftest_dir/probe.kt"
+  printf '\n// selftest\n// selftest\n// selftest\n' >> "$selftest_dir/probe.kt"
+  real_lines=$(wc -l < "$managed")
+  if lines_over_limit "$selftest_dir/probe.kt" "$real_lines"; then
+    good "[B] 守卫自检：受管文件超过上限 3 行会被判红"
+  else
+    bad "[B] 守卫自检失败：加了 3 行仍判不红，这条守卫等于没写"
+  fi
+  if lines_over_limit "$managed" "$real_lines"; then
+    bad "[B] 守卫自检失败：刚好等于上限却判红（上限对齐时会误伤）"
+  else
+    good "[B] 守卫自检：刚好等于上限不判红（不误伤）"
+  fi
+else
+  bad "[B] 守卫自检失败：基线里找不到可用的受管文件"
+fi
+rm -rf "$selftest_dir"
 
 say ""
 say "[C] 单点：工具 schema 序列化只允许一处实现"
