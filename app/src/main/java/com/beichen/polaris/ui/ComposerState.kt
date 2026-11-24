@@ -3,8 +3,6 @@ package com.beichen.polaris.ui
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.getAndUpdate
-import kotlinx.coroutines.flow.update
 
 /**
  * 功能五（P1-4）：待发文件——文件名 + 已提取的正文文本。
@@ -69,6 +67,29 @@ internal class ComposerState(initialText: String = "") {
     /** 待发图片张数——上限判定用，避免把整张列表搬出来只为读个 size。 */
     val imageCount: Int get() = _pendingImages.value.size
 
+    /**
+     * 用 CAS 循环实现 `update`。
+     *
+     * 为什么不用库里的 `update`／`getAndUpdate`：项目依赖 coroutines 1.8.1，
+     * 但 CI 的变异门禁走 kotlinc 自带的那份（更旧，没有这两个扩展），
+     * 整个 composer 组会在**基线编译**阶段 INVALID——那等于这条判据没进 CI。
+     * `compareAndSet` 自 1.5 起就是 MutableStateFlow 的成员，两边都有。
+     */
+    private inline fun <T> MutableStateFlow<T>.casUpdate(transform: (T) -> T) {
+        while (true) {
+            val cur = value
+            if (compareAndSet(cur, transform(cur))) return
+        }
+    }
+
+    /** 取走旧值并写回空，一次 CAS 完成（[takeAttachments] 用）。 */
+    private fun <T> MutableStateFlow<List<T>>.drain(): List<T> {
+        while (true) {
+            val cur = value
+            if (compareAndSet(cur, emptyList())) return cur
+        }
+    }
+
     /** 整体替换。用户输入、草稿回填、定时任务代发都用它。 */
     fun set(text: String) {
         _input.value = text
@@ -78,10 +99,10 @@ internal class ComposerState(initialText: String = "") {
      * 原子读改写。追加类操作（语音 / @ 补全 / 提示词）必须走这里，理由见类注释。
      *
      * @param transform 拿到当前值、返回新值；**不要**在 transform 里做副作用
-     *   （`update` 在竞争下可能重跑多次）。
+     *   （CAS 失败会重跑，可能执行多次）。
      */
     fun edit(transform: (String) -> String) {
-        _input.update(transform)
+        _input.casUpdate(transform)
     }
 
     /** 清空文本（发送成功后）。 */
@@ -92,19 +113,19 @@ internal class ComposerState(initialText: String = "") {
     /** 追加待发图片。空列表直接返回——无意义的 emit 会让输入区白重组一次。 */
     fun addImages(urls: List<String>) {
         if (urls.isEmpty()) return
-        _pendingImages.update { it + urls }
+        _pendingImages.casUpdate { it + urls }
     }
 
     fun removeImage(url: String) {
-        _pendingImages.update { list -> list.filter { it != url } }
+        _pendingImages.casUpdate { list -> list.filter { it != url } }
     }
 
     fun addFile(file: PendingFile) {
-        _pendingFiles.update { it + file }
+        _pendingFiles.casUpdate { it + file }
     }
 
     fun removeFile(name: String) {
-        _pendingFiles.update { list -> list.filterNot { it.name == name } }
+        _pendingFiles.casUpdate { list -> list.filterNot { it.name == name } }
     }
 
     /** 一次 [takeAttachments] 的产物。 */
@@ -115,10 +136,10 @@ internal class ComposerState(initialText: String = "") {
      *
      * 为什么合成一个调用：原来是「读 `_pendingImages.value`」+「`= emptyList()`」两步。
      * 中间若因取消/异常提前返回，附件会留在输入区——用户看着图片还在，但消息已经发出了。
-     * `getAndUpdate` 把「拿到旧值」与「写回空」压成一次 CAS，不存在这个窗口。
+     * [drain] 把「拿到旧值」与「写回空」压成一次 CAS，不存在这个窗口。
      */
     fun takeAttachments(): Attachments = Attachments(
-        images = _pendingImages.getAndUpdate { emptyList() },
-        files = _pendingFiles.getAndUpdate { emptyList() },
+        images = _pendingImages.drain(),
+        files = _pendingFiles.drain(),
     )
 }
