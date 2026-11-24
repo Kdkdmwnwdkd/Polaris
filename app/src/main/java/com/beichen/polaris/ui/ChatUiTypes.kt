@@ -78,13 +78,8 @@ data class TestResult(
     val action: RecoveryAction = RecoveryAction.NONE
 )
 
-/**
- * 功能五（P1-4）：待发文件——文件名 + 已提取的正文文本。
- *
- * 文本在读取时就抽好（读文件是 IO 重活），发送时只是字符串拼接；
- * UI 只负责展示文件名与移除，不碰解析细节。
- */
-data class PendingFile(val name: String, val text: String)
+// PendingFile 已随 ComposerState 搬到 ui/ComposerState.kt——它是那个类的唯一 owner，
+// 放一起才能让那边的编译闭包只剩 kotlinx.coroutines（变异门禁要单独编它）。同包，引用方无需改 import。
 
 /**
  * 功能五（P1-4）：文件附件处理结果——三条成功路径 + 一条失败路径。

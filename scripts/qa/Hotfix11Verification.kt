@@ -207,8 +207,10 @@ private fun testImageAttachment() {
     }
     check("I5 发送时带走附件并清空输入区") {
         val body = vm.substringAfter("fun send()")
-        assertContains("I5", body, "val images = _pendingImages.value")
-        assertContains("I5", body, "_pendingImages.value = emptyList()")
+        // 批 1 起「取走 + 清空」原子合并到 ComposerState.takeAttachments，
+        // 这里只证明 send 走的是它；「真的清空了」由 ComposerStateTest 守（变异 CS2）。
+        assertContains("I5", body, "val (images, files) = composer.takeAttachments()")
+        assertContains("I5", body, "composer.clear()")
         // W-46 起 send 把历史摊平后作为第三参传入（多轮对话），断言随之更新
         assertContains("I5", body, "loop.send(fullInput, images, priorMessages)")
     }
@@ -414,12 +416,14 @@ private fun testFileAttachment() {
     val vm = readSource("ui/ChatViewModel.kt")
     val chat = readSource("ui/ChatScreen.kt")
 
-    // 3.1 第五批：六个零逻辑契约（含 PendingFile / FileAttachResult）搬到了 ui/ChatUiTypes.kt。
+    // 3.1 第五批：六个零逻辑契约（含 FileAttachResult）搬到了 ui/ChatUiTypes.kt。
     // 断言跟着搬读点，理由同下面 F23–F27：守的是「类型齐备」而不是「类型写在哪个文件」。
     val uiTypes = readSource("ui/ChatUiTypes.kt")
+    // 批 1：PendingFile 随 ComposerState 迁到 ui/ComposerState.kt（同包），读点跟着走。
+    val composerSrc = readSource("ui/ComposerState.kt")
 
     check("N1 文件附件类型与结果类型齐备（三成功路径 + 一失败路径）") {
-        assertContains("N1", uiTypes, "data class PendingFile(val name: String, val text: String)")
+        assertContains("N1", composerSrc, "data class PendingFile(val name: String, val text: String)")
         assertContains("N1", uiTypes, "sealed interface FileAttachResult")
         assertContains("N1", uiTypes, "data class Text(val name: String, val chars: Int)")
         assertContains("N1", uiTypes, "data class Images(val name: String, val pages: Int)")
@@ -854,7 +858,7 @@ private fun testPromptLibrary() {
         assertContains("S6", vm, "fun deletePrompt(id: String): PromptDeleteResult")
         assertContains("S6", vm, "fun duplicatePromptAsCustom(id: String): String?")
         assertContains("S6", vm, "fun insertPromptIntoInput(content: String)")
-        assertContains("S6", vm, "input.value = if (current.isBlank()) content else \"\$current\\n\$content\"")
+        assertContains("S6", vm, "composer.edit { current -> if (current.isBlank()) content else \"\$current\\n\$content\" }")
     }
     check("S7 输入栏唤起：闪电按钮 + 选择器（点选填入/管理进全功能页）") {
         assertContains("S7", chat, "onOpenPrompts = { showPromptPicker = true }")

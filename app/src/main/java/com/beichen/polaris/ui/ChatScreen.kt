@@ -588,9 +588,9 @@ fun ChatScreen(
                 MentionSuggestionBar(
                     files = suggestions,
                     onPick = { path ->
-                        vm.input.value = com.beichen.polaris.core.text.MentionLogic.replaceTailWith(
-                            vm.input.value, path
-                        )
+                        // 读改写交给 viewModel 原子完成：自己先读 value 再写回去，
+                        // 中间用户若还在打字，后写会覆盖先写（W-31 的老毛病）。
+                        vm.editInput { com.beichen.polaris.core.text.MentionLogic.replaceTailWith(it, path) }
                     }
                 )
             }
@@ -608,7 +608,7 @@ fun ChatScreen(
             running = running,
             images = pendingImages,
             files = pendingFiles,
-            onTextChange = { vm.input.value = it },
+            onTextChange = { vm.setInput(it) },
             onSend = {
                 // v6：模型没配就把请求打到空地址上，用户只会看到一句「调用失败」。
                 // 这里直接说明原因并送他到配置页——比让他自己猜快得多。
@@ -645,7 +645,7 @@ fun ChatScreen(
         LocalVoiceSheet(
             onClose = { localVoice = false },
             onSubmit = { said ->
-                vm.input.value = SpeechLogic.appendTo(vm.input.value, said)
+                vm.editInput { SpeechLogic.appendTo(it, said) }
                 localVoice = false
             },
         )

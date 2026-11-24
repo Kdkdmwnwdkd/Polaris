@@ -98,19 +98,35 @@ interface ChatApprovalActions {
 /**
  * 输入区。
  *
- * [input] 暴露成 [MutableStateFlow] 而不是 `StateFlow` + `onInputChange`：输入框
- * 需要「读到当前值再追加」（语音追加、@ 文件补全都是读改写），拆成回调会让这两处
- * 必须各带一份本地副本，与真实值不同步——这是 W-31 的原始缺陷。
+ * [input] 是**只读**的 [StateFlow]，写必须走 [setInput] / [editInput]。
+ *
+ * 为什么不再暴露 [MutableStateFlow]：原先那样做，是为了让「读到当前值再追加」
+ * （语音追加、@ 文件补全）能一行写完。代价是 UI 层拿到引用就能随意赋值——
+ * 这恰恰是 W-31 的原始缺陷：界面持有一份本地副本，与真实值不同步。
+ *
+ * 现在读改写由 [editInput] 在 owner 内部用 CAS 一次完成：调用方只提供变换函数，
+ * 不需要（也无法）持有副本，原子性由实现保证。
  */
 @Stable
 interface ChatComposer {
-    val input: MutableStateFlow<String>
+    val input: StateFlow<String>
     val pendingImages: StateFlow<List<String>>
     val pendingFiles: StateFlow<List<PendingFile>>
     suspend fun attachImageFromUri(uri: Uri): Boolean
     suspend fun attachFileFromUri(uri: Uri): FileAttachResult
     fun removePendingImage(url: String)
     fun removePendingFile(name: String)
+
+    /** 整体替换输入框文本（用户输入、草稿回填）。 */
+    fun setInput(text: String)
+
+    /**
+     * 原子读改写：拿到当前文本、返回新文本。
+     *
+     * 语音追加、@ 文件补全、提示词插入都走这里。**不要在 transform 里做副作用**——
+     * 并发下可能重跑多次。
+     */
+    fun editInput(transform: (String) -> String)
 }
 
 /** 单条消息上的工具：翻译、收藏。 */

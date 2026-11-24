@@ -318,6 +318,21 @@ GROUPS = {
             "com.beichen.polaris.core.agent.ToolScopeTest",
         ],
     },
+    # 输入区状态收口（2026-11-24，批 1）。
+    #
+    # 零依赖组：ComposerState.kt 只 import kotlinx.coroutines——PendingFile 特意与它同文件
+    # 定义，就是为了让这个闭包不带 ChatUiTypes 那条 ApprovalGrant 链。编两个文件不到两秒。
+    #
+    # 为什么值得单独成组：它守的两条判据（原子读改写 / 取走即清空）用 grep 完全测不出来。
+    # 非原子的 `edit` 在单线程下与原子版**逐字节相同**，只有并发才暴露；而它一旦退回去，
+    # W-31（界面本地副本与真实值不同步）就会以「刚说的话没了」复发。
+    "composer": {
+        "sources": [
+            "app/src/main/java/com/beichen/polaris/ui/ComposerState.kt",
+            "app/src/test/java/com/beichen/polaris/ui/ComposerStateTest.kt",
+        ],
+        "classes": ["com.beichen.polaris.ui.ComposerStateTest"],
+    },
 }
 
 # 被测源文件。收录判据只有一条：**这段判定有能在 30 秒内跑完的真断言**。
@@ -1363,6 +1378,34 @@ MUTATIONS = [
         "old": "        return ToolRegistry().apply { plan.visible.forEach { register(it) } }",
         "new": "        return ToolRegistry().apply { plan.visible.take(1).forEach { register(it) } }",
         "expect": ["S2", "S3"],
+    },
+    {
+        # 这是 W-31 的原始形态：读到当前值、在调用方算好、整体写回。单线程下完全等价，
+        # 并发下丢掉交错期间别人的写入——用户看到「刚说的话没了」，且没有任何报错。
+        "id": "CS1 edit 退化成非原子读改写（W-31 复发）",
+        "group": "composer",
+        "file": "app/src/main/java/com/beichen/polaris/ui/ComposerState.kt",
+        "old": "        _input.update(transform)",
+        "new": "        _input.value = transform(_input.value)",
+        "expect": ["并发 edit 不丢更新"],
+    },
+    {
+        # 只读不清：发送时「拿走了」但输入区还留着，附件会随下一次发送重复带上。
+        "id": "CS2 takeAttachments 只读不清（附件留在输入区、下次重复发）",
+        "group": "composer",
+        "file": "app/src/main/java/com/beichen/polaris/ui/ComposerState.kt",
+        "old": "        images = _pendingImages.getAndUpdate { emptyList() },",
+        "new": "        images = _pendingImages.value,",
+        "expect": ["takeAttachments 取走并清空"],
+    },
+    {
+        # 与 CS1 同构，但走图片路径：PDF 转图与相册选图并发时「选了三张只进去两张」。
+        "id": "CS3 addImages 退回两步写（并发选图丢图）",
+        "group": "composer",
+        "file": "app/src/main/java/com/beichen/polaris/ui/ComposerState.kt",
+        "old": "        _pendingImages.update { it + urls }",
+        "new": "        _pendingImages.value = _pendingImages.value + urls",
+        "expect": ["并发 addImages 不丢图片"],
     },
 ]
 

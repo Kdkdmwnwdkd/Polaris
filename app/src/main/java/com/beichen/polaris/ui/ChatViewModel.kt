@@ -340,7 +340,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 isRunning = isRunning.value,
                 // 输入框非空 = 用户正在打字。自动续跑要往输入框写「继续」，
                 // 那会把敲了一半的字清掉——宁可这一轮不跑。
-                inputBlank = input.value.isBlank(),
+                inputBlank = composer.text.isBlank(),
                 // 结局未知的写操作数。不传这个字段，判定表就看不见「可能已经写过」，
                 // 自动续跑会把同一件事做第二遍——不报错，但用户的文件被改了两次。
                 unknownWrites = recovery.unknownWrites,
@@ -355,7 +355,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         }
         agentRunStateStore.markAutoResumeAttempt()
         AgentLogger.i("Chat", "自动续跑：会话 ${state?.sessionId?.take(8)} 第 ${state?.stepIndex} 步")
-        input.value = AUTO_RESUME_TEXT
+        composer.set(AUTO_RESUME_TEXT)
         send()
     }
 
@@ -1138,7 +1138,12 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 是否正在测试连接：UI 用它给按钮显示加载态，避免重复点击。状态在 [ConnectionProbe]。 */
     override val testing: StateFlow<Boolean> get() = connectionProbe.testing
 
-    override val input = MutableStateFlow("")
+    /** 输入区（文本 / 待发图片 / 待发文件）的唯一 owner；为什么这样收，见 [ComposerState]。 */
+    private val composer = ComposerState()
+
+    override val input: StateFlow<String> = composer.input
+    override fun setInput(text: String) = composer.set(text)
+    override fun editInput(transform: (String) -> String) = composer.edit(transform)
 
     override val isRunning: StateFlow<Boolean> = generation.running
     override val generatingConvId: StateFlow<String?> = generation.generating
@@ -1160,7 +1165,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     private val workflowFacade = WorkflowFacade(
         workflowStore,
         isRunning = { isRunning.value },
-        runPrompt = { prompt -> input.value = prompt; send() },
+        runPrompt = { prompt -> composer.set(prompt); send() },
     )
 
     override val workflows: StateFlow<List<Workflow>> get() = workflowFacade.workflows
@@ -1423,7 +1428,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         conversationStore.truncateAfter(_activeConversationId.value, turnIndex)
         reloadActiveMessages()
         refreshConversations()
-        input.value = t
+        composer.set(t)
         send()
     }
 
@@ -1998,14 +2003,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 复用 importStatus 展示一次性提示（如“已复制到剪贴板”）。 */
     fun setImportStatus(msg: String) { _importStatus.value = msg }
 
-    /**
-     * 功能四（P0-2）：等待发送的图片（data URL 列表）。
-     *
-     * 选图在 UI 线程拿 Uri，转 base64 是重活——放 IO 线程由 [attachImageFromUri] 处理，
-     * 完成后统一落到这里，发送时一次性带走。UI 只读这个流渲染缩略图，不碰编码细节。
-     */
-    private val _pendingImages = MutableStateFlow<List<String>>(emptyList())
-    override val pendingImages: StateFlow<List<String>> = _pendingImages.asStateFlow()
+    /** 功能四（P0-2）：待发图片（只读投影；状态与写入口在 [ComposerState]）。 */
+    override val pendingImages: StateFlow<List<String>> get() = composer.pendingImages
 
     /**
      * 功能四（P0-2）：把相册选中的图片读成 data URL 挂到待发列表。
@@ -2017,7 +2016,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         runCatching {
             // 审计 F27：待发图片此前无数量上限。每张 base64 约 200~400KB，
             // 连选 30 张就是 10MB 常驻 StateFlow，且整个拼进请求体——供应商多半直接拒。
-            if (_pendingImages.value.size >= AttachmentIo.MAX_PENDING_IMAGES) return@runCatching false
+            if (composer.imageCount >= AttachmentIo.MAX_PENDING_IMAGES) return@runCatching false
             // 审计 F26：修前是 decodeStream 直接解原图。一张 108MP 的照片是
             // 12000×9000×4B ≈ 432MB 的位图，decode 当场 OOM——scaleDown 根本没机会执行
             // （它注释里写的「两阶段解码在调用方已完成」其实并不存在）。
@@ -2033,7 +2032,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 bitmap.recycle()
             }
             val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            _pendingImages.value = _pendingImages.value + "data:image/jpeg;base64,$encoded"
+            composer.addImages(listOf("data:image/jpeg;base64,$encoded"))
             true
         }.getOrDefault(false)
     }
@@ -2094,22 +2093,10 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     }
 
     /** 功能四（P0-2）：移除待发图片。 */
-    override fun removePendingImage(url: String) {
-        _pendingImages.value = _pendingImages.value.filter { it != url }
-    }
+    override fun removePendingImage(url: String) = composer.removeImage(url)
 
-    /**
-     * 功能五（P1-4）：待发**文件**——「＋」里除了图片还能发文档。
-     *
-     * 三种处理路径（不新增任何依赖，全走系统 API）：
-     *  ① 文本类（txt/md/json/csv/代码…）→ 直读文本，发送时作为附件块拼进消息；
-     *  ② PDF → `PdfRenderer` 渲染前 ≤[MAX_PDF_PAGES] 页为图片，并入图片链路（视觉得看）；
-     *  ③ DOCX → 解 zip 抽 `word/document.xml` 里的 `<w:t>` 文本（纯系统 zip + 正则）。
-     * 其它二进制格式明确拒绝并给出可读原因——**不做「静默忽略」**，
-     * 用户点了「＋」却什么都没发生是最差的反馈。
-     */
-    private val _pendingFiles = MutableStateFlow<List<PendingFile>>(emptyList())
-    override val pendingFiles: StateFlow<List<PendingFile>> = _pendingFiles.asStateFlow()
+    /** 功能五（P1-4）：待发文件（只读投影）。分派见 [attachFileFromUri] 的 ①②③，其余格式明确拒绝。 */
+    override val pendingFiles: StateFlow<List<PendingFile>> get() = composer.pendingFiles
 
     /** 功能五（P1-4）：读取文件并按其类型挂到待发清单；返回精确结果供 UI 反馈。 */
     override suspend fun attachFileFromUri(uri: Uri): FileAttachResult = withContext(Dispatchers.IO) {
@@ -2121,7 +2108,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 ext == "pdf" -> {
                     // 审计 F27：PDF 一次产出最多 5 张，必须与已有待发图共用同一个额度，
                     // 否则「先选 8 张图，再发一个 5 页 PDF」就能绕过上限。
-                    val room = (AttachmentIo.MAX_PENDING_IMAGES - _pendingImages.value.size).coerceAtLeast(0)
+                    val room = (AttachmentIo.MAX_PENDING_IMAGES - composer.imageCount).coerceAtLeast(0)
                     if (room == 0) {
                         FileAttachResult.Failed("最多同时发 $AttachmentIo.MAX_PENDING_IMAGES 张图片，请先移除几张")
                     } else {
@@ -2129,7 +2116,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                         if (images.isEmpty()) {
                             FileAttachResult.Failed("PDF 打开失败或没有可渲染页面")
                         } else {
-                            _pendingImages.value = _pendingImages.value + images
+                            composer.addImages(images)
                             FileAttachResult.Images(name, images.size)
                         }
                     }
@@ -2141,7 +2128,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     if (text.isBlank()) {
                         FileAttachResult.Failed("DOCX 里没有提取到文字（可能是纯图片文档）")
                     } else {
-                        _pendingFiles.value = _pendingFiles.value + PendingFile(name, text.take(MAX_FILE_CHARS))
+                        composer.addFile(PendingFile(name, text.take(MAX_FILE_CHARS)))
                         FileAttachResult.Text(name, text.length)
                     }
                 }
@@ -2152,7 +2139,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     if (text.isNullOrBlank()) {
                         FileAttachResult.Failed("文件为空或无法读取")
                     } else {
-                        _pendingFiles.value = _pendingFiles.value + PendingFile(name, text)
+                        composer.addFile(PendingFile(name, text))
                         FileAttachResult.Text(name, text.length)
                     }
                 }
@@ -2167,9 +2154,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     }
 
     /** 功能五（P1-4）：移除待发文件。 */
-    override fun removePendingFile(name: String) {
-        _pendingFiles.value = _pendingFiles.value.filterNot { it.name == name }
-    }
+    override fun removePendingFile(name: String) = composer.removeFile(name)
 
     /** ContentResolver 查显示名（拿不到就回落 null，由调用方兜底命名）。 */
     private fun queryDisplayName(uri: Uri): String? = runCatching {
@@ -2210,7 +2195,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     }
 
     override fun send() {
-        val text = input.value.trim()
+        val text = composer.text.trim()
         if (text.isBlank()) return
         if (isRunning.value) {
             // 打断仲裁（core/voice/InterruptPolicy）。
@@ -2257,12 +2242,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         }
         // W-8 P1-C / 2026-11-22：新回合重置审批记账（截图缓存 + 超时标志），跨回合不继承
         approvalTurn.reset()
-        // 功能四（P0-2）/ 功能五（P1-4）：先摘走待发附件并清空，避免本轮发出后仍留在输入区
-        val images = _pendingImages.value
-        _pendingImages.value = emptyList()
-        val files = _pendingFiles.value
-        _pendingFiles.value = emptyList()
-        input.value = ""
+        // 功能四（P0-2）/ 功能五（P1-4）：摘走待发附件（"取走 + 清空"在 takeAttachments 内一次完成）
+        val (images, files) = composer.takeAttachments()
+        composer.clear()
         // 功能五（P1-8）：发送成功即草稿使命结束——清掉该会话草稿，
         // 否则切走再回来输入框会复活刚发过的原文（用户视角：见鬼了）
         draftStore.remove(_activeConversationId.value)
@@ -2680,8 +2662,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      * 选个提示词补个尾巴」；覆盖会静默毁掉他已打的字。空框则直接填入。
      */
     override fun insertPromptIntoInput(content: String) {
-        val current = input.value
-        input.value = if (current.isBlank()) content else "$current\n$content"
+        composer.edit { current -> if (current.isBlank()) content else "$current\n$content" }
     }
 
     /* -------------------- 功能五（P1-4b）：全局备份 / 恢复 -------------------- */
@@ -2725,8 +2706,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         drafts = draftStore,
         activeId = { _activeConversationId.value },
         setActiveId = { _activeConversationId.value = it },
-        inputText = { input.value },
-        setInputText = { input.value = it },
+        inputText = { composer.text },
+        setInputText = { composer.set(it) },
         running = { isRunning.value },
         ownerId = { generation.owner },
         onConversationLoaded = { id -> replaceUiItems(projection.loadOf(id)) },
@@ -2735,14 +2716,30 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         onFreshConversation = { resetToolGroups() },
     )
 
-    /** 恢复完成后的 UI 重载：会话列表 / 当前会话 / 记忆 / 档案流 / 提示词。 */
+    /**
+     * 恢复完成后的 UI 重载。四组状态分属不同批次（提示词=杂项、会话=批 3、档案=批 4），
+     * 每批只改自己那个 reloadXxx。顺序不可换：`editor.adopt` 会重建消息列表。
+     */
     private fun onBackupRestored(items: List<PromptItem>) {
-        _prompts.value = items
-        refreshConversations()
-        // adopt 而非 switchTo：恢复把整份会话表换掉了，旧 id 可能已不存在，
-        // 把输入框内容存回旧 id 只会在 drafts.json 里留一条读不出来的孤儿草稿。
-        editor.adopt(conversationStore.ensureNotEmpty())
+        reloadPrompts(items)
+        reloadConversations()
         refreshMemories()
+        reloadProfiles()
+    }
+
+    /** 恢复时提示词用**备份里的那份**，不是重读 store——store 可能还没落盘。 */
+    private fun reloadPrompts(items: List<PromptItem>) {
+        _prompts.value = items
+    }
+
+    /** 会话表整体替换后重建列表并 adopt：adopt 而非 switchTo，旧 id 可能已不存在。 */
+    private fun reloadConversations() {
+        refreshConversations()
+        editor.adopt(conversationStore.ensureNotEmpty())
+    }
+
+    /** 档案表与当前档案 id 必须一起换——只换一个会出现「选中的档案不存在」。 */
+    private fun reloadProfiles() {
         _profiles.value = configStore.loadProfiles()
         _activeProfileId.value = configStore.loadActiveId().orEmpty()
     }

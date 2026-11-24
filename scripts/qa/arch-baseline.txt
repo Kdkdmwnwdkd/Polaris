@@ -188,7 +188,11 @@
 # `ApprovalBridge.publish` + `withdraw`，加 init 里 1 行 bind。
 # 这次是**必须留在 ViewModel 里**的：只有它知道「这次要不要问」和「记住了什么」，
 # 挪出去就等于把决策权分给第二处。可回收的是旁边的档位判定（已在 ApprovalTier）。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3221
+# 2026-11-24 下调（3221 → 3218）：批 1 抽出 ComposerState——`input` / 待发图片 / 待发文件
+# 三份状态、10 个写点收敛到命名方法。只降 3 行是意料之中：被搬走的是「谁拿到引用谁就能写」
+# 这个事实，不是大段代码；Android 解码仍留在 VM（AttachmentIo 那条链本批不动）。
+# 按裁决书 §3.2「降行是结果，不是考核项」，**没有**为凑数顺手搬别的东西。
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3218
 # 2026-11-14 重记（ChatScreen +45）：语音输入的能力预检与编排。
 # 增量分布：
 #   ① 能力预检：约 12 行（含 8 行注释）。系统识别页一旦弹出，用户就进入了一个
