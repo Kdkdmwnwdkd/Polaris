@@ -724,10 +724,10 @@ class RealAgentLoop(
         // ConcurrentModificationException。这里按名字补一条，把它归入串行（`__find_tools` 纯读，并行无害）。
         val hasMutation = turnRegistry.batchHasMutation(calls) ||
             calls.any { it.name == KernelExposure.USE_TOOLS }
-        AgentLogger.i(
-            "AgentLoop",
-            "本批 ${calls.size} 个调用：hasMutation=$hasMutation（${if (hasMutation) "串行" else "并行"}）"
-        )
+        // 派发基线（保序的直接证据）：这一行由父协程**单线程**写，块序即调用序；
+        // 而并行时 `tool.start` 由各协程并发发、到达顺序不可靠。两者的对照才能判「保序」——
+        // 没有基线时只能说「结果列表保序」，说不出「派发本身保序」。拼装在 [dispatchLine]。
+        AgentLogger.i("AgentLoop", dispatchLine(step, calls.map { it.id }, hasMutation))
         // R1：带上 turn/step——执行器要在审批之后、真正动手之前记「越过执行边界」
         // A-2：同时带上回合截止，让每个工具调用的等待被裁剪到「回合还剩多少」以内
         val executor = toolExecutor(turnRegistry, turn, step, turnDeadlineMs)

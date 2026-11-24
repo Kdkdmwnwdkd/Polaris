@@ -15,6 +15,7 @@
 
 import com.beichen.polaris.core.*
 import com.beichen.polaris.core.agent.RealAgentLoop
+import com.beichen.polaris.core.agent.dispatchLine
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -391,6 +392,65 @@ private suspend fun testT03Concurrency() = runBlocking {
         )
         loop.send("x")
         assertEquals("serial order", listOf("read", "write", "read"), order)
+    }
+    check("派发遥测：整行拼装（顺序 / 模式 / 短 id）") {
+        // 断言纯函数的**整行输出**：格式一改就红。比对「日志里包含某段字符串」
+        // 强——后者在实现搬家的重构里照样绿，等于没验。
+        assertEquals(
+            "parallel",
+            "派发 step=1 本批 2 个：hasMutation=false（并行） order=[c0,c1]",
+            dispatchLine(1, listOf("c0", "c1"), hasMutation = false)
+        )
+        assertEquals(
+            "serial",
+            "派发 step=3 本批 2 个：hasMutation=true（串行） order=[c0,c1]",
+            dispatchLine(3, listOf("c0", "c1"), hasMutation = true)
+        )
+        // 短 id 只留 10 位：真实 id 前 6 位全是 `call_0`，截太短会同批重名
+        assertEquals(
+            "short id",
+            "派发 step=0 本批 1 个：hasMutation=false（并行） order=[call_00_ny]",
+            dispatchLine(0, listOf("call_00_ny3UxcMRXPYSqmrW54W09467"), hasMutation = false)
+        )
+    }
+    check("派发遥测：并行与串行两条路径都真的写日志") {
+        fun dispatched(): Int =
+            AgentLogger.recent(200).count { it.message.startsWith("派发 step=") }
+        val before = dispatched()
+        val readReg = ToolRegistry().apply {
+            register(FakeTool("r0", readOnly = true))
+            register(FakeTool("r1", readOnly = true))
+        }
+        RealAgentLoop(
+            llmProvider = {
+                FakeLlm(
+                    listOf(
+                        AssistantMessage("", listOf(ToolCall("c0", "r0", argsOf()), ToolCall("c1", "r1", argsOf()))),
+                        AssistantMessage("done")
+                    )
+                )
+            },
+            registry = readReg, maxParallelTools = 5, providerRetry = 0
+        ).send("x")
+        val afterParallel = dispatched()
+        assertTrue("parallel wrote (before=$before after=$afterParallel)", afterParallel > before)
+
+        val writeReg = ToolRegistry().apply {
+            register(FakeTool("read", readOnly = true))
+            register(FakeTool("write", readOnly = false))
+        }
+        RealAgentLoop(
+            llmProvider = {
+                FakeLlm(
+                    listOf(
+                        AssistantMessage("", listOf(ToolCall("c0", "read", argsOf()), ToolCall("c1", "write", argsOf()))),
+                        AssistantMessage("done")
+                    )
+                )
+            },
+            registry = writeReg, maxParallelTools = 5, providerRetry = 0
+        ).send("x")
+        assertTrue("serial wrote", dispatched() > afterParallel)
     }
 }
 
