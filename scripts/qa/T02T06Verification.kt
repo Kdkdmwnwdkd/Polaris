@@ -414,43 +414,50 @@ private suspend fun testT03Concurrency() = runBlocking {
         )
     }
     check("派发遥测：并行与串行两条路径都真的写日志") {
+        // 先清空缓冲：只数本次产生的行。T02T06 跑了四十多个用例，日志早已把
+        // recent(200) 的窗口挤满——按窗口计数会「明明写了却数不到」。
+        AgentLogger.clear()
         fun dispatched(): Int =
-            AgentLogger.recent(200).count { it.message.startsWith("派发 step=") }
-        val before = dispatched()
+            AgentLogger.recent(500).count { it.message.startsWith("派发 step=") }
         val readReg = ToolRegistry().apply {
             register(FakeTool("r0", readOnly = true))
             register(FakeTool("r1", readOnly = true))
         }
-        RealAgentLoop(
-            llmProvider = {
-                FakeLlm(
-                    listOf(
-                        AssistantMessage("", listOf(ToolCall("c0", "r0", argsOf()), ToolCall("c1", "r1", argsOf()))),
-                        AssistantMessage("done")
+        val e1 = runCatching {
+            RealAgentLoop(
+                llmProvider = {
+                    FakeLlm(
+                        listOf(
+                            AssistantMessage("", listOf(ToolCall("c0", "r0", argsOf()), ToolCall("c1", "r1", argsOf()))),
+                            AssistantMessage("done")
+                        )
                     )
-                )
-            },
-            registry = readReg, maxParallelTools = 5, providerRetry = 0
-        ).send("x")
-        val afterParallel = dispatched()
-        assertTrue("parallel wrote (before=$before after=$afterParallel)", afterParallel > before)
+                },
+                registry = readReg, maxParallelTools = 5, providerRetry = 0
+            ).send("x")
+        }.exceptionOrNull()
+        assertTrue("parallel send threw: ${e1?.javaClass?.simpleName}: ${e1?.message}", e1 == null)
+        assertEquals("parallel wrote once", 1, dispatched())
 
         val writeReg = ToolRegistry().apply {
             register(FakeTool("read", readOnly = true))
             register(FakeTool("write", readOnly = false))
         }
-        RealAgentLoop(
-            llmProvider = {
-                FakeLlm(
-                    listOf(
-                        AssistantMessage("", listOf(ToolCall("c0", "read", argsOf()), ToolCall("c1", "write", argsOf()))),
-                        AssistantMessage("done")
+        val e2 = runCatching {
+            RealAgentLoop(
+                llmProvider = {
+                    FakeLlm(
+                        listOf(
+                            AssistantMessage("", listOf(ToolCall("c0", "read", argsOf()), ToolCall("c1", "write", argsOf()))),
+                            AssistantMessage("done")
+                        )
                     )
-                )
-            },
-            registry = writeReg, maxParallelTools = 5, providerRetry = 0
-        ).send("x")
-        assertTrue("serial wrote", dispatched() > afterParallel)
+                },
+                registry = writeReg, maxParallelTools = 5, providerRetry = 0
+            ).send("x")
+        }.exceptionOrNull()
+        assertTrue("serial send threw: ${e2?.javaClass?.simpleName}: ${e2?.message}", e2 == null)
+        assertEquals("serial wrote too", 2, dispatched())
     }
 }
 
