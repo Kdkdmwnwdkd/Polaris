@@ -2195,8 +2195,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     }
 
     override fun send() {
-        val text = composer.text.trim()
-        if (text.isBlank()) return
+        if (!composer.canSend()) return // 纯附件也能发：判据与发送键同源（ComposerState.canSend）
+        val text = composer.text.trim().ifBlank { "［已发送附件］" } // 占位：空气泡没高度，落盘后看不出
         if (isRunning.value) {
             // 打断仲裁（core/voice/InterruptPolicy）。
             //

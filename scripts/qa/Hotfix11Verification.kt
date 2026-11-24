@@ -860,10 +860,9 @@ private fun testPromptLibrary() {
         assertContains("S6", vm, "fun insertPromptIntoInput(content: String)")
         assertContains("S6", vm, "composer.edit { current -> if (current.isBlank()) content else \"\$current\\n\$content\" }")
     }
-    check("S7 输入栏唤起：闪电按钮 + 选择器（点选填入/管理进全功能页）") {
-        assertContains("S7", chat, "onOpenPrompts = { showPromptPicker = true }")
-        assertContains("S7", chat, "private fun PromptButton(enabled: Boolean, onClick: () -> Unit)")
-        assertContains("S7", chat, "contentDescription = \"快捷指令\"")
+    check("S7 输入栏唤起：快捷指令已并入「＋」菜单（不再单占一个圆钮）+ 选择器") {
+        assertContains("S7", chat, "onOpenPrompts = { showAttachMenu = false; showPromptPicker = true }")
+        assertContains("S7", chat, "title = \"快捷指令\"")
         assertContains("S7", chat, "vm.insertPromptIntoInput(item.content)")
         assertContains("S7", picker, "fun PromptPickerDialog(")
         assertContains("S7", picker, "onPick: (PromptItem) -> Unit")

@@ -67,6 +67,22 @@ internal class ComposerState(initialText: String = "") {
     /** 待发图片张数——上限判定用，避免把整张列表搬出来只为读个 size。 */
     val imageCount: Int get() = _pendingImages.value.size
 
+    /** 有没有待发附件（图片或文件）。 */
+    fun hasAttachments(): Boolean =
+        _pendingImages.value.isNotEmpty() || _pendingFiles.value.isNotEmpty()
+
+    /**
+     * 能不能发：文字与附件**任一**非空即可。
+     *
+     * 旧实现两处都只看文字（`text.isBlank()` 早退 + 发送键 `enabled = text.isNotBlank()`），
+     * 于是「只选一张图、不打字」时发送键一直是灰的——用户反馈「单纯的文件或图片不让发」。
+     * 只发图/只发文件本该是正常用法（看图问一句可以不打字，发个 txt 让它读也一样）。
+     *
+     * 判据放这里而不是 UI 或 ViewModel 各写一遍：两处各写一遍迟早漂移，
+     * 而漂移的表现是「键亮了但按下去没反应」（或反过来），最难查。
+     */
+    fun canSend(): Boolean = _input.value.isNotBlank() || hasAttachments()
+
     /**
      * 用 CAS 循环实现 `update`。
      *

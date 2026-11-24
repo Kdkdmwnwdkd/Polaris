@@ -627,7 +627,6 @@ fun ChatScreen(
             },
             onStop = { vm.stop() },
             onPickAttach = { showAttachMenu = true },
-            onOpenPrompts = { showPromptPicker = true },
             onVoiceInput = startVoiceInput,
             onRemoveImage = { vm.removePendingImage(it) },
             onRemoveFile = { vm.removePendingFile(it) },
@@ -708,6 +707,7 @@ fun ChatScreen(
             visible = visible,
             onPickImage = { showAttachMenu = false; pickImage.launch("image/*") },
             onPickFile = { showAttachMenu = false; pickFile.launch(arrayOf("*/*")) },
+            onOpenPrompts = { showAttachMenu = false; showPromptPicker = true },
             onDismiss = { showAttachMenu = false }
         )
     }
@@ -1781,7 +1781,6 @@ private fun ChatInputBar(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPickAttach: () -> Unit,
-    onOpenPrompts: () -> Unit,
     // W-30：语音输入（系统识别器）；运行中禁用
     onVoiceInput: () -> Unit,
     onRemoveImage: (String) -> Unit,
@@ -1826,6 +1825,8 @@ private fun ChatInputBar(
             // 功能四（P0-2）/ 功能五（P1-4）：待发附件（缩略图行 + 文件行，有才占位）
             if (images.isNotEmpty()) AttachedImagesRow(images, onRemoveImage)
             if (files.isNotEmpty()) AttachedFilesRow(files, onRemoveFile)
+            // 能否发送：文字或附件任一非空，与 ComposerState.canSend 是同一判据。
+            val canSend = text.isNotBlank() || images.isNotEmpty() || files.isNotEmpty()
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1836,13 +1837,14 @@ private fun ChatInputBar(
                     .padding(horizontal = AgentSpacing.space3),
                 verticalAlignment = Alignment.Bottom
             ) {
-                // 功能四（P0-2）/ 功能五（P1-4）：附件入口——「＋」圆按钮，运行中禁用
-                // （点开后再选「图片 / 文件」，不再直通相册）
-                AttachImageButton(enabled = !running, onClick = onPickAttach)
-                Spacer(Modifier.width(AgentSpacing.space2))
-                // 功能五（P1-7）：快捷指令入口——「⚡」圆按钮，运行中禁用
-                // （与 ＋ 同形制：输入栏不放两个异形按钮，视觉噪声翻倍）
-                PromptButton(enabled = !running, onClick = onOpenPrompts)
+                // 附件与快捷指令合并进「＋」的菜单：原先 ＋ 和 ⚡ 并排两个圆钮，
+                // 加号已足够表意，第二个图标只是把 320dp 宽的输入行又占掉一个触摸位。
+                RoundIconAction(
+                    icon = Icons.Outlined.Add,
+                    description = "添加图片、文件或快捷指令",
+                    enabled = !running,
+                    onClick = onPickAttach
+                )
                 Spacer(Modifier.width(AgentSpacing.space2))
                 // v5：输入框不再是一个灰底胶囊，而是「一条可以在上面写字的空白」。
                 //
@@ -1884,7 +1886,8 @@ private fun ChatInputBar(
                             }
                         }
                     )
-                    // W-30：语音输入——只在输入框为空时出现（不遮挡正在编辑的文本）
+                    // W-30：语音输入——只在输入框为空时出现（不遮挡正在编辑的文本）。
+                    // 有字时隐藏是设计不是缺陷：键盘自带语音输入，这只用于「空框直接说」。
                     if (text.isBlank() && !running) {
                         Box(
                             modifier = Modifier
@@ -1911,7 +1914,9 @@ private fun ChatInputBar(
                     // 而他不知道要这么做（发送键压根不在）。现在按发送 = 打断并发送
                     // （仲裁在 ChatViewModel.send 里，这里只负责让按钮够得着）。
                     // 输入为空时仍然只有停止键：那是「我不想等了」的最常见形态。
-                    if (text.isNotBlank()) {
+                    // 打断并发送：判据同 canSend，纯附件也算「有话说」——
+                    // 旧版这里只看文字，用户在生成中想发张图按住也发不出去。
+                    if (canSend) {
                         ChatSendButton(
                             enabled = true,
                             interrupting = true,
@@ -1922,7 +1927,7 @@ private fun ChatInputBar(
                     ChatStopButton(onClick = onStop)
                 } else {
                     ChatSendButton(
-                        enabled = text.isNotBlank(),
+                        enabled = canSend,
                         onClick = onSend
                     )
                 }
@@ -2040,6 +2045,7 @@ private fun AttachPickerDialog(
     visible: Boolean,
     onPickImage: () -> Unit,
     onPickFile: () -> Unit,
+    onOpenPrompts: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val spec = if (visible) AkMotionDialog else AkMotionExit
@@ -2065,7 +2071,7 @@ private fun AttachPickerDialog(
             ) {
                 Column(Modifier.padding(vertical = AgentSpacing.space4)) {
                     Text(
-                        text = "添加附件",
+                        text = "添加",
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.padding(horizontal = AgentSpacing.space6)
@@ -2083,6 +2089,14 @@ private fun AttachPickerDialog(
                         description = "PDF / DOCX / 文本类（txt、md、json、csv、代码等）",
                         onClick = onPickFile
                     )
+                    // 快捷指令原先是输入栏里独立的 ⚡ 圆钮，与 ＋ 并排各占一个触摸位。
+                    // 收进这里之后输入行只剩「＋ … 语音 发送」，宽度和视觉噪声都少一档。
+                    AkListItem(
+                        icon = Icons.Outlined.AutoAwesome,
+                        title = "快捷指令",
+                        description = "常用提示词填进输入框（带变量的会先让你填槽）",
+                        onClick = onOpenPrompts
+                    )
                 }
             }
         }
@@ -2090,13 +2104,19 @@ private fun AttachPickerDialog(
 }
 
 /**
- * 功能五（P1-7）：快捷指令入口（输入栏「⚡」圆按钮）。
+ * 输入栏的圆形图标按钮（现在是「＋」）。
  *
- * 与 [AttachImageButton] 同形制（touchTarget 圆底 surface-var，按压 0.97 微缩），
- * 只差图标与语义；运行中与附件按钮一同禁用——运行中选提示词会与在途请求抢输入框。
+ * 这套「触摸目标 44dp + 按压 0.97 微缩 + 禁用置灰 0.38」原先在 ＋ 与 ⚡ 里各写一遍，
+ * ⚡ 并进菜单后只剩一个调用点，但仍留成具名组件：形制约定写在注释里的那次，
+ * 三周后就会被下一个照抄 `IconButton` 的人悄悄改掉。
  */
 @Composable
-private fun PromptButton(enabled: Boolean, onClick: () -> Unit) {
+private fun RoundIconAction(
+    icon: ImageVector,
+    description: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
@@ -2119,41 +2139,8 @@ private fun PromptButton(enabled: Boolean, onClick: () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         Icon(
-            imageVector = Icons.Outlined.AutoAwesome,
-            contentDescription = "快捷指令",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp)
-        )
-    }
-}
-
-/** 功能四（P0-2）：附件入口圆按钮——「＋」图标，禁用时置灰。 */
-@Composable
-private fun AttachImageButton(enabled: Boolean, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.97f else 1f,
-        animationSpec = AkMotionPress
-    )
-    Box(
-        modifier = Modifier
-            .size(AgentDimens.touchTarget)
-            .scale(scale)
-            .clip(CircleShape)
-            .background(if (pressed) LocalAkColors.surface2 else Color.Transparent)
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                enabled = enabled,
-                onClick = onClick
-            )
-            .then(if (enabled) Modifier else Modifier.alpha(0.38f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = Icons.Outlined.Add,
-            contentDescription = "添加图片附件",
+            imageVector = icon,
+            contentDescription = description,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(20.dp)
         )

@@ -134,4 +134,41 @@ class ComposerStateTest {
         composer.removeFile("x.txt")
         assertEquals(listOf("y.txt"), composer.pendingFiles.value.map { it.name })
     }
+
+    /**
+     * 能不能发：四条组合。
+     *
+     * 真机反馈「单纯的文件或图片不让发」——旧实现两处都只看文字，于是选了图之后
+     * 发送键一直是灰的。这不是样式问题，是「有没有内容可发」的判定缺了附件那一半。
+     * 判据必须四条全覆盖：只补「有图就能发」而漏掉「空的时候仍不能发」，
+     * 会让一个空输入框也能发出空气泡。
+     */
+    @Test
+    fun `canSend 纯文字可发`() {
+        val composer = ComposerState()
+        composer.set("你好")
+        assertTrue(composer.canSend())
+    }
+
+    @Test
+    fun `canSend 只有图片可发`() {
+        val composer = ComposerState()
+        composer.addImages(listOf("data:image/jpeg;base64,AAA"))
+        assertTrue(composer.canSend())
+    }
+
+    @Test
+    fun `canSend 只有文件可发`() {
+        val composer = ComposerState()
+        composer.addFile(PendingFile("a.txt", "aaa"))
+        assertTrue(composer.canSend())
+    }
+
+    @Test
+    fun `canSend 全空不可发`() {
+        val composer = ComposerState()
+        assertTrue("空输入框不该能发", !composer.canSend())
+        composer.set("   ")
+        assertTrue("纯空白也算空", !composer.canSend())
+    }
 }

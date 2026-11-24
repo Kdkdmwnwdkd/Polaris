@@ -1407,6 +1407,16 @@ MUTATIONS = [
         "new": "        _pendingImages.value = _pendingImages.value + urls",
         "expect": ["并发 addImages 不丢图片"],
     },
+    {
+        # 真机反馈「单纯的文件或图片不让发」：canSend 只看文字，发送键永远是灰的。
+        # 这条变异之外，UI 侧还有三处 enabled 依赖同一判据（ChatScreen 的 canSend 局部量）。
+        "id": "CS4 canSend 退回只看文字（纯附件发不出去）",
+        "group": "composer",
+        "file": "app/src/main/java/com/beichen/polaris/ui/ComposerState.kt",
+        "old": "    fun canSend(): Boolean = _input.value.isNotBlank() || hasAttachments()",
+        "new": "    fun canSend(): Boolean = _input.value.isNotBlank()",
+        "expect": ["canSend 只有图片可发"],
+    },
 ]
 
 
