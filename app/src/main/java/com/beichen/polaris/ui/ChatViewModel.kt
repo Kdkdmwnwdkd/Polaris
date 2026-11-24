@@ -2714,6 +2714,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         onTranslationsStale = { _translations.value = emptyMap() },
         onListChanged = { refreshConversations() },
         onFreshConversation = { resetToolGroups() },
+        onAttachmentsDropped = ::dropComposerAttachments,
     )
 
     /**
@@ -2749,6 +2750,20 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         projection.reloadActive()
         // W-30：消息下标全变，旧译文清掉（否则会显示到别的消息下面）
         editor.noteMessagesRebuilt()
+    }
+
+    /**
+     * 换会话时丢弃待发附件，并告诉用户。
+     *
+     * 附件没有按会话的草稿存储（体积与备份代价，见 [ComposerState.dropAttachments]），
+     * 所以「切走」等于「这几张图不要了」。不提示的话，用户切回来只看到空输入框，
+     * 会以为是自己没选上；提示一次，他至少知道图是被换会话带走的。
+     *
+     * 只在真丢了东西时提示（条数为 0 时安静），否则每次切会话都弹一条就成了噪音。
+     */
+    private fun dropComposerAttachments() {
+        val n = composer.dropAttachments()
+        if (n > 0) showInterruptNotice("已清空上一个会话的 $n 个待发附件")
     }
 
     /**

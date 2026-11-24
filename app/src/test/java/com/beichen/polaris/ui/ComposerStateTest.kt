@@ -136,6 +136,30 @@ class ComposerStateTest {
     }
 
     /**
+     * 换会话时丢弃待发附件。
+     *
+     * 真机反馈：「我选的照片会跟着我换话题跑到另一个话题去」。原因是文本按会话换
+     * （drafts），附件没换——新会话空着字、上面却挂着上个会话的图。
+     *
+     * 三条一起判：① 真的清空；② 返回的条数对得上（调用方靠它决定要不要提示）；
+     * ③ **文本不能动**——换会话时文本要按草稿存/取，顺手清掉等于把用户的草稿删了。
+     */
+    @Test
+    fun `dropAttachments 清空附件但不动文本`() {
+        val composer = ComposerState()
+        composer.set("说到一半的话")
+        composer.addImages(listOf("data:a", "data:b"))
+        composer.addFile(PendingFile("a.txt", "aaa"))
+
+        assertEquals(3, composer.dropAttachments())
+        assertTrue("图片必须被清空", composer.pendingImages.value.isEmpty())
+        assertTrue("文件必须被清空", composer.pendingFiles.value.isEmpty())
+        assertEquals("说到一半的话", composer.text)
+
+        assertEquals("本来就空时返回 0（调用方据此不弹提示）", 0, composer.dropAttachments())
+    }
+
+    /**
      * 能不能发：四条组合。
      *
      * 真机反馈「单纯的文件或图片不让发」——旧实现两处都只看文字，于是选了图之后

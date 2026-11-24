@@ -158,4 +158,26 @@ internal class ComposerState(initialText: String = "") {
         images = _pendingImages.drain(),
         files = _pendingFiles.drain(),
     )
+
+    /**
+     * 丢弃待发附件（换会话时）。返回丢掉的条数——0 表示本来就没有，调用方据此决定要不要提示。
+     *
+     * ## 为什么附件不跟会话走（与文本不对称是**有意的**）
+     *
+     * 文本有 [DraftStore] 落盘，所以切走能存、切回能取。附件没有对应的持久化：它只有内存里的
+     * data URL（[com.beichen.polaris.ui.AttachmentIo.MAX_PENDING_IMAGES] 张，每张可达数 MB），
+     * 若按会话暂存，等于把十几 MB 的 base64 常驻内存；写进 drafts.json 更糟——草稿文件会
+     * 从几 KB 涨到几十 MB，而备份会把整份带走。
+     *
+     * 语义就定为：**附件属于「正在编辑的这一条消息」**，换会话即作废。真机反馈的
+     * 「我选的照片会跟着我换话题跑到另一个话题去」正是旧行为：文本按会话换了，附件没换，
+     * 于是新会话的输入框空着字、上面却挂着一张上个会话的图。
+     *
+     * 调用方必须提示（[ChatViewModel] 里那条瞬时提示）：静默丢用户的图比丢不了更让人困惑。
+     */
+    fun dropAttachments(): Int {
+        val images = _pendingImages.drain()
+        val files = _pendingFiles.drain()
+        return images.size + files.size
+    }
 }

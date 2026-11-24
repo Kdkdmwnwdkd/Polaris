@@ -52,6 +52,16 @@ internal class ConversationEditor(
     private val onListChanged: () -> Unit,
     /** 开新会话前的收尾（W-102：粘性工具组随任务重置）。 */
     private val onFreshConversation: () -> Unit,
+    /**
+     * 输入区换主人时丢弃待发附件。
+     *
+     * 为什么不放进 [setInputText]：那是「换文本」，而附件是另一个状态（[ComposerState]）。
+     * 两者共用 [open] 这一个迁移点才是重点——新建 / 切换 / 删除当前会话 / 备份恢复
+     * 四条路径全都经过这里，挂在这里不会有第五条路径漏掉。
+     *
+     * 刻意不给默认值：与其余参数一样强制接线，漏接就编不过，而不是「悄悄不清附件」。
+     */
+    private val onAttachmentsDropped: () -> Unit,
 ) {
 
     /** 被拒的原因。返回值而非静默 return——「点了没反应」在真机上无法归因。 */
@@ -168,6 +178,9 @@ internal class ConversationEditor(
         // W-30：消息下标全变，旧译文清掉（否则会显示到别的消息下面）
         onTranslationsStale()
         setInputText(drafts.get(id))
+        // 附件不跟会话走（没有按会话的持久化，理由见 [ComposerState.dropAttachments]）：
+        // 不在这里清，新会话的输入框就会挂着上一个会话选的图——真机反馈的「换话题带过去」。
+        onAttachmentsDropped()
         onListChanged()
     }
 }

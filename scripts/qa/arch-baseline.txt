@@ -192,7 +192,12 @@
 # 三份状态、10 个写点收敛到命名方法。只降 3 行是意料之中：被搬走的是「谁拿到引用谁就能写」
 # 这个事实，不是大段代码；Android 解码仍留在 VM（AttachmentIo 那条链本批不动）。
 # 按裁决书 §3.2「降行是结果，不是考核项」，**没有**为凑数顺手搬别的东西。
-lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3218
+# 2026-11-24 上调（3218 → 3233）：换会话丢弃待发附件（真机「照片跟着换话题跑过去」）。
+# 15 行 = 构造里一行接线 + `dropComposerAttachments`（6 行方法 + 8 行说明）。
+# 为什么这 15 行必须是它：方法里要同时摸到 composer（附件）与瞬时提示通道，
+# 而这两个东西的 owner 都在本类；把提示挪进 ComposerState 会把 UI 文案塞进纯状态类
+# （那个文件的可测性靠「零 Android、零文案」换来的，不能破）。
+lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3233
 # 2026-11-14 重记（ChatScreen +45）：语音输入的能力预检与编排。
 # 增量分布：
 #   ① 能力预检：约 12 行（含 8 行注释）。系统识别页一旦弹出，用户就进入了一个

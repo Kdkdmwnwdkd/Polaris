@@ -13,6 +13,8 @@
  *  C. 删除：在途会话禁删、运行中禁删当前会话、删完不留孤儿草稿、删非 active 不动显示态
  *  D. 不守卫的动作：rename / setPinned / bindWorkspace 在运行中照常生效
  *  E. adopt：恢复/删除路径的迁移不保存旧草稿
+ *  F. 附件：换会话（新建/切换/删当前/恢复）都丢弃待发附件，删非 active 与同 id 切换不丢
+ *     （附件本身「真的清空了」由 ComposerStateTest 守，这里只判触发点与触发次数）
  *
  * 运行：scripts/qa/run-conversation-editor-verification.sh
  * （kotlinc 编译真实源码 + java 运行，不需要 AGP 产物）
@@ -75,6 +77,8 @@ private class Rig(conversations: Int = 1) {
     var refreshCount = 0
     var freshCount = 0
     var freshSawConversations = -1
+    /** 输入区换主人时丢弃待发附件的次数（附件本身由 ComposerStateTest 守）。 */
+    var attachmentDrops = 0
 
     val editor = ConversationEditor(
         store = store,
@@ -93,6 +97,7 @@ private class Rig(conversations: Int = 1) {
             // 记录回调发生时 store 里已有几条——用来判定「重置先于 create」
             freshSawConversations = store.list().size
         },
+        onAttachmentsDropped = { attachmentDrops++ },
     )
 
     init {
@@ -143,6 +148,12 @@ fun main() {
         eq(r.freshCount, 1, "onFreshConversation 次数")
     }
 
+    check("A4 新建：丢弃待发附件（附件不跟会话走）") {
+        val r = Rig()
+        r.editor.create()
+        eq(r.attachmentDrops, 1, "新建后丢弃次数")
+    }
+
     println("\n[B] 切换")
 
     check("B1 切换：旧草稿存入、新草稿取出、译文作废一次") {
@@ -182,6 +193,25 @@ fun main() {
         eq(r.editor.switchTo(b), null, "运行中被拒")
         eq(r.active, b, "active")
         eq(r.owner, a, "owner 不该被切换改动")
+    }
+
+    // 真机反馈「我选的照片会跟着我换话题跑到另一个话题去」：
+    // 文本按会话换（drafts），附件没换，于是新会话空着字、上面挂着上个会话的图。
+    check("B4 切换会话：丢弃待发附件，但文本照旧存进旧会话草稿") {
+        val r = Rig()
+        val a = r.active
+        val b = r.other()
+        r.text = "带着图的话"
+        eq(r.editor.switchTo(b), null, "switchTo 返回值")
+        eq(r.attachmentDrops, 1, "丢弃次数")
+        eq(r.drafts.get(a), "带着图的话", "文本仍要存回旧会话")
+        eq(r.text, "", "新会话输入框")
+    }
+
+    check("B5 切到同一条会话：不丢附件（无操作不该有副作用）") {
+        val r = Rig()
+        eq(r.editor.switchTo(r.active), null, "switchTo 返回值")
+        eq(r.attachmentDrops, 0, "同 id 仍丢了一次")
     }
 
     println("\n[C] 删除")
@@ -250,6 +280,21 @@ fun main() {
         eq(r.store.load(r.active) != null, true, "active 指向不存在的会话")
     }
 
+    check("C6 删当前会话：迁到新会话时丢弃待发附件") {
+        val r = Rig()
+        r.other()
+        val a = r.active
+        eq(r.editor.delete(a), null, "delete 返回值")
+        eq(r.attachmentDrops, 1, "丢弃次数")
+    }
+
+    check("C7 删非 active 会话：显示态没变，不丢附件") {
+        val r = Rig()
+        val b = r.other()
+        eq(r.editor.delete(b), null, "delete 返回值")
+        eq(r.attachmentDrops, 0, "显示态没变却丢了附件")
+    }
+
     println("\n[D] 不守卫的动作")
 
     check("D1 运行中 rename / setPinned / bindWorkspace 照常生效") {
@@ -281,6 +326,7 @@ fun main() {
         eq(r.active, b, "active")
         eq(r.drafts.get(a), "", "旧会话被写入了孤儿草稿")
         eq(r.text, "B 的草稿", "输入框")
+        eq(r.attachmentDrops, 1, "adopt 换了输入区却没丢附件")
         val raw = if (r.draftsFile.exists()) r.draftsFile.readText() else ""
         expect(a !in raw, "drafts.json 里出现了旧会话 $a 的键：$raw")
     }

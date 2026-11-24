@@ -154,6 +154,16 @@ else
   g_bad "G5 删除入口没有接到 editor.delete"
 fi
 
+# G6：换会话必须真的把待发附件丢掉（真机报的「照片跟着换话题跑过去」）。
+# 只判回调接上还不够——回调体里那行 `composer.dropAttachments()` 要是被删了，
+# 界面在别的方面完全正常，只是图继续跟着走；这种「少了一行」正是要在 CI 拦住的。
+if grep -q 'onAttachmentsDropped = ::dropComposerAttachments' "$VM" \
+   && grep -q 'composer.dropAttachments()' "$VM"; then
+  g_good "G6 换会话丢弃待发附件已接线（editor 回调 + ComposerState.dropAttachments）"
+else
+  g_bad "G6 换会话没丢弃待发附件 —— 上个会话的图会跟到新会话"
+fi
+
 total_pass=$((jp + gp))
 total_fail=$((jf + gf))
 echo ""

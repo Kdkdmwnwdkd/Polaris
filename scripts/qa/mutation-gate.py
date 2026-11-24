@@ -1443,6 +1443,16 @@ MUTATIONS = [
         "expect": ["canSend 只有图片可发"],
     },
     {
+        # 真机反馈「我选的照片会跟着我换话题跑到另一个话题去」：换会话时文本换了、附件没换。
+        # 只读不清 = dropAttachments 什么都不做，新会话的输入框照样挂着上个会话的图。
+        "id": "CS5 dropAttachments 只读不清（换会话后附件跟着走）",
+        "group": "composer",
+        "file": "app/src/main/java/com/beichen/polaris/ui/ComposerState.kt",
+        "old": "        val images = _pendingImages.drain()\n        val files = _pendingFiles.drain()",
+        "new": "        val images = _pendingImages.value\n        val files = _pendingFiles.value",
+        "expect": ["dropAttachments 清空附件但不动文本"],
+    },
+    {
         # 落盘时丢掉附件：当场看一切正常，切走再切回来图没了。
         "id": "AT1 落盘丢掉用户气泡的附图与文件名（切回来空空如也）",
         "group": "attachment",
