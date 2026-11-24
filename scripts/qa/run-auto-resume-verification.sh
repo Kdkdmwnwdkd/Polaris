@@ -105,7 +105,11 @@ fi
 
 # 自动续跑要往输入框写「继续」。聊天页输入框自动聚焦，用户很可能在冷启动后
 # 几百毫秒内已经在打字——那一下会把敲了一半的字整个清掉。必须让决策器知道这件事。
-if grep -q 'inputBlank = input.value.isBlank()' "$VM"; then
+#
+# 判据只问「有没有拿输入框的当前文本判空」，不问它读的是哪个字段：
+# 批 1 把 input 收口到 composer 之后，写死 `input.value.isBlank()` 会让断言
+# 在实现搬家时变红——那守的是「代码写在哪」，不是「行为在不在」。
+if grep -qE 'inputBlank = .+\.isBlank\(\)' "$VM"; then
   pass "A12 判定了输入框是否为空（否则会清掉用户正在打的字）"
 else
   fail "A12 没有传 inputBlank —— 用户输入到一半的字会被自动续跑清空"
