@@ -32,7 +32,11 @@ internal class LogsFacade {
         _logs.value = AgentLogger.recent(WINDOW).map { it.format() }
     }
 
-    /** 清空日志（内存缓冲 + 当日文件），随后刷新列表。 */
+    /**
+     * 删除全部日志（内存缓冲 + 目录下所有 `agent-*.log` / `.log.1`），随后刷新列表。
+     *
+     * 2026-11-25 之前只删「当天」两个文件，用户点完清空、搜索照样命中两三天前的记录。
+     */
     fun clearLogs() {
         AgentLogger.clear()
         refreshLogs()

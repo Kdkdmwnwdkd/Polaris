@@ -527,10 +527,10 @@ fun LogsScreen(vm: LogsContract) {
     // —— 清空二次确认：日志是排查依据，删前拦一道 ——
     AkModalHost(target = if (showClear) Unit else null) { _, dialogVisible ->
         AkConfirmDialog(
-            title = "清空运行日志",
-            message = "确认清空当前 ${logs.size} 条日志？清空后不可恢复，" +
-                "后续运行会重新开始记录。需要留证时请先「导出」。",
-            confirmText = "确认清空",
+            title = "删除全部日志",
+            message = "将删除今天和之前几天的全部日志文件（含轮转归档），" +
+                "删除后不可恢复。需要留证时请先「导出」。",
+            confirmText = "确认删除",
             icon = Icons.Outlined.Delete,
             danger = true,
             visible = dialogVisible,

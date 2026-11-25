@@ -105,6 +105,15 @@ object AgentLogger {
     private var logDir: File? = null
 
     /**
+     * 写盘代数：[clear] 时递增，队列里排着的旧写入醒来发现代号变了就丢弃。
+     *
+     * 没有它的话，「清空」和「异步落盘」会打架——删完文件，排队的 append 又把旧行写回来，
+     * 用户看到的是「清空了但旧日志还在」（2026-11-25 真机）。
+     */
+    @Volatile
+    private var generation = 0
+
+    /**
      * 该工具的入参与输出是否「只记长度、不记原文」（审计 F12）。
      *
      * 判据本体在 [LogRedaction]，与 `ToolCatalog` 一起是零依赖纯 Kotlin——
@@ -496,13 +505,34 @@ object AgentLogger {
             ?: emptyList()
     }.getOrDefault(emptyList())
 
-    /** 清空内存缓冲与当日日志文件（含轮转出来的 `.log.1`）。 */
-    fun clear() {
+    /**
+     * 清空日志：内存缓冲 + 目录下**全部**日志文件（当日、历史、轮转归档）。
+     *
+     * ## 为什么必须删全部（2026-11-25 真机）
+     *
+     * 原来只删 `agent-<今天>.log` 与 `agent-<今天>.log.1`。用户点过「清空」之后，
+     * 昨天、前天的文件一行没动，搜索照样命中两三天前的记录——用户的反馈原话是
+     * 「我每次有时候都清空的，但不知道为什么你还能收到两三天前的」。
+     * 对他而言「清空」= 删掉日志；对代码而言只是删掉今天这一份。日志里带着提问原文，
+     * 所以这不是显示问题，是**没删干净**。
+     *
+     * ## 为什么先递增 [generation]
+     *
+     * 落盘是异步的（单线程 IO 协程）。点清空那一刻，队列里可能还排着几条 [appendToDisk]；
+     * 删完文件后它们醒来，会重建当天文件并把旧内容写回去——用户看到「已清空」却又冒出旧行。
+     * 递增代数让排队中的写入带一个过期标记，醒来先比对，过期直接丢弃。
+     *
+     * @return 实际删除的文件数（0 表示目录里本来就没有文件）。
+     */
+    fun clear(): Int {
         synchronized(buffer) { buffer.clear() }
-        val dir = logDir ?: return
-        val day = formatDay(System.currentTimeMillis())
-        runCatching { File(dir, "agent-$day.log").takeIf { it.exists() }?.delete() }
-        runCatching { File(dir, "agent-$day.log.1").takeIf { it.exists() }?.delete() }
+        generation++
+        val dir = logDir ?: return 0
+        var deleted = 0
+        logFilesIn(dir).forEach { f ->
+            if (runCatching { f.delete() }.getOrDefault(false)) deleted++
+        }
+        return deleted
     }
 
     /** 当日日志文件：`dir/agent-<yyyyMMdd>.log`；未初始化时返回 null。 */
@@ -527,11 +557,14 @@ object AgentLogger {
             }
         }
         val dir = logDir ?: return
-        ioScope.launch { appendToDisk(dir, entry) }
+        val gen = generation
+        ioScope.launch { appendToDisk(dir, entry, gen) }
     }
 
-    private fun appendToDisk(dir: File, entry: LogEntry) {
+    private fun appendToDisk(dir: File, entry: LogEntry, gen: Int) {
         runCatching {
+            // 排队期间用户点了「清空」：这条属于上一代，丢掉，否则旧内容会被写回刚删干净的文件。
+            if (gen != generation) return
             if (!dir.exists() && dir.mkdirs().not()) return
             val file = currentLogFile() ?: File(dir, "agent-${formatDay(entry.timeMs)}.log")
             if (file.exists() && file.length() > MAX_FILE_BYTES) rotate(file)
