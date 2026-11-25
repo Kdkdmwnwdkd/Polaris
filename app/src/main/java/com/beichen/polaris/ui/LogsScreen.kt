@@ -18,20 +18,26 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Error
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -46,14 +52,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.beichen.polaris.core.CrashLogger
 import com.beichen.polaris.core.DiagnosticsExporter
 import com.beichen.polaris.core.CrashRecord
+import com.beichen.polaris.core.LogSearch
 import com.beichen.polaris.ui.contract.LogsContract
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -77,7 +90,13 @@ fun LogsScreen(vm: LogsContract) {
     // 解析一次随 logs 缓存：筛选 / 渲染都读同一份条目，不在每次重组时反复 split
     val entries = remember(logs) { logs.map { it.toLogEntry() } }
     var filter by rememberSaveable { mutableStateOf(LEVEL_ALL) }
-    var expandedIndex by rememberSaveable { mutableStateOf(-1) }
+    // 关键词。空格分隔的多个词是「同时命中」（AND），不是「任一命中」：
+    // 排查时敲 "http_request 401" 要找的是同时含这两段的那些行，
+    // 而不是所有 http 调用 + 所有带 401 的行（后者反而要再翻一遍）。
+    var query by rememberSaveable { mutableStateOf("") }
+    // 展开项记「原始行」而不是下标：加了关键词过滤后，同一下标在过滤前后指向不同条目，
+    // 正在展开的那条会莫名其妙换成另一条。切级别筛选时其实早有这个毛病，只是不易察觉。
+    var expandedRaw by rememberSaveable { mutableStateOf<String?>(null) }
     var exportHint by remember { mutableStateOf<String?>(null) }
     var showClear by remember { mutableStateOf(false) }
 
@@ -112,8 +131,15 @@ fun LogsScreen(vm: LogsContract) {
         }
     }
 
-    val visible = remember(entries, filter) {
+    val terms = remember(query) { parseTerms(query) }
+    // 先按级别，再按关键词——两级过滤各自独立，计数也按这个顺序取：
+    // 「3 / 12」表示该级别共 12 条、命中 3 条。若分母用全部日志（500），
+    // 在选了 ERROR 的人眼里就成了「有 500 条 ERROR」，是个会让人放弃搜索的谎话。
+    val levelFiltered = remember(entries, filter) {
         if (filter == LEVEL_ALL) entries else entries.filter { it.level == filter }
+    }
+    val visible = remember(levelFiltered, terms) {
+        if (terms.isEmpty()) levelFiltered else levelFiltered.filter { it.matches(terms) }
     }
 
     Column(Modifier.fillMaxWidth()) {
@@ -170,6 +196,21 @@ fun LogsScreen(vm: LogsContract) {
                 )
             }
         }
+
+        Spacer(Modifier.height(AgentSpacing.space2))
+
+        // —— 关键词搜索（2026-11-25：用户「运行日志那里又不能搜索」，只能一条条翻）——
+        //
+        // 为什么常驻而不是收在图标后面：这一页平时没人来，来的都是有具体目标的人
+        // （找 401、找某次工具调用、找崩溃前那几行）。一个要先点开才能用的搜索框，
+        // 对「不知道能搜」的人是零；多占 45dp，换来一眼看得见，值。
+        LogSearchRow(
+            query = query,
+            hitCount = visible.size,
+            totalCount = levelFiltered.size,
+            onQueryChange = { new -> query = new },
+            onClear = { query = "" }
+        )
 
         Spacer(Modifier.height(AgentSpacing.space3))
 
@@ -275,17 +316,32 @@ fun LogsScreen(vm: LogsContract) {
 
         // —— 列表 / 空态 ——
         if (visible.isEmpty()) {
-            AkEmptyState(
-                icon = Icons.Outlined.Description,
-                title = if (filter == LEVEL_ALL) "暂无日志" else "没有 $filter 级日志",
-                description = if (filter == LEVEL_ALL) {
-                    "发一条消息或触发一次技能后，这里会实时显示 LLM 请求、工具调用与错误。"
-                } else {
-                    "切换到「全部」看看其他级别的记录。"
-                },
-                actionLabel = "刷新",
-                onAction = { vm.refreshLogs() }
-            )
+            when {
+                // 搜索无结果优先说，别让它掉进「暂无日志」——那是「今天什么都没发生」的意思，
+                // 而这里今天发生了很多，只是没命中这几个词。
+                terms.isNotEmpty() -> AkEmptyState(
+                    icon = Icons.Outlined.Search,
+                    title = "没有匹配「${query.trim()}」的日志",
+                    description = "空格分隔的多个词要同时命中（AND），词越多范围越窄；" +
+                        "也可能只是当前级别下没有。",
+                    actionLabel = "清除搜索",
+                    onAction = { query = "" }
+                )
+                filter == LEVEL_ALL -> AkEmptyState(
+                    icon = Icons.Outlined.Description,
+                    title = "暂无日志",
+                    description = "发一条消息或触发一次技能后，这里会实时显示 LLM 请求、工具调用与错误。",
+                    actionLabel = "刷新",
+                    onAction = { vm.refreshLogs() }
+                )
+                else -> AkEmptyState(
+                    icon = Icons.Outlined.Description,
+                    title = "没有 $filter 级日志",
+                    description = "切换到「全部」看看其他级别的记录。",
+                    actionLabel = "刷新",
+                    onAction = { vm.refreshLogs() }
+                )
+            }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -297,11 +353,14 @@ fun LogsScreen(vm: LogsContract) {
                 ),
                 verticalArrangement = Arrangement.spacedBy(AgentSpacing.space1)
             ) {
-                itemsIndexed(visible, key = { index, _ -> index }) { index, entry ->
+                itemsIndexed(visible, key = { index, _ -> index }) { _, entry ->
                     LogRow(
                         entry = entry,
-                        expanded = expandedIndex == index,
-                        onClick = { expandedIndex = if (expandedIndex == index) -1 else index }
+                        terms = terms,
+                        expanded = expandedRaw != null && expandedRaw == entry.raw,
+                        onClick = {
+                            expandedRaw = if (expandedRaw == entry.raw) null else entry.raw
+                        }
                     )
                 }
                 // 页脚：日志文件落盘位置（mono 小字，排查时要能照着找文件）
@@ -332,7 +391,7 @@ fun LogsScreen(vm: LogsContract) {
             visible = dialogVisible,
             onConfirm = {
                 vm.clearLogs()
-                expandedIndex = -1
+                expandedRaw = null
                 showClear = false
             },
             onDismiss = { showClear = false }
@@ -438,6 +497,92 @@ private fun CrashSection(
     }
 }
 
+/**
+ * 关键词搜索行（2026-11-25）。
+ *
+ * 形态沿用 [MemoryScreen] 那条搜索线：图标 + 一条横线，不用填充胶囊。
+ * 但**交互不同**：记忆页要查库所以是「点图标才检索」，这里过滤的是内存里已解析的
+ * 列表，成本可以忽略，因此输入即过滤——排查时敲 `401` 希望列表立刻收窄，
+ * 而不是敲完再点一下。
+ *
+ * 计数只在有关键词时出现：平时显示「500 / 500」是纯噪音，还占掉一行里最贵的位置。
+ */
+@Composable
+private fun LogSearchRow(
+    query: String,
+    hitCount: Int,
+    totalCount: Int,
+    onQueryChange: (String) -> Unit,
+    onClear: () -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = AgentSpacing.space5, end = AgentSpacing.space5)
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 44.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 装饰性图标：contentDescription 留空，由输入框的 placeholder 说明这里是什么。
+            // 给它单独的可访问性文案会让读屏把「搜索 搜索日志，空格分隔…」念两遍。
+            Icon(
+                imageVector = Icons.Outlined.Search,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.width(AgentSpacing.space3))
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                modifier = Modifier.weight(1f),
+                textStyle = MaterialTheme.typography.bodyMedium
+                    .copy(color = MaterialTheme.colorScheme.onSurface),
+                singleLine = true,
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                // Done 而不是 Search：这里没有「提交」这一步，输入即已生效，
+                // 按下的唯一目的就是收键盘。
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) {
+                            Text(
+                                text = "搜索日志，空格分隔多个关键词",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                        inner()
+                    }
+                }
+            )
+            if (query.isNotEmpty()) {
+                Spacer(Modifier.width(AgentSpacing.space2))
+                Text(
+                    text = "$hitCount / $totalCount",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (hitCount == 0) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+                AkCircleIconButton(
+                    icon = Icons.Outlined.Close,
+                    description = "清除搜索关键词",
+                    iconSize = 18.dp,
+                    onClick = onClear
+                )
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        AkHairline()
+    }
+}
+
 /** 崩溃记录时间：`MM-dd HH:mm:ss`（崩溃是低频事件，年份可省，秒级足够定位）。 */
 private fun formatCrashClock(timeMs: Long): String =
     if (timeMs <= 0L) "--" else runCatching {
@@ -455,7 +600,10 @@ private data class LogEntry(
     val time: String,
     val level: String,
     val tag: String,
-    val message: String
+    val message: String,
+    /** 原始整行。搜索与展开状态都以它为准：搜索要匹配整行（含 tag），
+     *  展开状态需要一个跨过滤稳定的标识——四个显示字段拼起来可能撞，整行不会。 */
+    val raw: String
 )
 
 /**
@@ -469,10 +617,44 @@ private fun String.toLogEntry(): LogEntry {
             time = parts[0],
             level = parts[1],
             tag = parts[2],
-            message = parts.getOrElse(3) { "" }
+            message = parts.getOrElse(3) { "" },
+            raw = this
         )
     } else {
-        LogEntry(time = "", level = "", tag = "", message = this)
+        LogEntry(time = "", level = "", tag = "", message = this, raw = this)
+    }
+}
+
+/**
+ * 拆关键词：按空白切分，丢弃空段。
+ *
+ * 判据本体在 [LogSearch]（core，纯 JVM 可测）：Compose 文件在 JVM 上编不过，
+ * 逻辑留在这一层就只能靠读代码确认对不对。这里只做转发。
+ */
+private fun parseTerms(query: String): List<String> = LogSearch.parseTerms(query)
+
+/** 全部关键词都出现（AND）才算命中；无关键词时恒真。 */
+private fun LogEntry.matches(terms: List<String>): Boolean = LogSearch.matches(raw, terms)
+
+/**
+ * 关键词高亮：命中片段加粗，其余原样。
+ *
+ * 区间由 [LogSearch.ranges] 算（已合并重叠、保证有序不相交），这里只负责拼样式。
+ * 直接用返回的区间逐个 `withStyle`，不要再自己找一遍位置——
+ * 两处各找一遍迟早会不一致（那种不一致不崩，只是高亮错位几个字符）。
+ */
+private fun highlight(text: String, terms: List<String>): AnnotatedString {
+    val ranges = LogSearch.ranges(text, terms)
+    if (ranges.isEmpty()) return AnnotatedString(text)
+    val style = SpanStyle(fontWeight = FontWeight.SemiBold)
+    return buildAnnotatedString {
+        var cursor = 0
+        ranges.forEach { r ->
+            if (r.first > cursor) append(text.substring(cursor, r.first))
+            withStyle(style) { append(text.substring(r.first, r.last + 1)) }
+            cursor = r.last + 1
+        }
+        if (cursor < text.length) append(text.substring(cursor))
     }
 }
 
@@ -493,6 +675,8 @@ private fun levelColor(level: String): Color = when (level) {
 @Composable
 private fun LogRow(
     entry: LogEntry,
+    /** 当前关键词（已拆好）。空表示没在搜索，走纯文本路径。 */
+    terms: List<String>,
     expanded: Boolean,
     onClick: () -> Unit
 ) {
@@ -546,7 +730,10 @@ private fun LogRow(
                     }
                     if (entry.tag.isNotEmpty()) {
                         Text(
-                            text = entry.tag,
+                            // 统一走 AnnotatedString：`if (…) 字符串 else AnnotatedString` 的
+                            // 公共父类型是 CharSequence，而 Text 没有这个重载，会编译不过。
+                            // 没搜索时 highlight 返回的就是无样式的包装，视觉等同纯文本。
+                            text = highlight(entry.tag, terms),
                             style = machineSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -558,7 +745,7 @@ private fun LogRow(
                 if (entry.message.isNotBlank()) {
                     Spacer(Modifier.height(AgentSpacing.space1))
                     Text(
-                        text = entry.message,
+                        text = highlight(entry.message, terms),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = if (expanded) Int.MAX_VALUE else 2,
