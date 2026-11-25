@@ -5,13 +5,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * `AgentLogger.search` —— 内存 + 磁盘历史的检索（2026-11-25）。
@@ -24,8 +23,10 @@ import java.util.Locale
  */
 class AgentLoggerSearchTest {
 
-    @get:Rule
-    val tmp = TemporaryFolder()
+    private companion object {
+        /** 目录名序号：只要不重复就够，不需要随机（见 setUp 里那段说明）。 */
+        val seq = AtomicInteger()
+    }
 
     private lateinit var dir: File
 
@@ -34,14 +35,34 @@ class AgentLoggerSearchTest {
         AgentLogger.reset()
         // reset 之后 logDir 为 null，clear 只清内存缓冲（不会误删目录）
         AgentLogger.clear()
-        dir = tmp.newFolder("logs")
+        // 目录名里不能有随机数字。理由见下面 init 之后那段——这串路径会进日志、也会被搜到。
+        dir = File(System.getProperty("java.io.tmpdir"), "polaris-logtest-${seq.incrementAndGet()}")
+            .apply {
+                deleteRecursively()
+                mkdirs()
+            }
         AgentLogger.init(dir)
+        // 把 init 自己写的那条「日志目录已就绪」清掉，再等 50ms 让它的落盘结束。
+        //
+        // 两个理由：
+        //  1. 这条带绝对路径，是**真的会被搜到**的。原先用的 TemporaryFolder 建出来是
+        //     `junit18076469358617064019/logs`，那串随机数字里出现过 "4019"，搜 401 的用例
+        //     凭空多一条命中 —— 2026-11-25 的 CI 就是这么红的（`maxDays` 拿到 2 条）。
+        //  2. 下面 writeLog 用 writeText 截断重写，若和这次异步追加撞上，FileWriter 在
+        //     append 模式下记的「末尾位置」在截断后失效，实测会让多行文件少掉最后一行。
+        //
+        // 清完 buffer 是空的、文件是空的，每个用例从真正的零点开始。
+        // `initialized` 仍为 true，不会再触发一次 init/restoreTail。
+        Thread.sleep(50)
+        AgentLogger.clear()
     }
 
     @After
     fun tearDown() {
         AgentLogger.reset()
         AgentLogger.clear()
+        // reset 之后写盘协程拿不到 logDir，这里删是安全的
+        dir.deleteRecursively()
     }
 
     // —— 工具 ——
@@ -76,7 +97,7 @@ class AgentLoggerSearchTest {
 
         val result = AgentLogger.search(listOf("401"))
 
-        assertEquals(2, result.hits.size)
+        assertEquals("多出来的是谁：${result.hits.map { "${it.day} ${it.line}" }}", 2, result.hits.size)
         assertEquals(listOf(dayStamp(0)), result.days)
         // 文件内是正序写、倒序出：最新的那条排在前面
         assertTrue(result.hits.first().line.contains("请求失败"))
@@ -90,7 +111,7 @@ class AgentLoggerSearchTest {
 
         val result = AgentLogger.search(listOf("401"))
 
-        assertEquals(2, result.hits.size)
+        assertEquals("多出来的是谁：${result.hits.map { "${it.day} ${it.line}" }}", 2, result.hits.size)
         // 今天在前、昨天在后
         assertEquals(dayStamp(0), result.hits[0].day)
         assertEquals(dayStamp(1), result.hits[1].day)
@@ -103,7 +124,7 @@ class AgentLoggerSearchTest {
         writeLog(3, lines = arrayOf(line("10:00:00.001", "INFO", "A", "401 three days ago")))
 
         val shallow = AgentLogger.search(listOf("401"), maxDays = 2)
-        assertEquals(1, shallow.hits.size)
+        assertEquals("shallow 只该命中今天这条：${shallow.hits}", 1, shallow.hits.size)
         assertEquals(dayStamp(0), shallow.hits[0].day)
 
         val deep = AgentLogger.search(listOf("401"), maxDays = 7)
@@ -146,9 +167,9 @@ class AgentLoggerSearchTest {
         val result = AgentLogger.search(listOf("401"), limit = 2)
 
         assertEquals(2, result.hits.size)
-        assertTrue(result.truncated)
+        assertTrue("5 条命中、limit=2 必须标截断：${result.hits}", result.truncated)
         // 保留的是最新的两条（第 5、第 4）
-        assertTrue(result.hits[0].line.contains("第 5 条"))
+        assertTrue("hits[0] 应当是最新的第 5 条：${result.hits}", result.hits[0].line.contains("第 5 条"))
     }
 
     @Test
@@ -191,8 +212,7 @@ class AgentLoggerSearchTest {
         // 内存里的行也有确定日期：timeMs 是刚记下的真实时刻，formatDay 直接算。
         // （曾经这里是 null → UI 显示「本次」，结果把恢复进来的昨天日志一起标成了本次。）
         assertEquals(dayStamp(0), hit.day)
-        // 注意：不能断言 days 为空。setUp 里的 init 自己会写「日志目录已就绪」这一条
-        // 并异步落盘，所以目录里几乎总有今天的文件——断言它为空会变成一个时序抽奖。
+        // 这条不校验 days：内存命中已经带日期了，days 就从命中行推出来，与磁盘无关。
     }
 
     @Test
