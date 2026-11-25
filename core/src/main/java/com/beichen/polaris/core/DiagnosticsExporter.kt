@@ -101,11 +101,39 @@ object DiagnosticsExporter {
             appendLine(tail.ifBlank { "(无日志)" })
         }
 
+        // 正文指纹，随文件走一份、随日志走一份（2026-11-25）。
+        //
+        // 这份文件要经过分享面板 → 接收方 App → 上传通道若干跳，任一跳都可能改写它。
+        // 真机上见过具体的坏法：文件大小是 4096 的整数倍，末段是「往前 4096 字节处」
+        // 的逐字节重放，而手机上 `file.length()` 记的是正确的长度——
+        // 也就是说 **写入端是对的、传输端坏的**。当时分析现场只拿到坏文件，
+        // 只能从「像截断」开始一个个假设排掉，白花一轮。
+        //
+        // 现在把判据带出去：文末写正文字节数与指纹，日志里再写一份。
+        // 对得上 → 正文完好，多出来的是尾巴；对不上 → 正文被覆盖。
+        val bodyBytes = text.toByteArray(Charsets.UTF_8)
+        val finger = DiagnosticsFingerprint.of(bodyBytes)
+        val sealedText = buildString(text.length + 128) {
+            append(text)
+            if (!text.endsWith("\n")) append('\n')
+            appendLine()
+            appendLine("—— 自校验 ——")
+            // 只统计**正文**。把这一段也算进去的话，「正文字节数」会随它自己的
+            // 长度变化，成为一个无法核对的数字（改了数字就改了长度）。
+            appendLine("正文字节数：${bodyBytes.size}")
+            appendLine("正文指纹：$finger")
+        }
+
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date())
         val file = File(dir, "polaris-diagnostics-$stamp.txt")
-        file.writeText(text)
-        AgentLogger.i("Diagnostics", "诊断包已生成：${file.name}（${file.length()} 字节）")
+        // 不在这里包 runCatching：外层已有，再包一层只会把「为什么导出失败」也吞掉。
+        file.writeText(sealedText)
+        AgentLogger.i(
+            "Diagnostics",
+            "诊断包已生成：${file.name}（正文 ${bodyBytes.size} 字节 / " +
+                "文件 ${file.length()} 字节 / 指纹 $finger）"
+        )
         file
     }.getOrNull()
 
