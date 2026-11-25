@@ -232,19 +232,33 @@ class HttpRequestTool(
                         // 也计入「撞墙」次数：对模型来说这次同样没拿到数据，换个参数再撞
                         // 同一个 host 的行为一模一样，该劝的时候要劝。
                         failStreak.noteFailure(probeKey)
+                        // 分档说明，别把 4xx 笼统写成「地址被拒或资源不存在」。
+                        // 真机上就是这么误导的：请求一个正常的 DeepSeek 接口拿到 401，
+                        // message 写「地址被拒或资源不存在」，模型据此去改 URL 路径，
+                        // 而真正该做的是补 Authorization 头、或者换一个免鉴权源。
+                        // 模型先读 message、后读 data，一句话的措辞会把整条推理带偏。
+                        val (why, how) = when (resp.code) {
+                            401 -> "未提供或凭据无效（缺 Authorization / API Key）" to
+                                "这个接口需要鉴权。若只是想确认它是否可达，连通性已经确认；" +
+                                "要拿数据得带上有效凭据，否则换一个公开接口。"
+                            403 -> "凭据有效但无权访问该资源" to
+                                "鉴权已经通过，是权限不够：检查账号/Key 的权限范围，" +
+                                "或确认这个资源是否对该账号开放。不要原样重试。"
+                            404 -> "路径或资源不存在" to
+                                "检查 URL 路径与查询参数是否写错。很多模型网关的正确路径是" +
+                                "/v1/chat/completions，而不是 /v1/models 之外的猜测。"
+                            429 -> "请求过于频繁，被限流" to
+                                "等几十秒再试，或降低并发/请求频率；继续立即重试只会延长冷却。"
+                            in 400..499 -> "请求被服务端拒绝" to
+                                "多半是参数格式、必填字段或请求体结构不对：" +
+                                "先读 data 里的错误说明（通常写明了哪个字段有问题），再改参数。"
+                            else -> "服务端出错" to
+                                "服务端故障，不是调用方的问题：稍后重试，或直接换一个数据源。"
+                        }
                         return@withContext ToolResult.fail(
                             code = "http_${resp.code}",
-                            message = if (resp.code in 400..499) {
-                                "HTTP ${resp.code}$where：地址被拒或资源不存在"
-                            } else {
-                                "HTTP ${resp.code}$where：服务端出错"
-                            },
-                            hint = if (resp.code in 400..499) {
-                                "检查路径、查询参数与鉴权头；若这是第三方公开接口，" +
-                                    "先确认它有没有改版或开始要求 key。不要原样重试同一地址。"
-                            } else {
-                                "服务端故障，不是调用方的问题：稍后重试，或直接换一个数据源。"
-                            },
+                            message = "HTTP ${resp.code}$where：$why",
+                            hint = how,
                             data = out,
                         )
                     }

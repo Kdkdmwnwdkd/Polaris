@@ -430,6 +430,164 @@ else
 fi
 
 say ""
+say "[K] 工具 schema：描述说「可选 / 默认 / 留空 / 省略」的参数不得出现在显式 required 里"
+
+# 为什么这条必须存在（2026-11-25 真机事故）：
+#
+# `objectSchema` 的 required 旧默认值是「所有参数」，于是 112 个参数里有 37 个是
+# 「描述写着（可选）或 默认 X，schema 却说不传不行」。模型只能硬塞一个值，最省事的
+# 是空串——`http_request` 就是这么炸的：GET 带上 body:"" 被 OkHttp 挡下，一个字节
+# 都没发出去，还报成「网络异常 / 已连续失败 N 次」。
+#
+# 默认值现在会自动排除「描述声明可选」的参数（JsonSchemaOptionalTest 守那条规则）。
+# 这条守卫盯的是另一半：**显式写了 required 的地方**——那里不做任何过滤，写错了
+# 没有任何东西会拦，只能靠静态扫描。
+#
+# 两个判据：
+#   K1  显式 required 里不得有描述声明可选的参数名
+#   K2  主体实现必须还在用 declaredOptional() 过滤（防止有人把默认值改回 props.map）
+SCHEMA_BAD=$(python3 - <<'PY'
+import re, glob
+
+files = [f for f in glob.glob('app/src/main/java/**/*.kt', recursive=True)
+              + glob.glob('core/src/main/java/**/*.kt', recursive=True)]
+OPT = re.compile(r'可选|默认|留空|省略')
+
+
+def top_args(block):
+    """按顶层逗号切分参数表达式。
+
+    必须跳过括号与字符串：`"tasks" to JsonSchema.Property(items = Property(...))`
+    这种嵌套写法里也有逗号和 required，按顶层切才能区分「外层的 required」与
+    「某个嵌套对象自己的 required」。切错就会把子对象的必填当成外层必填——
+    第一版守卫就是这么把 SubAgentTool 误判成「显式 required」的。
+    """
+    out, cur, depth, in_str, esc = [], [], 0, False, False
+    for c in block:
+        if in_str:
+            cur.append(c)
+            if esc:
+                esc = False
+            elif c == '\\':
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+            cur.append(c)
+            continue
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            depth -= 1
+        if c == ',' and depth == 0:
+            out.append(''.join(cur))
+            cur = []
+        else:
+            cur.append(c)
+    tail = ''.join(cur).strip()
+    if tail:
+        out.append(tail)
+    return out
+
+
+def quoted(text):
+    return re.findall(r'"((?:[^"\\]|\\.)*)"', text)
+
+
+bad, checked = [], 0
+
+for f in files:
+    src = open(f, encoding='utf-8').read()
+    if 'objectSchema(' not in src:
+        continue
+    for m in re.finditer(r'objectSchema\(', src):
+        i, depth = m.end(), 1
+        while i < len(src) and depth > 0:
+            if src[i] == '(':
+                depth += 1
+            elif src[i] == ')':
+                depth -= 1
+            i += 1
+        block = src[m.end():i - 1]
+
+        props, req = [], None
+        for a in top_args(block):
+            s = a.strip()
+            if s.startswith('required'):
+                if 'emptyList' in s:
+                    req = []
+                else:
+                    inner = s[s.find('(') + 1:s.rfind(')')]
+                    req = [q.strip() for q in quoted(inner)]
+                continue
+            mp = re.search(r'prop\(\s*"([^"]+)"\s*,\s*"[^"]+"\s*,\s*"((?:[^"\\]|\\.)*)"', s)
+            if mp:
+                props.append((mp.group(1), mp.group(2)))
+                continue
+            mn = re.match(r'"([^"]+)"\s*to\s+JsonSchema\.Property\(', s)
+            if mn:
+                md = re.search(r'description\s*=\s*"((?:[^"\\]|\\.)*)"', s)
+                props.append((mn.group(1), md.group(1) if md else ''))
+                continue
+
+        if not props or req is None:
+            continue          # 走默认值 / 空 required，由单测守
+        checked += 1
+        for name, desc in props:
+            if name in req and OPT.search(desc):
+                bad.append('%s: %s 在 required 里，但描述写着「%s」' % (f, name, desc[:34]))
+
+for b in bad:
+    print(b)
+if not bad:
+    print('__OK__ %d' % checked)
+PY
+)
+
+if [ -z "$SCHEMA_BAD" ]; then
+  bad "[K] schema 审计脚本没有输出（python 没跑起来？）"
+elif printf '%s' "$SCHEMA_BAD" | grep -q '^__OK__ '; then
+  n=$(printf '%s' "$SCHEMA_BAD" | sed -n 's/^__OK__ //p')
+  good "[K] 显式 required 与描述一致（检查了 $n 处显式声明）"
+else
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    bad "[K] $line"
+  done <<< "$SCHEMA_BAD"
+fi
+
+# K2：默认值必须仍然走过滤。改回 props.map { it.first } 会让 37 个参数集体变必填，
+# 而界面上、单测里（如果没这组断言）都看不出来——只有真机上模型塞空串才暴露。
+if grep -q 'props.filterNot { it.second.declaredOptional() }' core/src/main/java/com/beichen/polaris/core/AgentContract.kt; then
+  good "[K] schema 默认值仍在按描述过滤可选参数"
+else
+  bad "[K] objectSchema 的默认 required 不再过滤可选参数 —— 37 个参数会退回必填"
+fi
+
+# 反向自检：喂一段虚构的坏样本，确认扫描逻辑真能判出矛盾。
+if python3 - <<'PY'
+import re
+block = '''
+JsonSchema.prop("target", "string", "目标"),
+JsonSchema.prop("body", "string", "请求体（可选）"),
+required = listOf("target", "body")
+'''
+OPT = re.compile(r'可选|默认|留空|省略')
+props = re.findall(r'prop\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]*)"', block)
+mreq = re.search(r'required\s*=\s*listOf\(([^)]*)\)', block)
+req = [x.strip().strip('"') for x in mreq.group(1).split(',')]
+hits = [n for n, _, d in props if n in req and OPT.search(d)]
+raise SystemExit(0 if hits == ['body'] else 1)
+PY
+then
+  good "[K] 守卫自检：已知坏样本（可选参数被列入 required）能被判出"
+else
+  bad "[K] 守卫自检失败：扫描逻辑识别不出矛盾，这条守卫等于没写"
+fi
+
+say ""
 if [ "$fail" -eq 0 ]; then
   echo "架构守卫：$npass 通过 / 0 失败"
   echo "FAIL=0"

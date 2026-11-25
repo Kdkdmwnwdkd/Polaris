@@ -238,9 +238,46 @@ data class JsonSchema(
         enum: List<String>? = null
     ): Pair<String, Property> = name to Property(type, description, enum)
 
+        /**
+         * 这个参数在**描述里**已经声明了「可以不传」。
+         *
+         * 判据只认描述文字，因为那是模型唯一能读到的语义：
+         * - `（可选）` / `可选，` / `可选；` —— 直接写明
+         * - `默认 X` —— 省略时取这个默认值
+         * - `留空 = ...` / `省略则...` —— 等价说法
+         *
+         * ## 为什么这条规则必须存在
+         *
+         * `required` 的旧默认值是「所有参数」，于是描述写着「（可选）」、schema 说不传不行，
+         * 严格按契约生成的模型只能硬塞一个值——最省事的就是空串。`http_request` 就是这么
+         * 炸的：GET 带上了 `body: ""`，被 OkHttp 挡在发出之前，报 `GET must not have a
+         * request body`，还伪装成「网络异常」。
+         *
+         * 一份工具声明，描述和 required 必须说同一件事，否则模型只能在两者之间猜。
+         * 这条规则让「描述说可选」自动等于「required 里没有它」，不需要每个调用点重复声明。
+         *
+         * ## 已知的粗糙处（接受，因为方向只会更宽松）
+         *
+         * 关键词是子串匹配，理论上会误伤——比如某个必填参数的描述里恰好写了「默认」。
+         * 后果是模型可能省略它，然后在工具里被 `?: return fail("缺少 xxx")` 拦住，多一次往返。
+         * 反过来（把可选标成必填）会让模型塞空串，那才是真正会出事的方向，所以宁可偏松。
+         */
+        private fun Property.declaredOptional(): Boolean {
+            val d = description
+            if (d.isEmpty()) return false
+            return d.contains("可选") || d.contains("默认") || d.contains("留空") || d.contains("省略")
+        }
+
+        /**
+         * 拼一份工具参数 schema。
+         *
+         * [required] 缺省 = 「除描述里声明可选的之外，都必填」。要精确控制就显式传：
+         * 显式传的列表**原样使用**，不做任何过滤——需要「描述说可选但实际必填」这种
+         * 反常情况时，显式写法是唯一出口，此时描述应当同步改掉，不要留下自相矛盾的两句话。
+         */
         fun objectSchema(
             vararg props: Pair<String, Property>,
-            required: List<String> = props.map { it.first }
+            required: List<String> = props.filterNot { it.second.declaredOptional() }.map { it.first }
         ): JsonSchema = JsonSchema(properties = mapOf(*props), required = required)
     }
 }

@@ -213,11 +213,51 @@ class HttpRequestToolTest {
     }
 
     @Test
-    fun `4xx 判失败并指向地址或参数`() = runBlocking {
+    fun `404 判失败并指向路径`() = runBlocking {
         val r = HttpRequestTool(clientReturning(404, "not found")).execute(args("https://a.com/x"))
         assertFalse("404 不能再算成功", r.ok)
         assertEquals("http_404", r.code)
-        assertTrue("4xx 的提示应指向路径/参数", r.hint.orEmpty().contains("路径"))
+        assertTrue("404 的 message 应说资源不存在", r.message.contains("不存在"))
+        assertTrue("404 的提示应指向路径/参数", r.hint.orEmpty().contains("路径"))
+    }
+
+    /**
+     * 401 必须说「缺凭据」，不能说「地址不存在」。
+     *
+     * 真机上就是这么错的一次：请求一个正常但未鉴权的接口拿到 401，message 写
+     * 「地址被拒或资源不存在」，模型据此去改 URL 路径——而真正该做的是补
+     * Authorization 头，或者换一个免鉴权源。模型先读 message、后读 data，
+     * 一句措辞就能把整条推理带偏。
+     */
+    @Test
+    fun `401 说缺凭据而不是地址不存在`() = runBlocking {
+        val r = HttpRequestTool(
+            clientReturning(401, """{"error":{"message":"Authentication Fails","type":"authentication_error"}}""")
+        ).execute(args("https://a.com/v1/models"))
+        assertFalse(r.ok)
+        assertEquals("http_401", r.code)
+        assertTrue("401 的 message 应说凭据", r.message.contains("凭据") || r.message.contains("Authorization"))
+        assertFalse("401 不能说成地址不存在", r.message.contains("不存在"))
+        assertTrue("401 的提示应指向鉴权", r.hint.orEmpty().contains("鉴权"))
+        assertTrue("错误响应体必须保留", r.data.orEmpty().contains("authentication_error"))
+    }
+
+    /** 403 是「认出来了但权限不够」，与 401 的补法完全不同。 */
+    @Test
+    fun `403 说权限不足`() = runBlocking {
+        val r = HttpRequestTool(clientReturning(403, "forbidden")).execute(args("https://a.com/x"))
+        assertEquals("http_403", r.code)
+        assertTrue("403 的 message 应说无权/权限", r.message.contains("无权") || r.message.contains("权限"))
+        assertFalse("403 不能说成地址不存在", r.message.contains("不存在"))
+    }
+
+    /** 429 是限流，立即重试只会延长冷却，提示要说清「等」。 */
+    @Test
+    fun `429 说限流要等`() = runBlocking {
+        val r = HttpRequestTool(clientReturning(429, "slow down")).execute(args("https://a.com/x"))
+        assertEquals("http_429", r.code)
+        assertTrue("429 的 message 应说限流/频繁", r.message.contains("频繁") || r.message.contains("限流"))
+        assertTrue("429 的提示应说等待", r.hint.orEmpty().contains("等"))
     }
 
     /**
