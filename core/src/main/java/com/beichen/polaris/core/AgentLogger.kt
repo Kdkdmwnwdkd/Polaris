@@ -169,6 +169,19 @@ object AgentLogger {
     private fun doInit(dir: File) {
         runCatching { if (!dir.exists()) dir.mkdirs() }
         logDir = dir
+        // 采集必须在任何一行日志写盘之前。
+        //
+        // `已就绪` 那行本身会走 appendToDisk，把当天的文件建出来——如果先写再采，
+        // 「启动前到底有没有今天的文件」这个信息就被自己抹掉了。真机上正是靠这一点
+        // 才分得清「文件被删了」和「文件从来没建过」。
+        val existingBrief = runCatching {
+            val list = logFilesIn(dir)
+            if (list.isEmpty()) {
+                "（无）"
+            } else {
+                "${list.size} 个：" + list.joinToString(" · ") { "${it.name}(${it.length()}B)" }
+            }
+        }.getOrDefault("（读取失败）")
         // 先回读上一次运行的尾巴，再写本次启动的第一条。
         //
         // 顺序不能反：反了的话「已就绪」这行会排在历史之前，UI 按时间正序渲染，
@@ -182,6 +195,9 @@ object AgentLogger {
             )
         }
         i("AgentLogger", "日志目录已就绪：${dir.absolutePath}")
+        // 每次启动一行清单：这是「昨天那份还在不在」的对照锚点。
+        // 没有它的时候，只能靠「搜某个词有没有结果」反推，而反推的前提一错就要多改一版。
+        i("AgentLogger", "启动时目录内日志文件：$existingBrief")
         // 清理放到串行 IO 协程：不阻塞主线程，也不与正在进行的写盘竞争
         ioScope.launch { cleanupOldLogs(dir, LOG_RETENTION_DAYS) }
     }
@@ -350,7 +366,15 @@ object AgentLogger {
         val dir = logDir
         val diskDays = ArrayList<String>()
         val memoryHits = hits.size
+        // 无条件列出目录里的日志文件。
+        //
+        // 上一版只在「一个文件都没扫到」时列，于是「有今天、没有昨天」这种缺失
+        // 完全隐形：屏幕只写「已搜索 11-25 当天的日志」，看起来像正常结果。
+        // 真机上 11-22/11-23/11-24 三份文件在 885→888 之间消失了，而四条删除路径
+        // （clear / cleanupOldLogs / rotate / init）都不该删它们——没有清单就只能猜。
+        val logFiles = ArrayList<String>()
         if (dir != null) {
+            logFilesIn(dir).forEach { logFiles += "${it.name}(${it.length()}B)" }
             val now = System.currentTimeMillis()
             for (offset in 0 until maxDays) {
                 if (hits.size >= limit) { truncated = true; break }
@@ -421,7 +445,8 @@ object AgentLogger {
             truncated = truncated,
             fromDisk = hits.size - memoryHits,
             dirPath = dir?.absolutePath,
-            otherEntries = otherEntries
+            otherEntries = otherEntries,
+            files = logFiles
         )
     }
 
@@ -454,6 +479,22 @@ object AgentLogger {
         }
         return entries
     }
+
+    /**
+     * 目录里的日志文件（`agent-*.log` / `.log.1`），新的在前。
+     *
+     * 只此一处定义「哪些文件算日志」：搜索页的文件清单与启动时的取证共用它。
+     * 两处各写一遍过滤条件，迟早会在某次改动后分叉，然后屏幕和日志各说一套。
+     */
+    private fun logFilesIn(dir: File): List<File> = runCatching {
+        dir.listFiles()
+            ?.filter {
+                it.isFile && it.name.startsWith("agent-") &&
+                    (it.name.endsWith(".log") || it.name.endsWith(".log.1"))
+            }
+            ?.sortedByDescending { it.name }
+            ?: emptyList()
+    }.getOrDefault(emptyList())
 
     /** 清空内存缓冲与当日日志文件（含轮转出来的 `.log.1`）。 */
     fun clear() {

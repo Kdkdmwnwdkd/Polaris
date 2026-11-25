@@ -97,6 +97,21 @@ class AgentLoggerSearchTest {
     }
 
     @Test
+    fun `零命中时依然交出目录清单`() {
+        writeLog(1, lines = arrayOf(line("19:26:02.000", "INFO", "Diagnostics", "诊断包已生成")))
+        writeLog(0, lines = arrayOf(line("10:00:00.000", "INFO", "Chat", "hello")))
+
+        val result = AgentLogger.search(listOf("zzqqxx_never"))
+
+        assertTrue(result.hits.isEmpty())
+        // 清单不能跟着命中一起消失。真机上「有今天、没有昨天」这种缺失，
+        // 只有清单能一眼看出来——零命中的那次搜索同样要看得到。
+        assertEquals("清单里应当有两天：${result.files}", 2, result.files.size)
+        assertTrue("最新的在前：${result.files}", result.files[0].startsWith("agent-${dayStamp(0)}.log"))
+        assertTrue("昨天的也得在：${result.files}", result.files[1].startsWith("agent-${dayStamp(1)}.log"))
+    }
+
+    @Test
     fun `目录里一个日志文件都没有时不假装搜过今天`() {
         dir.listFiles()?.forEach { it.delete() }
         AgentLogger.clear()

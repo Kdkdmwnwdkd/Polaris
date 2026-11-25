@@ -117,6 +117,7 @@ fun LogsScreen(vm: LogsContract) {
     var fromDisk by remember { mutableStateOf(0) }
     var scannedDir by remember { mutableStateOf<String?>(null) }
     var otherEntries by remember { mutableStateOf<List<String>>(emptyList()) }
+    var scannedFiles by remember { mutableStateOf<List<String>>(emptyList()) }
 
     // —— 最近崩溃（真机第四轮：进程被杀时内存日志来不及落盘，崩溃报告是唯一证据）——
     var crashes by remember { mutableStateOf<List<CrashRecord>>(emptyList()) }
@@ -170,6 +171,7 @@ fun LogsScreen(vm: LogsContract) {
             fromDisk = 0
             scannedDir = null
             otherEntries = emptyList()
+            scannedFiles = emptyList()
             return@LaunchedEffect
         }
         searching = true
@@ -187,6 +189,7 @@ fun LogsScreen(vm: LogsContract) {
         fromDisk = result.fromDisk
         scannedDir = result.dirPath
         otherEntries = result.otherEntries
+        scannedFiles = result.files
         searching = false
     }
 
@@ -399,6 +402,10 @@ fun LogsScreen(vm: LogsContract) {
                     append("（磁盘 $fromDisk · 内存 ${(total - fromDisk).coerceAtLeast(0)}）")
                     if (rows.size != total) append("，当前级别 ${rows.size} 条")
                     if (truncated) append("（已达上限，更早的未展开）")
+                    // 清单换行跟在下面：这一行回答的是另一件事——
+                    // 「我说的这几天，文件到底在不在」。
+                    append("\n")
+                    append(filesLabel(scannedFiles))
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -455,7 +462,8 @@ fun LogsScreen(vm: LogsContract) {
                     title = "没有匹配「${query.trim()}」的日志",
                     description = "已搜索 ${daysLabel(scannedDays)} 的日志" +
                         "（保留 ${SEARCH_MAX_DAYS} 天）。空格分隔的多个词要同时命中（AND），" +
-                        "词越多范围越窄；也可能只是当前级别下没有。",
+                        "词越多范围越窄；也可能只是当前级别下没有。" +
+                        "\n\n" + filesLabel(scannedFiles),
                     actionLabel = "清除搜索",
                     onAction = { query = "" }
                 )
@@ -775,6 +783,26 @@ private fun daysLabel(days: List<String>): String {
 /** `20261125` → `11-25`；长度不对时原样返回（宁可显示得难看，也不要在这里崩）。 */
 private fun formatDayShort(day: String): String =
     if (day.length == 8) "${day.substring(4, 6)}-${day.substring(6, 8)}" else day
+
+/**
+ * 目录里日志文件的人话清单。
+ *
+ * 这一行不为好看，只为回答一个问题：**昨天那份还在不在。**
+ *
+ * 2026-11-25 真机上，885 时还能搜到 11-22 至 11-25 四天的日志，888 之后只剩 11-25。
+ * 而代码里四条删除路径（clear 只删当天、cleanupOldLogs 只删 7 天前、rotate 只改名、
+ * init 幂等）都不该删掉前几天。没有清单就只能靠「搜某个词有没有结果」反推，
+ * 一旦前提判断错，就要多改一版——这件事已经连错两轮。
+ *
+ * 最多列 4 个，再多就用「…」收尾：7 个全展开会把范围行挤成三行，
+ * 而真正要看的是「前几天有没有」。
+ */
+private fun filesLabel(files: List<String>): String {
+    if (files.isEmpty()) return "日志文件：目录里一个都没有"
+    val shown = files.take(4).joinToString(" · ")
+    val tail = if (files.size > 4) " …" else ""
+    return "日志文件 ${files.size} 个：$shown$tail"
+}
 
 /** 一条解析后的日志行：`HH:mm:ss.SSS LEVEL [tag] message`（core/AgentLogger.format）。 */
 private data class LogEntry(

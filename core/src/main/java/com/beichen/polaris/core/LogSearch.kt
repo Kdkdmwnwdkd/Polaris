@@ -48,7 +48,17 @@ data class LogSearchResult(
      * 只在「一个 `agent-*.log` 都没扫到」时采集。用途是回答「目录是空的，还是
      * 日志写到了别的名字/别的地方」——这两件事的修法完全不同。
      */
-    val otherEntries: List<String> = emptyList()
+    val otherEntries: List<String> = emptyList(),
+    /**
+     * 目录里全部日志文件（`agent-*.log` / `.log.1`，`名字(字节数)`，新的在前）。
+     *
+     * **无条件采集**，不管有没有命中。上一版只在「一个文件都没扫到」时给清单，
+     * 于是真机上出现了一个更窄也更难查的问题：目录里有今天的文件、没有昨天的，
+     * 屏幕只写「已搜索 11-25 当天的日志」，看不出「11-24 那份已经不在了」。
+     * 而代码里四条删除路径（clear / cleanupOldLogs / rotate / init）都不该删它。
+     * 把整个清单摆出来，是「昨天到底还在不在」最快的一问。
+     */
+    val files: List<String> = emptyList()
 ) {
     /** 内存缓冲贡献的命中数。 */
     val fromMemory: Int get() = (hits.size - fromDisk).coerceAtLeast(0)
