@@ -112,6 +112,11 @@ fun LogsScreen(vm: LogsContract) {
     var scannedDays by remember { mutableStateOf<List<String>>(emptyList()) }
     var truncated by remember { mutableStateOf(false) }
     var searching by remember { mutableStateOf(false) }
+    // 来源拆分与「磁盘到底有没有文件」的证据。三者都来自 core 的 LogSearchResult，
+    // 只用于文案：屏幕上必须能看出「这 N 条是磁盘读的，还是内存兜的」。
+    var fromDisk by remember { mutableStateOf(0) }
+    var scannedDir by remember { mutableStateOf<String?>(null) }
+    var otherEntries by remember { mutableStateOf<List<String>>(emptyList()) }
 
     // —— 最近崩溃（真机第四轮：进程被杀时内存日志来不及落盘，崩溃报告是唯一证据）——
     var crashes by remember { mutableStateOf<List<CrashRecord>>(emptyList()) }
@@ -162,6 +167,9 @@ fun LogsScreen(vm: LogsContract) {
             scannedDays = emptyList()
             truncated = false
             searching = false
+            fromDisk = 0
+            scannedDir = null
+            otherEntries = emptyList()
             return@LaunchedEffect
         }
         searching = true
@@ -176,6 +184,9 @@ fun LogsScreen(vm: LogsContract) {
         hits = result.hits
         scannedDays = result.days
         truncated = result.truncated
+        fromDisk = result.fromDisk
+        scannedDir = result.dirPath
+        otherEntries = result.otherEntries
         searching = false
     }
 
@@ -379,9 +390,14 @@ fun LogsScreen(vm: LogsContract) {
         // （是内存 500 条？今天 4MB？还是 7 天？）。直接说「在哪些天的日志里命中了几条」
         // 才是能核对的信息。
         if (terms.isNotEmpty() && rows.isNotEmpty()) {
+            // 来源必须写出来。日期的「11-24」可能是磁盘读的，也可能是 restoreTail
+            // 从昨天文件读回内存的——两者在屏幕上长得一模一样，而修法完全不同。
+            val total = hits?.size ?: rows.size
             Text(
                 text = buildString {
-                    append("在 ${daysLabel(scannedDays)} 的日志中命中 ${rows.size} 条")
+                    append("在 ${daysLabel(scannedDays)} 的日志中命中 $total 条")
+                    append("（磁盘 $fromDisk · 内存 ${(total - fromDisk).coerceAtLeast(0)}）")
+                    if (rows.size != total) append("，当前级别 ${rows.size} 条")
                     if (truncated) append("（已达上限，更早的未展开）")
                 },
                 style = MaterialTheme.typography.bodySmall,
@@ -403,6 +419,34 @@ fun LogsScreen(vm: LogsContract) {
                     icon = Icons.Outlined.Search,
                     title = "正在搜索…",
                     description = "在内存与最近 ${SEARCH_MAX_DAYS} 天的日志里查找。"
+                )
+                // 搜完了、确实没有——分两种说法，因为它们指向不同的故障：
+                //  - 扫到了文件：只是没命中。用户问的是「我搜了哪儿」，给日期范围；
+                //  - 一个文件都没扫到：磁盘这一层根本没工作。用户问的是「为什么搜不到」，
+                //    必须把目录和目录里的实际内容交出去。
+                // 2026-11-25 真机：后者被旧文案说成「已搜索今天的日志」，一个真实故障
+                // 被伪装成了正常结果，来回查了三轮才定位到「其实没读磁盘」。
+                terms.isNotEmpty() && scannedDays.isEmpty() -> AkEmptyState(
+                    icon = Icons.Outlined.Search,
+                    title = "没有匹配「${query.trim()}」的日志",
+                    description = buildString {
+                        append("没有找到历史日志文件")
+                        val path = scannedDir
+                        if (path == null) {
+                            append("（日志目录尚未就绪）")
+                        } else {
+                            append("（目录：$path）")
+                            if (otherEntries.isNotEmpty()) {
+                                append("。目录里现有：${otherEntries.joinToString("，")}")
+                            }
+                        }
+                        append(
+                            "。本次只能搜内存里的 ${entries.size} 条记录" +
+                                "（磁盘保留 ${SEARCH_MAX_DAYS} 天，重启后内存会清空）。"
+                        )
+                    },
+                    actionLabel = "清除搜索",
+                    onAction = { query = "" }
                 )
                 // 真的搜完了、确实没有。文案必须带范围：只说「没有匹配」会让用户断定
                 // 「日志里确实没这条」，然后去怀疑代码，而实际可能只是超出了保留天数。
@@ -714,9 +758,11 @@ private data class LogRowModel(val entry: LogEntry, val day: String?)
  * 「扫过哪些天」（这时用户问的是「你搜过哪儿」）。两者都由 core 给，这里只负责排版。
  */
 private fun daysLabel(days: List<String>): String {
-    // 空只出现在「零命中 且 一个文件都没扫到」——首次运行、还没落盘的那种。
-    // 说「今天」是实情：内存里的行必然是今天的。
-    if (days.isEmpty()) return "今天"
+    // 空列表 = 一个磁盘文件都没扫到。这条分支正常不会显示：空态那边有独立的
+    // 「没有找到历史日志文件」文案（带目录），而结果行只在有命中时出现。
+    // 留着兜底是为了不崩，但**不写「今天」**——那是把「没读到文件」说成
+    // 「读到了今天的文件」，真机上正是这句话掩盖了一次真实的失败。
+    if (days.isEmpty()) return "无磁盘日志"
     val newest = days.first()
     val oldest = days.last()
     return if (newest == oldest) {

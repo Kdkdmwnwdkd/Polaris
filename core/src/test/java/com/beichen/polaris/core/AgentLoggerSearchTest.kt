@@ -85,6 +85,48 @@ class AgentLoggerSearchTest {
     // —— 磁盘 ——
 
     @Test
+    fun `命中来自磁盘时 fromDisk 等于命中数`() {
+        writeLog(0, lines = arrayOf(line("10:00:00.001", "INFO", "Turn", "code=http_404")))
+        // setUp 已清空内存，这条只可能从文件里读到
+        val result = AgentLogger.search(listOf("http_404"))
+
+        assertEquals(1, result.hits.size)
+        assertEquals("磁盘命中必须如实计数，否则屏幕上分不清内存与磁盘", 1, result.fromDisk)
+        assertEquals(0, result.fromMemory)
+        assertFalse(result.noDiskFiles)
+    }
+
+    @Test
+    fun `目录里一个日志文件都没有时不假装搜过今天`() {
+        dir.listFiles()?.forEach { it.delete() }
+        AgentLogger.clear()
+
+        val result = AgentLogger.search(listOf("随便什么"))
+
+        assertTrue(result.hits.isEmpty())
+        assertTrue(result.days.isEmpty())
+        // 这条断言是这次改动的核心：旧实现在这里返回空 days，UI 于是写「已搜索今天的日志」，
+        // 把一个真实故障（一个文件都没读到）说成了正常结果。
+        assertTrue("一个文件都没扫到时必须能识别出来：$result", result.noDiskFiles)
+        assertEquals(dir.absolutePath, result.dirPath)
+        assertEquals(0, result.fromDisk)
+        assertTrue("空目录不该编造条目：${result.otherEntries}", result.otherEntries.isEmpty())
+    }
+
+    @Test
+    fun `目录里只有非日志文件时把它列出来`() {
+        dir.listFiles()?.forEach { it.delete() }
+        File(dir, "turns-20261125.ndjson").writeText("{}\n")
+        AgentLogger.clear()
+
+        val result = AgentLogger.search(listOf("随便什么"))
+
+        assertTrue(result.noDiskFiles)
+        // 这条列表就是「写盘写到了别的名字/别的地方」的证据，屏幕上要能看见。
+        assertEquals(listOf("turns-20261125.ndjson(3B)"), result.otherEntries)
+    }
+
+    @Test
     fun `今天文件里的命中带今天的日期`() {
         writeLog(
             0,

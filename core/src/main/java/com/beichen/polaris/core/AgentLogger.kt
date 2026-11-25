@@ -76,6 +76,13 @@ object AgentLogger {
     /** 回读历史时每个文件最多看这么多行（尾部）。 */
     private const val TAIL_LINES = 2000
 
+    /** 「目录里没有 agent 日志」这条 WARN 的最小间隔：搜索按输入触发，不节流会刷屏。 */
+    private const val DISK_MISS_WARN_INTERVAL_MS = 30_000L
+
+    /** 上次写「目录里没有日志」的时间戳。仅用于节流，读写在 IO 线程，@Volatile 足够。 */
+    @Volatile
+    private var lastDiskMissWarnAt = 0L
+
     /**
      * 反解 [LogEntry.format] 的单行格式：`HH:mm:ss.SSS LEVEL [tag] message`。
      *
@@ -342,6 +349,7 @@ object AgentLogger {
         // 读一次到局部：logDir 是 @Volatile，循环中途被 reset 会出现「半天读不到文件」的半截行为。
         val dir = logDir
         val diskDays = ArrayList<String>()
+        val memoryHits = hits.size
         if (dir != null) {
             val now = System.currentTimeMillis()
             for (offset in 0 until maxDays) {
@@ -397,7 +405,54 @@ object AgentLogger {
         } else {
             hits.map { it.day }.distinct().sortedDescending()
         }
-        return LogSearchResult(hits, days, truncated)
+
+        // 一个文件都没扫到：把目录里到底有什么记下来，别让「今天」这种兜底文案
+        // 把失败说成正常。真机上一次这样的静默，代价是三轮猜测性的改版
+        // （2026-11-25：搜昨天的串有结果、搜不存在的词却说「已搜索今天」）。
+        val otherEntries = if (dir != null && diskDays.isEmpty()) {
+            collectMissDiagnostics(dir)
+        } else {
+            emptyList()
+        }
+
+        return LogSearchResult(
+            hits = hits,
+            days = days,
+            truncated = truncated,
+            fromDisk = hits.size - memoryHits,
+            dirPath = dir?.absolutePath,
+            otherEntries = otherEntries
+        )
+    }
+
+    /**
+     * 目录里没有 `agent-*.log` 时的取证：列几个实际条目，并往日志里写一条（30 秒最多一次）。
+     *
+     * 为什么列「别的条目」而不是只说「目录为空」：真机上目录里几乎总有 `turns-*.ndjson`，
+     * 所以「空目录」和「日志写到了别处/别的名字」看起来一模一样，而修法完全不同。
+     * 列表里出现 `agent_20261125.log`（下划线）或根本只有 turns 文件，一眼就能分辨。
+     *
+     * 为什么节流：搜索是按输入触发的，敲一个词可能跑十几次，不节流会把真正有用的行淹掉。
+     */
+    private fun collectMissDiagnostics(dir: File): List<String> {
+        val entries = runCatching {
+            dir.listFiles()
+                ?.take(LogSearchResult.MAX_OTHER_ENTRIES)
+                ?.map { "${it.name}(${it.length()}B)" }
+                ?: emptyList()
+        }.getOrDefault(emptyList())
+
+        val now = System.currentTimeMillis()
+        if (now - lastDiskMissWarnAt >= DISK_MISS_WARN_INTERVAL_MS) {
+            lastDiskMissWarnAt = now
+            val detail = if (entries.isEmpty()) "目录为空" else "实际条目：" + entries.joinToString("，")
+            w(
+                "LogSearch",
+                "目录 ${dir.absolutePath} 下没有任何 agent-*.log（$detail）——" +
+                    "本次搜索只能覆盖内存缓冲里的记录",
+            )
+        }
+        return entries
     }
 
     /** 清空内存缓冲与当日日志文件（含轮转出来的 `.log.1`）。 */

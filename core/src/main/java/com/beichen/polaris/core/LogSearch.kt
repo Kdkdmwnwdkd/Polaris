@@ -29,9 +29,36 @@ data class LogHit(val line: String, val day: String)
 data class LogSearchResult(
     val hits: List<LogHit>,
     val days: List<String>,
-    val truncated: Boolean
+    val truncated: Boolean,
+    /**
+     * [hits] 里有多少条来自磁盘文件；剩下的就是内存缓冲里的。
+     *
+     * **为什么必须拆开**：2026-11-25 真机上出现过一个查不动的局面——搜「昨天」的串
+     * 得到 3 条、日期标着 `11-24`、范围写「11-24 当天」，看上去完全正常；可同一时刻
+     * 搜一个必然无命中的词，空态却说「已搜索**今天**的日志」，即一个文件都没读到。
+     * 两种结果不可能同时成立，而屏幕上没有任何信息能区分「磁盘读到了」和
+     * 「全是从内存缓冲里来的历史」。加这两个计数，一次搜索就能定案。
+     */
+    val fromDisk: Int = 0,
+    /** 本次搜索用的目录；null = 还没 init，日志只存在于内存。 */
+    val dirPath: String? = null,
+    /**
+     * 目录里**实际存在的条目**（`名字(字节数)`，最多 [MAX_OTHER_ENTRIES] 个）。
+     *
+     * 只在「一个 `agent-*.log` 都没扫到」时采集。用途是回答「目录是空的，还是
+     * 日志写到了别的名字/别的地方」——这两件事的修法完全不同。
+     */
+    val otherEntries: List<String> = emptyList()
 ) {
+    /** 内存缓冲贡献的命中数。 */
+    val fromMemory: Int get() = (hits.size - fromDisk).coerceAtLeast(0)
+
+    /** 一个 `agent-*.log` 都没读到。空态文案据此换说法，不再拿「今天」当兜底。 */
+    val noDiskFiles: Boolean get() = days.isEmpty() && hits.isEmpty()
+
     companion object {
+        const val MAX_OTHER_ENTRIES = 6
+
         val EMPTY = LogSearchResult(emptyList(), emptyList(), false)
     }
 }
