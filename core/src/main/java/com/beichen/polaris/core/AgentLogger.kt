@@ -114,6 +114,14 @@ object AgentLogger {
     private var generation = 0
 
     /**
+     * 落盘与清空共用的锁：保证「代数比对 + 写文件」不会被「递增 + 删文件」插进中间。
+     *
+     * 单独一把锁，不复用 [buffer]——buffer 的临界区只该管内存，把文件 IO 塞进去
+     * 会让 UI 线程取日志时陪着等磁盘。
+     */
+    private val writeLock = Any()
+
+    /**
      * 该工具的入参与输出是否「只记长度、不记原文」（审计 F12）。
      *
      * 判据本体在 [LogRedaction]，与 `ToolCatalog` 一起是零依赖纯 Kotlin——
@@ -516,23 +524,30 @@ object AgentLogger {
      * 对他而言「清空」= 删掉日志；对代码而言只是删掉今天这一份。日志里带着提问原文，
      * 所以这不是显示问题，是**没删干净**。
      *
-     * ## 为什么先递增 [generation]
+     * ## 为什么先递增 [generation]，且要和写入共用一把锁
      *
      * 落盘是异步的（单线程 IO 协程）。点清空那一刻，队列里可能还排着几条 [appendToDisk]；
      * 删完文件后它们醒来，会重建当天文件并把旧内容写回去——用户看到「已清空」却又冒出旧行。
      * 递增代数让排队中的写入带一个过期标记，醒来先比对，过期直接丢弃。
      *
+     * 光有代数还不够：`if (gen != generation) return` 与随后的 `appendText` 之间不是原子的。
+     * 检查刚通过、clear 就插进来递增并删文件、这条再写下去——旧行照样回来。
+     * 这个窗口在本地快机器上几乎撞不到，CI 的慢机器上 500 条积压时一次就中（2026-11-25 run 892）。
+     * 所以「比对 + 写」和「递增 + 删」都必须落在同一把 [writeLock] 里。
+     *
      * @return 实际删除的文件数（0 表示目录里本来就没有文件）。
      */
     fun clear(): Int {
         synchronized(buffer) { buffer.clear() }
-        generation++
-        val dir = logDir ?: return 0
-        var deleted = 0
-        logFilesIn(dir).forEach { f ->
-            if (runCatching { f.delete() }.getOrDefault(false)) deleted++
+        return synchronized(writeLock) {
+            generation++
+            val dir = logDir ?: return@synchronized 0
+            var deleted = 0
+            logFilesIn(dir).forEach { f ->
+                if (runCatching { f.delete() }.getOrDefault(false)) deleted++
+            }
+            deleted
         }
-        return deleted
     }
 
     /** 当日日志文件：`dir/agent-<yyyyMMdd>.log`；未初始化时返回 null。 */
@@ -562,13 +577,16 @@ object AgentLogger {
     }
 
     private fun appendToDisk(dir: File, entry: LogEntry, gen: Int) {
-        runCatching {
-            // 排队期间用户点了「清空」：这条属于上一代，丢掉，否则旧内容会被写回刚删干净的文件。
-            if (gen != generation) return
-            if (!dir.exists() && dir.mkdirs().not()) return
-            val file = currentLogFile() ?: File(dir, "agent-${formatDay(entry.timeMs)}.log")
-            if (file.exists() && file.length() > MAX_FILE_BYTES) rotate(file)
-            file.appendText(entry.format() + "\n")
+        // 比对与写入必须在同一把锁里：中间被 clear 插进来，旧行就会被写回刚删干净的文件。
+        synchronized(writeLock) {
+            runCatching {
+                // 排队期间用户点了「清空」：这条属于上一代，丢掉。
+                if (gen != generation) return
+                if (!dir.exists() && dir.mkdirs().not()) return
+                val file = currentLogFile() ?: File(dir, "agent-${formatDay(entry.timeMs)}.log")
+                if (file.exists() && file.length() > MAX_FILE_BYTES) rotate(file)
+                file.appendText(entry.format() + "\n")
+            }
         }
     }
 
