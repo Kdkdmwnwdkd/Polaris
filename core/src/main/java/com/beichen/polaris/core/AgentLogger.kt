@@ -6,7 +6,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Collections
 import java.util.Date
 import java.util.Locale
@@ -475,13 +474,17 @@ object AgentLogger {
     private fun restoreTail(dir: File): Int {
         val now = System.currentTimeMillis()
         // 前一天也读：崩溃正好落在零点前后时，现场留在昨天那份文件里。
-        val files = listOf(
-            File(dir, "agent-${formatDay(now - DAY_MS)}.log"),
-            File(dir, "agent-${formatDay(now)}.log"),
-        ).filter { it.isFile }
+        //
+        // 日期要跟着文件走。**文件名就是这一行所属的日期**，而 `HH:mm:ss.SSS` 里没有日期。
+        // 早先按「今天该时刻」还原，昨天 08:00 的行就变成了今天 08:00——今天早已过了 8 点，
+        // 连「未来则减一天」那条兜底都救不了它。于是恢复出来的历史与刚写的行混在同一天，
+        // 搜索结果里昨天的事全标成今天。
+        val files = listOf(formatDay(now - DAY_MS), formatDay(now))
+            .map { day -> day to File(dir, "agent-$day.log") }
+            .filter { it.second.isFile }
 
         val parsed = ArrayList<LogEntry>()
-        for (file in files) {
+        for ((day, file) in files) {
             runCatching {
                 val lines = file.readLines()
                 val from = (lines.size - TAIL_LINES).coerceAtLeast(0)
@@ -499,7 +502,7 @@ object AgentLogger {
                     val v = m.groupValues
                     parsed.add(
                         LogEntry(
-                            timeMs = clockToMillis(v[1], v[2], v[3], v[4], now),
+                            timeMs = clockToMillis(day, v[1], v[2], v[3], v[4]),
                             // 级别字符串是我们自己写的，认不出时按 INFO 处理，
                             // 不因为一条坏记录丢掉整批历史。
                             level = runCatching { LogLevel.valueOf(v[5]) }.getOrDefault(LogLevel.INFO),
@@ -521,22 +524,21 @@ object AgentLogger {
         return tail.size
     }
 
-    /** 把 `HH:mm:ss.SSS` 还原成「今天该时刻」的时间戳；解析失败返回 [ref]。 */
-    private fun clockToMillis(h: String, m: String, s: String, ms: String, ref: Long): Long =
+    /**
+     * 把 `yyyyMMdd` + `HH:mm:ss.SSS` 还原成时间戳。
+     *
+     * 日期必须由调用方给（来自日志文件名），不能拿「现在」去猜：昨天文件里的 08:00
+     * 与今天文件里的 08:00 字面完全一样，只有文件名能分开。早先那版用「今天该时刻 +
+     * 未来则减一天」，只能救回 23:50 这种跨零点的行，昨天白天的行全塌到今天。
+     *
+     * 解析失败时返回当前时刻——宁可这一条的时间差一天，也不能把它整条丢掉。
+     */
+    private fun clockToMillis(day: String, h: String, m: String, s: String, ms: String): Long =
         runCatching {
-            val cal = Calendar.getInstance().apply {
-                timeInMillis = ref
-                set(Calendar.HOUR_OF_DAY, h.toInt())
-                set(Calendar.MINUTE, m.toInt())
-                set(Calendar.SECOND, s.toInt())
-                set(Calendar.MILLISECOND, ms.toInt())
+            synchronized(clockLock) {
+                dayTimeFormat.parse("$day $h:$m:$s.$ms")!!.time
             }
-            var t = cal.timeInMillis
-            // 跨零点：昨天文件里的 23:50 按「今天 23:50」还原会跑到未来，
-            // 列表里就会看到历史排在本次之后。往回挪一天。
-            if (t > ref + 60_000) t -= DAY_MS
-            t
-        }.getOrDefault(ref)
+        }.getOrDefault(System.currentTimeMillis())
 
     /**
      * 清理过期日志：`agent-<yyyyMMdd>.log` / `.log.1`，保留最近 [keepDays] 天。
@@ -573,6 +575,10 @@ private const val PREVIEW_MAX = 800
 private val clockLock = Any()
 private val clockFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
 private val dayFormat = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
+
+/** 回读历史用：日期与时刻一起解析，避免「这行是哪天的」靠猜。lenient=false 拒绝 11-31 这类非法日。 */
+private val dayTimeFormat = SimpleDateFormat("yyyyMMdd HH:mm:ss.SSS", Locale.getDefault())
+    .apply { isLenient = false }
 
 private fun formatClock(ms: Long): String = synchronized(clockLock) { clockFormat.format(Date(ms)) }
 private fun formatDay(ms: Long): String = synchronized(clockLock) { dayFormat.format(Date(ms)) }

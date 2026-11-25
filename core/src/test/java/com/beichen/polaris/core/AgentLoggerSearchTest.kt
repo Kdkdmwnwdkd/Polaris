@@ -220,6 +220,26 @@ class AgentLoggerSearchTest {
     }
 
     @Test
+    fun `昨天文件里的白天记录不会被还原成今天`() {
+        // 上一条靠的是 23:12（跨零点），旧逻辑里「未来则减一天」那条兜底恰好能救它。
+        // 这条挑一个**今天已经过去**的时刻（两小时前）：昨天 16:00 与今天 16:00 字面一样，
+        // 旧实现按「今天 16:00」还原，16:00 已过 → 不触发兜底 → 昨天的事记成今天。
+        // 只有「日期从文件名来」才解得对。
+        val clock = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
+            .format(Date(System.currentTimeMillis() - 2 * 60 * 60 * 1000L))
+        AgentLogger.reset()
+        AgentLogger.clear()
+        writeLog(1, lines = arrayOf(line(clock, "INFO", "Chat", "昨天白天的那条 401")))
+        AgentLogger.init(dir)
+
+        val result = AgentLogger.search(listOf("昨天白天"))
+
+        assertEquals(1, result.hits.size)
+        assertEquals(dayStamp(1), result.hits[0].day)
+        assertEquals(listOf(dayStamp(1)), result.days)
+    }
+
+    @Test
     fun `空关键词返回空结果而不是全量`() {
         writeLog(0, lines = arrayOf(line("10:00:00.001", "INFO", "A", "任意")))
         val result = AgentLogger.search(emptyList())
