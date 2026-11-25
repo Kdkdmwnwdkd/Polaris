@@ -64,6 +64,17 @@ class HttpRequestTool(
         // 15 秒的判断依据：日志里成功的请求最快 0.4 秒、最慢 2.0 秒，快了整整一个量级；
         // 真需要更久的（大文件、慢接口）应该走 shell_run + curl，那里能自己给 --max-time。
         .readTimeout(15, TimeUnit.SECONDS)
+        // callTimeout = 20s：readTimeout 只管「两次收到字节之间」，**不管整通时长**。
+        //
+        // 2026-11-25 真机日志：一个返回 521 的源在断断续续吐字节，每次间隔都不到 15s，
+        // 于是 readTimeout 一次也没触发，整通跑了 30.5 秒（`dur=32518ms`），
+        // 用户看到的是「点了允许，然后干等半分钟」。上一版只改 readTimeout，
+        // 以为「15 秒封顶」，其实封顶的是 callTimeout——它从共享的 short 继承了 60s。
+        //
+        // 对「模型自己挑地址、撞墙是常态」的场景，总时长必须有上限。20 秒的依据：
+        // 日志里成功请求 0.4–2.0 秒；响应体读到 8000 字符就截断，
+        // 不存在「大响应体需要更久」这种正当理由。
+        .callTimeout(20, TimeUnit.SECONDS)
         .followRedirects(false)
         .followSslRedirects(false)
         .build()

@@ -68,4 +68,46 @@ internal object DiagnosticsFingerprint {
         }
         sb.toString()
     }.getOrDefault(UNAVAILABLE)
+
+    /**
+     * 自校验段的完整文本（含它与正文之间的那个空行）。
+     *
+     * ## 为什么要多写一行「完整文件应为」
+     *
+     * 只写「正文字节数」的话，判断文件好坏要靠人做减法：`文件大小 - 正文字节数`
+     * 应该等于本段长度。2026-11-25 实测这个差是 81，写成文档后照样有人算错——
+     * 因为 81 会随正文位数的变化而变（正文从 5 位涨到 6 位时是 82），
+     * 任何「记住 81」的说法都是错的。
+     *
+     * 所以直接把**期望的文件总字节数**印出来：看一眼大小对不对，不用算。
+     *
+     * ## 自指怎么处理
+     *
+     * 「完整文件应为：N」里的 N 包含它自己的位数：N 的位数决定本段长度，
+     * 本段长度又决定 N。这里用迭代收敛——初值给一个偏大的数，每次用真实长度
+     * 反算，最多三轮必稳定（位数最多 7 位，只会跳一次）。
+     * 收敛后 [sealOf] 的长度与 `total - bodyBytes.size` 严格相等，
+     * `DiagnosticsFingerprintTest` 里有断言守着这条，改坏了会红。
+     *
+     * @param bodyEndsWithNewline 正文是否以换行结尾；不是则先补一个，保证空行成立。
+     */
+    fun sealOf(bodyBytes: ByteArray, bodyEndsWithNewline: Boolean): String {
+        val n = bodyBytes.size
+        val finger = of(bodyBytes)
+        fun render(total: Int): String = buildString {
+            if (!bodyEndsWithNewline) append('\n')
+            append('\n')
+            append("—— 自校验 ——\n")
+            append("正文字节数：").append(n).append('\n')
+            append("完整文件应为：").append(total).append(" 字节\n")
+            append("正文指纹：").append(finger).append('\n')
+        }
+        var total = n + 160
+        repeat(4) {
+            val len = render(total).toByteArray(Charsets.UTF_8).size
+            if (n + len == total) return render(total)
+            total = n + len
+        }
+        return render(total)
+    }
 }

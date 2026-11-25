@@ -30,6 +30,8 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Error
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -176,6 +178,11 @@ fun LogsScreen(vm: LogsContract) {
         // v5：三个描边按钮（导出 / 诊断包 / 清空）原来占满一整行 100dp，
         // 是这一页最重的元素，可它们全是低频维护动作。改成一行纯文字动作：
         // 低频操作不该有按钮的体量，需要它的人仍然一眼看得见。
+        // 诊断包的两条出口（复制全文 / 分享文件）都放在这个菜单里。
+        //
+        // 为什么不并排摆两个按钮：这一行已经有三个动作，再加一个会挤成两行
+        // 或者被截断，而这页上全是低频维护动作，不值得为它们重构布局。
+        var packMenu by remember { mutableStateOf(false) }
         Row(
             Modifier
                 .fillMaxWidth()
@@ -193,25 +200,57 @@ fun LogsScreen(vm: LogsContract) {
                     exportHint = "已复制 ${logs.size} 条日志到剪贴板"
                 }
             )
-            AkTextButton(
-                text = "诊断包",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                onClick = {
-                    // R10：诊断文本 + 回合事件流一起发。没有回合日志时只有文本，
-                    // 回执里不再谎称「含事件」——用户能据此判断这次有没有可用证据。
-                    val files = DiagnosticsExporter.exportBundle(ctx, vm.exportLogs())
-                    if (files.isNotEmpty()) {
-                        DiagnosticsExporter.share(ctx, files)
-                        exportHint = if (files.size > 1) {
-                            "诊断包已生成（含回合事件），选择应用发送"
-                        } else {
-                            "诊断包已生成（配置已脱敏），选择应用发送"
+            // 点开由用户选走哪条路：复制全文（默认推荐）还是生成文件。
+            //
+            // 为什么把「复制全文」放第一位：2026-11-25 真机上连续 8 份诊断包经过
+            // 「分享面板 → 接收 App → 上传」之后全部被补成 4096 的整数倍，
+            // 而同一批文本粘贴（54 KB）一次都没坏。文件这条路过不去，就换一条。
+            // 菜单文案写「推荐」是给用户的理由，不是替他决定——文件该发还得能发。
+            Box {
+                AkTextButton(
+                    text = "诊断包",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    onClick = { packMenu = true }
+                )
+                DropdownMenu(expanded = packMenu, onDismissRequest = { packMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("复制全文（推荐）") },
+                        onClick = {
+                            packMenu = false
+                            val text = DiagnosticsExporter.textOf(ctx, vm.exportLogs())
+                            if (text != null) {
+                                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText("北辰 诊断包", text))
+                                // 报字节数：用户能据此判断「复制到的这一段」是否完整，
+                                // 报告里写的「完整文件应为」也是同一个量纲。
+                                exportHint = "已复制诊断全文 ${text.toByteArray(Charsets.UTF_8).size} 字节" +
+                                    "（含设备与配置，Key 已脱敏），直接粘贴即可"
+                            } else {
+                                exportHint = "诊断生成失败，请改用「导出日志」"
+                            }
                         }
-                    } else {
-                        exportHint = "诊断包生成失败，请改用「导出」复制日志"
-                    }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("生成文件并分享") },
+                        onClick = {
+                            packMenu = false
+                            // R10：诊断文本 + 回合事件流一起发。没有回合日志时只有文本，
+                            // 回执里不再谎称「含事件」——用户能据此判断这次有没有可用证据。
+                            val files = DiagnosticsExporter.exportBundle(ctx, vm.exportLogs())
+                            if (files.isNotEmpty()) {
+                                DiagnosticsExporter.share(ctx, files)
+                                exportHint = if (files.size > 1) {
+                                    "诊断包已生成（含回合事件），选择应用发送"
+                                } else {
+                                    "诊断包已生成（配置已脱敏），选择应用发送"
+                                }
+                            } else {
+                                exportHint = "诊断包生成失败，请改用「导出日志」复制"
+                            }
+                        }
+                    )
                 }
-            )
+            }
             Spacer(Modifier.weight(1f))
             AkTextButton(
                 text = "清空",

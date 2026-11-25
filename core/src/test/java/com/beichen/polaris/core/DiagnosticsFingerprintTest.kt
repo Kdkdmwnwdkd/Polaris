@@ -113,4 +113,49 @@ class DiagnosticsFingerprintTest {
     fun `占位值不与任何真实指纹形状冲突`() {
         assertFalse(DiagnosticsFingerprint.UNAVAILABLE.length == DiagnosticsFingerprint.HEX_CHARS)
     }
+
+    /**
+     * 自校验段里写的「完整文件应为」必须**精确等于**真实拼接结果。
+     *
+     * 这一条守的是自指：段里那个数字包含它自己的位数，改一位数就换一段长度。
+     * 取值覆盖 1/2/3/4/5/6 位正文长度——位数每跳一次都会让段长变一字节，
+     * 迭代少算一轮就会写出一个「差 1」的数字，而差 1 已经足够让用户判错。
+     */
+    @Test
+    fun `自校验段声明的完整大小与真实拼接一致`() {
+        // 0 与各数量级边界：位数跳变恰好发生在 10 的幂和 10 的幂减一之间
+        val sizes = listOf(0, 1, 9, 10, 99, 100, 999, 1_000, 9_999, 10_000, 99_999, 100_000, 800_000)
+        for (n in sizes) {
+            val body = ByteArray(n) { 'x'.code.toByte() }
+            for (endsWithNewline in listOf(true, false)) {
+                val bodyText = String(body, Charsets.UTF_8)
+                val seal = DiagnosticsFingerprint.sealOf(body, endsWithNewline)
+                val actual = (bodyText + seal).toByteArray(Charsets.UTF_8).size
+                val declared = Regex("完整文件应为：(\\d+) 字节")
+                    .find(seal)?.groupValues?.get(1)?.toIntOrNull()
+                val label = "正文 $n 字节 / 结尾换行=$endsWithNewline"
+                assertTrue("$label 段里没有『完整文件应为』这一行", declared != null)
+                assertEquals(label, actual.toLong(), declared!!.toLong())
+            }
+        }
+    }
+
+    /** 正文没有结尾换行时，段首要先补一个，保证「自校验」前面空一行。 */
+    @Test
+    fun `正文不以换行结尾时段首补换行`() {
+        val noNl = DiagnosticsFingerprint.sealOf("abc".toByteArray(Charsets.UTF_8), bodyEndsWithNewline = false)
+        assertTrue("段首应为两个换行（补的一个 + 空行）", noNl.startsWith("\n\n—— 自校验 ——"))
+
+        val withNl = DiagnosticsFingerprint.sealOf("abc\n".toByteArray(Charsets.UTF_8), bodyEndsWithNewline = true)
+        assertTrue("已有换行时只留空行那一个", withNl.startsWith("\n—— 自校验 ——"))
+    }
+
+    /** 段里那份指纹必须与 `of(正文)` 一致，否则文件里和日志里两份值天然对不上。 */
+    @Test
+    fun `段内指纹与正文指纹同源`() {
+        val body = "北辰诊断包正文".toByteArray(Charsets.UTF_8)
+        val seal = DiagnosticsFingerprint.sealOf(body, bodyEndsWithNewline = true)
+        assertTrue(seal.contains("正文指纹：${DiagnosticsFingerprint.of(body)}"))
+        assertTrue(seal.contains("正文字节数：${body.size}"))
+    }
 }

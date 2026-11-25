@@ -39,8 +39,17 @@ object DiagnosticsExporter {
     /** 遥测流水的目录（与 `AgentLogger` / `TraceSink` 同目录：`filesDir/logs`）。 */
     private const val TRACE_DIR = "logs"
 
-    /** 生成诊断文件；失败返回 null（调用方提示用户，不崩）。 */
-    fun export(context: Context, logText: String): File? = runCatching {
+    /**
+     * 诊断正文（**不含**自校验段）。
+     *
+     * 抽出来是为了让「写文件」和「复制到剪贴板」共用同一份拼装：两份各写一遍的话，
+     * 改了抬头或脱敏顺序必然漏一处，而漏掉的通常是用得更少的那条出口——
+     * 用户拿到的两份内容就会不一致，且没人会发现。
+     *
+     * 这里刻意不包 `runCatching`：由两条出口各自包，包在内层会把
+     * 「为什么生成失败」吞成 null。
+     */
+    private fun compose(context: Context, logText: String): String {
         val pkg = context.packageManager.getPackageInfo(context.packageName, 0)
         // longVersionCode 是 API 28 才有的；minSdk 26 必须兼容旧字段
         val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -101,29 +110,29 @@ object DiagnosticsExporter {
             appendLine(tail.ifBlank { "(无日志)" })
         }
 
-        // 正文指纹，随文件走一份、随日志走一份（2026-11-25）。
-        //
-        // 这份文件要经过分享面板 → 接收方 App → 上传通道若干跳，任一跳都可能改写它。
-        // 真机上见过具体的坏法：文件大小是 4096 的整数倍，末段是「往前 4096 字节处」
-        // 的逐字节重放，而手机上 `file.length()` 记的是正确的长度——
-        // 也就是说 **写入端是对的、传输端坏的**。当时分析现场只拿到坏文件，
-        // 只能从「像截断」开始一个个假设排掉，白花一轮。
-        //
-        // 现在把判据带出去：文末写正文字节数与指纹，日志里再写一份。
-        // 对得上 → 正文完好，多出来的是尾巴；对不上 → 正文被覆盖。
-        val bodyBytes = text.toByteArray(Charsets.UTF_8)
-        val finger = DiagnosticsFingerprint.of(bodyBytes)
-        val sealedText = buildString(text.length + 128) {
-            append(text)
-            if (!text.endsWith("\n")) append('\n')
-            appendLine()
-            appendLine("—— 自校验 ——")
-            // 只统计**正文**。把这一段也算进去的话，「正文字节数」会随它自己的
-            // 长度变化，成为一个无法核对的数字（改了数字就改了长度）。
-            appendLine("正文字节数：${bodyBytes.size}")
-            appendLine("正文指纹：$finger")
-        }
+        return text
+    }
 
+    /**
+     * 把正文接上自校验段。
+     *
+     * 两条出口（文件 / 剪贴板）都必须走这里。剪贴板那份若少了这一段，
+     * 用户在聊天里粘贴过来就没有可核对的数字，等于又回到「只能从像不像截断猜起」。
+     *
+     * 为什么需要（2026-11-25 现场）：这份内容要经过分享面板 → 接收方 App → 上传若干跳，
+     * 任一跳都可能改写它。真机上见过的坏法是——文件大小恰好是 4096 的整数倍，
+     * 末段是「往前 4096 字节处」的逐字节重放，而手机上 `file.length()` 记的是正确长度，
+     * 即**写入端对、传输端错**。当时手上只有坏文件，只能从「像截断」开始逐个假设排掉。
+     * 现在把判据随内容带走：对得上 → 正文完好、多出来的是尾巴；对不上 → 正文被覆盖。
+     */
+    private fun seal(body: String): String =
+        body + DiagnosticsFingerprint.sealOf(body.toByteArray(Charsets.UTF_8), body.endsWith("\n"))
+
+    /** 生成诊断文件；失败返回 null（调用方提示用户，不崩）。 */
+    fun export(context: Context, logText: String): File? = runCatching {
+        val body = compose(context, logText)
+        val bodyBytes = body.toByteArray(Charsets.UTF_8)
+        val sealedText = seal(body)
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date())
         val file = File(dir, "polaris-diagnostics-$stamp.txt")
@@ -132,10 +141,29 @@ object DiagnosticsExporter {
         AgentLogger.i(
             "Diagnostics",
             "诊断包已生成：${file.name}（正文 ${bodyBytes.size} 字节 / " +
-                "文件 ${file.length()} 字节 / 指纹 $finger）"
+                "文件 ${file.length()} 字节 / 指纹 ${DiagnosticsFingerprint.of(bodyBytes)}）"
         )
         file
     }.getOrNull()
+
+    /**
+     * 诊断全文（**含**自校验段），给剪贴板用。
+     *
+     * ## 为什么需要第二条出口
+     *
+     * 2026-11-25 真机：8 份诊断包经「分享面板 → 接收 App → 上传」之后全部被补成
+     * 4096 的整数倍（正文完好、尾部多一段重放），而同一批的**文本粘贴**（54 KB）
+     * 一次都没坏。这条链路对文件不可靠、对文本可靠。
+     *
+     * 既然用户要做的事只是「把这段内容交给别人看」，就该有一条不经过文件的路。
+     * 产出与 [export] 写出的文件**逐字节相同**，所以粘贴出去的那份自己就能说明
+     * 自己完不完整——不需要再问「你那边文件多大」。
+     *
+     * @return 失败返回 null（调用方提示，不崩）。几十 KB 的字符串放剪贴板没有
+     *   问题，54 KB 的日志文本实测可以正常粘贴。
+     */
+    fun textOf(context: Context, logText: String): String? =
+        runCatching { seal(compose(context, logText)) }.getOrNull()
 
     /**
      * 回合事件的结构化导出（R10）：`<cache>/exports/polaris-turns-<stamp>.ndjson`。
