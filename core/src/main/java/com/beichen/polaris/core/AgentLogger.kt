@@ -333,12 +333,16 @@ object AgentLogger {
             // 只看主行：有堆栈时 format() 是多行，拿去当一行会破坏对齐与去重键。
             val head = memory[i].format().substringBefore('\n')
             if (!seen.add(head)) continue
-            if (LogSearch.matches(head, terms)) hits += LogHit(head, null)
+            // 日期由 timeMs 算，不靠「它在内存里」猜。
+            //
+            // 猜错过一次：这批内存行里混着 [restoreTail] 从**昨天**文件读回来的历史，
+            // 曾经一律当 null（=「本次」）显示，于是昨天的 23:12 被标成本次运行。
+            if (LogSearch.matches(head, terms)) hits += LogHit(head, formatDay(memory[i].timeMs))
         }
 
         // 读一次到局部：logDir 是 @Volatile，循环中途被 reset 会出现「半天读不到文件」的半截行为。
         val dir = logDir
-        val days = ArrayList<String>()
+        val diskDays = ArrayList<String>()
         if (dir != null) {
             val now = System.currentTimeMillis()
             for (offset in 0 until maxDays) {
@@ -347,7 +351,7 @@ object AgentLogger {
                 val parts = listOf(File(dir, "agent-$day.log"), File(dir, "agent-$day.log.1"))
                     .filter { it.isFile }
                 if (parts.isEmpty()) continue
-                days += day
+                diskDays += day
                 for (file in parts) {
                     if (hits.size >= limit) { truncated = true; break }
                     // 只保留「最新的 limit 条命中」。
@@ -382,6 +386,17 @@ object AgentLogger {
                     }
                 }
             }
+        }
+        // `days` 回答的是「这次的 N 条来自哪几天」，所以按**命中行自己的日期**汇总，
+        // 而不是「扫过哪些有文件的天」——后者会把空白天也算进范围：
+        // 屏幕上写着「在 11-22 至 11-25 的日志中命中 102 条」，实际一条 11-22 的都没有。
+        //
+        // 一条都没命中时反过来：这时用户想知道的是「你到底搜过哪儿」，
+        // 用 diskDays（扫描范围），空态文案才答得上来。
+        val days = if (hits.isEmpty()) {
+            diskDays
+        } else {
+            hits.map { it.day }.distinct().sortedDescending()
         }
         return LogSearchResult(hits, days, truncated)
     }

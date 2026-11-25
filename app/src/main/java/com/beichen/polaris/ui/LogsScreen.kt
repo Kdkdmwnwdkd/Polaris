@@ -181,8 +181,8 @@ fun LogsScreen(vm: LogsContract) {
 
     // 渲染行：统一成「条目 + 它属于哪一天」。
     //
-    // day 为 null 表示这条还在内存缓冲里（本次运行、尚未落盘），列表显示「本次」。
-    // 不标注的话，搜索结果里一半带日期、一半不带，用户没法解释这个差别。
+    // day 只在搜索结果里有值（来自 core，永远是 `yyyyMMdd`）；不搜索时是 null，
+    // 那一路走的是内存窗口，不显示日期前缀。
     val rows: List<LogRowModel> = remember(levelFiltered, hits, filter, terms.isEmpty()) {
         val searched = hits
         if (terms.isEmpty() || searched == null) {
@@ -445,13 +445,10 @@ fun LogsScreen(vm: LogsContract) {
                     LogRow(
                         entry = row.entry,
                         terms = terms,
-                        // 没在搜索时一律不显示日期前缀（列表里全是内存条目）；
-                        // 搜索时按来源标注：文件命中给日期，内存命中给「本次」。
-                        dayLabel = if (terms.isEmpty()) {
-                            null
-                        } else {
-                            row.day?.let(::formatDayShort) ?: "本次"
-                        },
+                        // 搜索时每行都带日期——包括内存里的行：它的 timeMs 是准的，
+                        // 日期算得出来，不需要「本次」这种猜法（曾经把昨天 23:12 的
+                        // 恢复日志标成「本次」，因为恢复进内存的旧行没有日期）。
+                        dayLabel = if (terms.isEmpty()) null else row.day?.let(::formatDayShort),
                         expanded = expandedRaw != null && expandedRaw == row.entry.raw,
                         onClick = {
                             expandedRaw =
@@ -706,17 +703,20 @@ private const val SEARCH_MAX_DAYS = 7
 /** 搜索结果上限：与 `AgentLogger.search` 的默认值一致。 */
 private const val SEARCH_LIMIT = 300
 
-/** 列表里的一行：日志条目 + 它属于哪一天（null = 还在内存里，本次运行）。 */
+/** 列表里的一行：日志条目 + 它属于哪一天（null 只在「没搜索」时出现）。 */
 private data class LogRowModel(val entry: LogEntry, val day: String?)
 
 /**
  * 搜索范围的人话描述。
  *
  * 只写「近 7 天」会撒谎：7 天里只有 3 天有日志文件时，实际搜索范围就是 3 天。
- * 所以按真正扫过的日期说；一条磁盘命中都没有时（结果全在内存里），说「本次运行」。
+ * 有命中时传进来的是**命中行自己的日期**（真实来源）；一条都没命中时传的是
+ * 「扫过哪些天」（这时用户问的是「你搜过哪儿」）。两者都由 core 给，这里只负责排版。
  */
 private fun daysLabel(days: List<String>): String {
-    if (days.isEmpty()) return "本次运行"
+    // 空只出现在「零命中 且 一个文件都没扫到」——首次运行、还没落盘的那种。
+    // 说「今天」是实情：内存里的行必然是今天的。
+    if (days.isEmpty()) return "今天"
     val newest = days.first()
     val oldest = days.last()
     return if (newest == oldest) {
@@ -804,8 +804,8 @@ private fun levelColor(level: String): Color = when (level) {
  * 单条日志：左缘 3dp 级别色条 + 首行（时间 / 级别 / tag）+ 次行消息（默认 2 行，点击展开全文）。
  * 整行可点，按压走全局 AkPressSurface 语言（§7-M3）。
  *
- * @param dayLabel 行首的日期前缀（`11-25` / `本次`）；`null` 时不显示。
- *   只在搜索结果里给值——平时列表全是内存里的条目，每条挂个「本次」等于噪音。
+ * @param dayLabel 行首的日期前缀（`11-25`）；`null` 时不显示。
+ *   只在搜索结果里给值——不搜索时列表是内存窗口，每条挂个日期等于噪音。
  */
 @Composable
 private fun LogRow(

@@ -3,7 +3,6 @@ package com.beichen.polaris.core
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -189,10 +188,35 @@ class AgentLoggerSearchTest {
 
         assertTrue(result.hits.isNotEmpty())
         val hit = result.hits.first { it.line.contains("内存里的那条") }
-        // day 为 null = 还在内存里，没有确定日期
-        assertNull(hit.day)
+        // 内存里的行也有确定日期：timeMs 是刚记下的真实时刻，formatDay 直接算。
+        // （曾经这里是 null → UI 显示「本次」，结果把恢复进来的昨天日志一起标成了本次。）
+        assertEquals(dayStamp(0), hit.day)
         // 注意：不能断言 days 为空。setUp 里的 init 自己会写「日志目录已就绪」这一条
         // 并异步落盘，所以目录里几乎总有今天的文件——断言它为空会变成一个时序抽奖。
+    }
+
+    @Test
+    fun `恢复进内存的昨天日志不会被标成今天`() {
+        // 2026-11-25 真机现场：11-24 夜里最后一条 23:12 的 WorkflowScheduler 记录，
+        // 第二天 18:13 启动后（restoreTail 把它读回内存）搜「周期巡检」，
+        // 它必须标成 11-24。当时标的是「本次」，因为内存命中一律 day=null。
+        AgentLogger.reset()
+        AgentLogger.clear()
+        writeLog(
+            1,
+            lines = arrayOf(
+                line("23:12:45.224", "INFO", "WorkflowScheduler", "周期巡检已注册（15 分钟）")
+            )
+        )
+        // 这次 init 才会真的执行 doInit → restoreTail，把那 1 条读进内存
+        AgentLogger.init(dir)
+
+        val result = AgentLogger.search(listOf("周期巡检"))
+
+        assertEquals(1, result.hits.size)
+        assertEquals(dayStamp(1), result.hits[0].day)
+        // days 取命中行的日期，不是「扫过哪些天」：屏幕上的范围必须能解释这些结果。
+        assertEquals(listOf(dayStamp(1)), result.days)
     }
 
     @Test
