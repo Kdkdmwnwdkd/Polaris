@@ -63,12 +63,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.CrashLogger
 import com.beichen.polaris.core.DiagnosticsExporter
 import com.beichen.polaris.core.CrashRecord
+import com.beichen.polaris.core.LogHit
 import com.beichen.polaris.core.LogSearch
 import com.beichen.polaris.ui.contract.LogsContract
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -99,6 +103,15 @@ fun LogsScreen(vm: LogsContract) {
     var expandedRaw by rememberSaveable { mutableStateOf<String?>(null) }
     var exportHint by remember { mutableStateOf<String?>(null) }
     var showClear by remember { mutableStateOf(false) }
+
+    // —— 搜索（2026-11-25 第二轮：从「过滤屏幕上这 500 行」改成「查磁盘历史」）——
+    //
+    // hits == null 有明确含义：**还没有搜索结果**（无关键词，或第一次搜索还在路上）。
+    // 不能拿空列表当「没结果」，否则每次输入第一个字符都会闪一下「没有匹配」。
+    var hits by remember { mutableStateOf<List<LogHit>?>(null) }
+    var scannedDays by remember { mutableStateOf<List<String>>(emptyList()) }
+    var truncated by remember { mutableStateOf(false) }
+    var searching by remember { mutableStateOf(false) }
 
     // —— 最近崩溃（真机第四轮：进程被杀时内存日志来不及落盘，崩溃报告是唯一证据）——
     var crashes by remember { mutableStateOf<List<CrashRecord>>(emptyList()) }
@@ -132,14 +145,54 @@ fun LogsScreen(vm: LogsContract) {
     }
 
     val terms = remember(query) { parseTerms(query) }
-    // 先按级别，再按关键词——两级过滤各自独立，计数也按这个顺序取：
-    // 「3 / 12」表示该级别共 12 条、命中 3 条。若分母用全部日志（500），
-    // 在选了 ERROR 的人眼里就成了「有 500 条 ERROR」，是个会让人放弃搜索的谎话。
+    // 无关键词时的列表：内存里最近 500 条，按级别筛。
     val levelFiltered = remember(entries, filter) {
         if (filter == LEVEL_ALL) entries else entries.filter { it.level == filter }
     }
-    val visible = remember(levelFiltered, terms) {
-        if (terms.isEmpty()) levelFiltered else levelFiltered.filter { it.matches(terms) }
+
+    // 有关键词就交给 core 去查（内存 + 磁盘历史），带 250ms 防抖。
+    //
+    // 防抖为什么放在 delay 而不是搜索框里：输入法每敲一个字符都会触发一次，
+    // 而一次搜索可能要读几个 2MB 的文件。250ms 内的连续输入只跑最后一次，
+    // 被取消的那次通常还停在 delay 阶段，一个字节都没读。
+    // key 用 terms（List 的值相等比较）：键序变了但词相同，不重搜。
+    LaunchedEffect(terms) {
+        if (terms.isEmpty()) {
+            hits = null
+            scannedDays = emptyList()
+            truncated = false
+            searching = false
+            return@LaunchedEffect
+        }
+        searching = true
+        delay(250)
+        // 切 IO：逐行读最多 7 天、每天 4MB 的文件，主线程上会把滚动卡住。
+        // 为什么直接调 AgentLogger 而不走 contract：本页已经直连 core 的 CrashLogger
+        // 与 DiagnosticsExporter（见文件头 import），再加一层转发只会让 ChatViewModel
+        // 再多一个方法——那个文件有行数上限，刚因为这一行被守卫拦下。
+        val result = withContext(Dispatchers.IO) {
+            AgentLogger.search(terms, SEARCH_MAX_DAYS, SEARCH_LIMIT)
+        }
+        hits = result.hits
+        scannedDays = result.days
+        truncated = result.truncated
+        searching = false
+    }
+
+    // 渲染行：统一成「条目 + 它属于哪一天」。
+    //
+    // day 为 null 表示这条还在内存缓冲里（本次运行、尚未落盘），列表显示「本次」。
+    // 不标注的话，搜索结果里一半带日期、一半不带，用户没法解释这个差别。
+    val rows: List<LogRowModel> = remember(levelFiltered, hits, filter, terms.isEmpty()) {
+        val searched = hits
+        if (terms.isEmpty() || searched == null) {
+            levelFiltered.map { LogRowModel(it, null) }
+        } else {
+            searched.asSequence()
+                .map { LogRowModel(it.line.toLogEntry(), it.day) }
+                .filter { filter == LEVEL_ALL || it.entry.level == filter }
+                .toList()
+        }
     }
 
     Column(Modifier.fillMaxWidth()) {
@@ -206,8 +259,14 @@ fun LogsScreen(vm: LogsContract) {
         // 对「不知道能搜」的人是零；多占 45dp，换来一眼看得见，值。
         LogSearchRow(
             query = query,
-            hitCount = visible.size,
-            totalCount = levelFiltered.size,
+            countLabel = when {
+                query.isEmpty() -> null
+                // hits == null 是「第一次搜索还在路上」，不是「没结果」——
+                // 混为一谈会让每次输入第一个字符都闪一下「0 条」。
+                searching || hits == null -> "搜索中"
+                truncated -> "${rows.size} 条+"
+                else -> "${rows.size} 条"
+            },
             onQueryChange = { new -> query = new },
             onClear = { query = "" }
         )
@@ -314,16 +373,45 @@ fun LogsScreen(vm: LogsContract) {
             )
         }
 
+        // —— 搜索范围说明（仅在有关键词且有结果时出现）——
+        //
+        // 这一行替代了原来那个 `35 / 200`：搜磁盘历史之后，分母已经没法用一句话表达
+        // （是内存 500 条？今天 4MB？还是 7 天？）。直接说「在哪些天的日志里命中了几条」
+        // 才是能核对的信息。
+        if (terms.isNotEmpty() && rows.isNotEmpty()) {
+            Text(
+                text = buildString {
+                    append("在 ${daysLabel(scannedDays)} 的日志中命中 ${rows.size} 条")
+                    if (truncated) append("（已达上限，更早的未展开）")
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(
+                    start = AgentSpacing.space5,
+                    end = AgentSpacing.space5,
+                    top = AgentSpacing.space2
+                )
+            )
+        }
+
         // —— 列表 / 空态 ——
-        if (visible.isEmpty()) {
+        if (rows.isEmpty()) {
             when {
-                // 搜索无结果优先说，别让它掉进「暂无日志」——那是「今天什么都没发生」的意思，
-                // 而这里今天发生了很多，只是没命中这几个词。
+                // 第一次搜索还在路上。不能落进「没有匹配」——那会让用户看到一闪而过的
+                // 错误结论，而他很可能就此停手。
+                terms.isNotEmpty() && searching -> AkEmptyState(
+                    icon = Icons.Outlined.Search,
+                    title = "正在搜索…",
+                    description = "在内存与最近 ${SEARCH_MAX_DAYS} 天的日志里查找。"
+                )
+                // 真的搜完了、确实没有。文案必须带范围：只说「没有匹配」会让用户断定
+                // 「日志里确实没这条」，然后去怀疑代码，而实际可能只是超出了保留天数。
                 terms.isNotEmpty() -> AkEmptyState(
                     icon = Icons.Outlined.Search,
                     title = "没有匹配「${query.trim()}」的日志",
-                    description = "空格分隔的多个词要同时命中（AND），词越多范围越窄；" +
-                        "也可能只是当前级别下没有。",
+                    description = "已搜索 ${daysLabel(scannedDays)} 的日志" +
+                        "（保留 ${SEARCH_MAX_DAYS} 天）。空格分隔的多个词要同时命中（AND），" +
+                        "词越多范围越窄；也可能只是当前级别下没有。",
                     actionLabel = "清除搜索",
                     onAction = { query = "" }
                 )
@@ -353,13 +441,21 @@ fun LogsScreen(vm: LogsContract) {
                 ),
                 verticalArrangement = Arrangement.spacedBy(AgentSpacing.space1)
             ) {
-                itemsIndexed(visible, key = { index, _ -> index }) { _, entry ->
+                itemsIndexed(rows, key = { index, _ -> index }) { _, row ->
                     LogRow(
-                        entry = entry,
+                        entry = row.entry,
                         terms = terms,
-                        expanded = expandedRaw != null && expandedRaw == entry.raw,
+                        // 没在搜索时一律不显示日期前缀（列表里全是内存条目）；
+                        // 搜索时按来源标注：文件命中给日期，内存命中给「本次」。
+                        dayLabel = if (terms.isEmpty()) {
+                            null
+                        } else {
+                            row.day?.let(::formatDayShort) ?: "本次"
+                        },
+                        expanded = expandedRaw != null && expandedRaw == row.entry.raw,
                         onClick = {
-                            expandedRaw = if (expandedRaw == entry.raw) null else entry.raw
+                            expandedRaw =
+                                if (expandedRaw == row.entry.raw) null else row.entry.raw
                         }
                     )
                 }
@@ -501,17 +597,19 @@ private fun CrashSection(
  * 关键词搜索行（2026-11-25）。
  *
  * 形态沿用 [MemoryScreen] 那条搜索线：图标 + 一条横线，不用填充胶囊。
- * 但**交互不同**：记忆页要查库所以是「点图标才检索」，这里过滤的是内存里已解析的
- * 列表，成本可以忽略，因此输入即过滤——排查时敲 `401` 希望列表立刻收窄，
- * 而不是敲完再点一下。
+ * 但**交互不同**：记忆页要查库所以是「点图标才检索」，这里输入即搜——
+ * 排查时敲 `401` 希望列表立刻动起来，而不是敲完再点一下。
  *
- * 计数只在有关键词时出现：平时显示「500 / 500」是纯噪音，还占掉一行里最贵的位置。
+ * 计数只在有关键词时出现，且只有「N 条」一个数：搜磁盘历史之后，
+ * 分母已经没法用一个数字表达（内存 500 条？今天 4MB？还是 7 天？），
+ * 范围改由列表上方那行「在 11-19 至 11-25 的日志中命中 N 条」说明。
+ *
+ * @param countLabel null 时整块隐藏（没在搜索）；「搜索中」时显示进行态。
  */
 @Composable
 private fun LogSearchRow(
     query: String,
-    hitCount: Int,
-    totalCount: Int,
+    countLabel: String?,
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit
 ) {
@@ -560,16 +658,23 @@ private fun LogSearchRow(
                 }
             )
             if (query.isNotEmpty()) {
-                Spacer(Modifier.width(AgentSpacing.space2))
-                Text(
-                    text = "$hitCount / $totalCount",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (hitCount == 0) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                )
+                val label = countLabel
+                if (label != null) {
+                    Spacer(Modifier.width(AgentSpacing.space2))
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (label == "搜索中") {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else if (label.startsWith("0")) {
+                            // 0 条用错误色：这一页的搜索只有「找到」和「没找到」两种结果，
+                            // 没找到就该显眼到让人立刻去改关键词，而不是以为自己看漏了。
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                }
                 AkCircleIconButton(
                     icon = Icons.Outlined.Close,
                     description = "清除搜索关键词",
@@ -595,14 +700,44 @@ private const val LEVEL_ALL = "全部"
 /** 级别筛选顺序：从最该看的往下排（§3.7）。 */
 private val LEVELS = listOf(LEVEL_ALL, "ERROR", "WARN", "INFO", "DEBUG")
 
+/** 搜索回溯天数：与 `AgentLogger` 的磁盘保留期一致，多要也没有文件。 */
+private const val SEARCH_MAX_DAYS = 7
+
+/** 搜索结果上限：与 `AgentLogger.search` 的默认值一致。 */
+private const val SEARCH_LIMIT = 300
+
+/** 列表里的一行：日志条目 + 它属于哪一天（null = 还在内存里，本次运行）。 */
+private data class LogRowModel(val entry: LogEntry, val day: String?)
+
+/**
+ * 搜索范围的人话描述。
+ *
+ * 只写「近 7 天」会撒谎：7 天里只有 3 天有日志文件时，实际搜索范围就是 3 天。
+ * 所以按真正扫过的日期说；一条磁盘命中都没有时（结果全在内存里），说「本次运行」。
+ */
+private fun daysLabel(days: List<String>): String {
+    if (days.isEmpty()) return "本次运行"
+    val newest = days.first()
+    val oldest = days.last()
+    return if (newest == oldest) {
+        "${formatDayShort(newest)} 当天"
+    } else {
+        "${formatDayShort(oldest)} 至 ${formatDayShort(newest)}"
+    }
+}
+
+/** `20261125` → `11-25`；长度不对时原样返回（宁可显示得难看，也不要在这里崩）。 */
+private fun formatDayShort(day: String): String =
+    if (day.length == 8) "${day.substring(4, 6)}-${day.substring(6, 8)}" else day
+
 /** 一条解析后的日志行：`HH:mm:ss.SSS LEVEL [tag] message`（core/AgentLogger.format）。 */
 private data class LogEntry(
     val time: String,
     val level: String,
     val tag: String,
     val message: String,
-    /** 原始整行。搜索与展开状态都以它为准：搜索要匹配整行（含 tag），
-     *  展开状态需要一个跨过滤稳定的标识——四个显示字段拼起来可能撞，整行不会。 */
+    /** 原始整行。展开状态以它为准：需要一个跨过滤稳定的标识，
+     *  四个显示字段拼起来可能撞，整行不会。 */
     val raw: String
 )
 
@@ -632,9 +767,6 @@ private fun String.toLogEntry(): LogEntry {
  * 逻辑留在这一层就只能靠读代码确认对不对。这里只做转发。
  */
 private fun parseTerms(query: String): List<String> = LogSearch.parseTerms(query)
-
-/** 全部关键词都出现（AND）才算命中；无关键词时恒真。 */
-private fun LogEntry.matches(terms: List<String>): Boolean = LogSearch.matches(raw, terms)
 
 /**
  * 关键词高亮：命中片段加粗，其余原样。
@@ -671,12 +803,16 @@ private fun levelColor(level: String): Color = when (level) {
 /**
  * 单条日志：左缘 3dp 级别色条 + 首行（时间 / 级别 / tag）+ 次行消息（默认 2 行，点击展开全文）。
  * 整行可点，按压走全局 AkPressSurface 语言（§7-M3）。
+ *
+ * @param dayLabel 行首的日期前缀（`11-25` / `本次`）；`null` 时不显示。
+ *   只在搜索结果里给值——平时列表全是内存里的条目，每条挂个「本次」等于噪音。
  */
 @Composable
 private fun LogRow(
     entry: LogEntry,
     /** 当前关键词（已拆好）。空表示没在搜索，走纯文本路径。 */
     terms: List<String>,
+    dayLabel: String?,
     expanded: Boolean,
     onClick: () -> Unit
 ) {
@@ -712,6 +848,15 @@ private fun LogRow(
             Spacer(Modifier.width(AgentSpacing.space3))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 日期前缀：搜索跨天了，「13:47」到底是今天还是昨天，只看时间是分不出的。
+                    if (dayLabel != null) {
+                        Text(
+                            text = dayLabel,
+                            style = machineSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        )
+                        Spacer(Modifier.width(AgentSpacing.space2))
+                    }
                     if (entry.time.isNotEmpty()) {
                         Text(
                             text = entry.time,

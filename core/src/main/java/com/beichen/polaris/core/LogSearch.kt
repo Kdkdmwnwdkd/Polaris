@@ -1,6 +1,34 @@
 package com.beichen.polaris.core
 
 /**
+ * 一条搜索命中。
+ *
+ * @param line 整行原文（`HH:mm:ss.SSS LEVEL [tag] message`），由 UI 自己解析——
+ *   core 不产出 UI 的展示模型。
+ * @param day 该行所属日期 `yyyyMMdd`；**null 表示它还在内存缓冲里**，
+ *   是本次进程运行的记录（可能尚未落盘，所以日期未定）。
+ */
+data class LogHit(val line: String, val day: String?)
+
+/**
+ * 一次搜索的结果。
+ *
+ * @param days 实际扫过的日期（倒序，最近的在前）。UI 用它说明「覆盖范围」——
+ *   只写「近 7 天」会撒谎：如果 7 天里只有 3 天有日志文件，搜索范围就是 3 天。
+ * @param truncated 命中数已达上限、更早的日志没有搜。不标出来的话，
+ *   用户会以为「就这么多」，而实际上是「只看了最近的这么多」。
+ */
+data class LogSearchResult(
+    val hits: List<LogHit>,
+    val days: List<String>,
+    val truncated: Boolean
+) {
+    companion object {
+        val EMPTY = LogSearchResult(emptyList(), emptyList(), false)
+    }
+}
+
+/**
  * 日志搜索的关键词判据（2026-11-25）。
  *
  * **为什么在 core 而不在 LogsScreen**：`LogsScreen.kt` 依赖 Compose，

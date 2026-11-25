@@ -56,6 +56,15 @@ object AgentLogger {
     /** 内存缓冲上限：超过后丢弃最旧记录，避免长时间运行 OOM。 */
     private const val MAX_MEMORY = 500
 
+    /**
+     * 内存缓冲容量（对外可见）。
+     *
+     * UI 取超过这个数的日志没有意义——缓冲里就只有这么多。
+     * 2026-11-25 之前 `LogsFacade` 自己写死 200，于是「恢复 500 条 / 导出 500 条 /
+     * 页面 200 条」三个数字对不上，用户搜不到被截掉的 300 条。现在统一到这里。
+     */
+    const val MEMORY_CAPACITY = MAX_MEMORY
+
     /** 单文件轮转阈值：2MB。 */
     private const val MAX_FILE_BYTES = 2L * 1024 * 1024
 
@@ -274,6 +283,107 @@ object AgentLogger {
     fun snapshotText(limit: Int = 500): String = synchronized(buffer) {
         val from = (buffer.size - limit).coerceAtLeast(0)
         (from until buffer.size).joinToString("\n") { buffer[it].format() }
+    }
+
+    /**
+     * 在「内存缓冲 + 磁盘历史」里搜关键词（2026-11-25）。
+     *
+     * ## 为什么搜磁盘
+     * UI 原来只展示内存里最新 200 条（`LogsFacade`），大约十几分钟的量，
+     * 而磁盘上留着 `agent-<yyyyMMdd>.log` **7 天**、每天最多 4MB（2MB 正文 + 一份轮转归档）。
+     * 用户上午见过的 401、昨天那次工具失败，全都在文件里，只是页面没让他看见。
+     * 搜索若能覆盖这 7 天，才谈得上「找得到」。
+     *
+     * ## 顺序与截断
+     * 先内存（最新）后磁盘，磁盘按**日期倒序**，同一天先读 `.log` 再读 `.log.1`
+     * （后者是轮转出去的前半段，更旧）。命中数到 [limit] 就停——
+     * 找 `401` 这类常见串通常在今天的文件里就够了，只有罕见词才会读满 7 天。
+     *
+     * ## 边界
+     *  - 只看主行：`format()` 有堆栈时返回多行，堆栈续行没有独立时间戳，
+     *    混进结果会让「最新在前」失去依据。要搜堆栈内容，主行的异常摘要通常也在。
+     *  - 去重按整行文本：内存与文件里同一条会同时出现（落盘后内存不删），
+     *    不去重就会看到两条一模一样的记录。
+     *  - 全程 `runCatching`：文件被删/权限不足/读到半行，都只是少几条结果。
+     *
+     * **阻塞调用**（逐行读磁盘）。UI 侧必须放到 IO 线程，不要在组合期直接调。
+     *
+     * @param terms 已按空白拆好的关键词，全部命中才算命中（AND）
+     * @param maxDays 最多回溯几天（磁盘保留期是 7 天，超过也没文件）
+     * @param limit 结果上限
+     */
+    fun search(
+        terms: List<String>,
+        maxDays: Int = 7,
+        limit: Int = 300
+    ): LogSearchResult {
+        if (terms.isEmpty()) return LogSearchResult.EMPTY
+
+        val hits = ArrayList<LogHit>(limit.coerceAtMost(64))
+        val seen = HashSet<String>()
+        var truncated = false
+
+        // ① 内存缓冲（最新在前）。
+        //
+        // 内存必须参与：落盘走的是异步串行协程，刚发生的那几十条可能还没写进文件，
+        // 而「刚出的错」恰恰是最常被搜的东西。
+        val memory = synchronized(buffer) { ArrayList(buffer) }
+        for (i in memory.indices.reversed()) {
+            if (hits.size >= limit) { truncated = true; break }
+            // 只看主行：有堆栈时 format() 是多行，拿去当一行会破坏对齐与去重键。
+            val head = memory[i].format().substringBefore('\n')
+            if (!seen.add(head)) continue
+            if (LogSearch.matches(head, terms)) hits += LogHit(head, null)
+        }
+
+        // 读一次到局部：logDir 是 @Volatile，循环中途被 reset 会出现「半天读不到文件」的半截行为。
+        val dir = logDir
+        val days = ArrayList<String>()
+        if (dir != null) {
+            val now = System.currentTimeMillis()
+            for (offset in 0 until maxDays) {
+                if (hits.size >= limit) { truncated = true; break }
+                val day = formatDay(now - offset * DAY_MS)
+                val parts = listOf(File(dir, "agent-$day.log"), File(dir, "agent-$day.log.1"))
+                    .filter { it.isFile }
+                if (parts.isEmpty()) continue
+                days += day
+                for (file in parts) {
+                    if (hits.size >= limit) { truncated = true; break }
+                    // 只保留「最新的 limit 条命中」。
+                    //
+                    // 正序读文件时**不能读到 limit 就停**——那样拿到的是文件里最早的
+                    // limit 条，而用户要的是最近的。所以用有界窗口收：满了就从头部丢一条，
+                    // 同时记下「丢过」，读完窗口里就是末尾（最新）的那些，内存也恒定。
+                    val dayHits = ArrayDeque<String>()
+                    var dayOverflow = false
+                    runCatching {
+                        file.useLines { lines ->
+                            for (raw in lines) {
+                                // 先字面匹配再跑正则：2MB 文件约 1.7 万行，
+                                // 每行都 matchEntire 一次是白花时间，正则只该落在命中行上。
+                                if (!LogSearch.matches(raw, terms)) continue
+                                // 非主行（堆栈续行）不成条：它没有自己的时间戳。
+                                if (LINE_RE.matchEntire(raw) == null) continue
+                                if (!seen.add(raw)) continue
+                                dayHits.addLast(raw)
+                                if (dayHits.size > limit) {
+                                    dayHits.removeFirst()
+                                    dayOverflow = true
+                                }
+                            }
+                        }
+                    }
+                    if (dayOverflow) truncated = true
+                    // 窗口内是正序（早→晚），倒序输出才符合「最新在前」。
+                    for (raw in dayHits.reversed()) {
+                        if (hits.size >= limit) { truncated = true; break }
+                        hits += LogHit(raw, day)
+                    }
+                }
+            }
+        }
+        return LogSearchResult(hits, days, truncated)
     }
 
     /** 清空内存缓冲与当日日志文件（含轮转出来的 `.log.1`）。 */
