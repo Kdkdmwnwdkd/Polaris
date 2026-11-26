@@ -69,14 +69,16 @@ echo "[G] 接线"
 
 # W1：http_request 里不能再有 body.string()。判据写对、调用点还留着整份读，等于没修。
 HTTP_BODY=$(awk '/^class HttpRequestTool/{f=1;next} f && /^class /{exit} f{print}' "$BUILTIN")
-if echo "$HTTP_BODY" | grep -q 'body?.string()'; then
+# 这里别用 `echo "$X" | grep -q`：grep -q 命中就退出，echo 还在写 → SIGPIPE，
+# 在 pipefail 下整条管道判假。类体 20KB、匹配在第 196 行，2026-11-26 起必红一次。
+if grep -q 'body?.string()' <<<"$HTTP_BODY"; then
   w_bad "W1 http_request 仍在 body.string() 整份载入"
 else
   w_good "W1 http_request 不再整份载入响应体"
 fi
 
 # W2：真的走了限读实现。
-if echo "$HTTP_BODY" | grep -qF 'BoundedBody.read'; then
+if grep -qF 'BoundedBody.read' <<<"$HTTP_BODY"; then
   w_good "W2 http_request 调用 BoundedBody.read"
 else
   w_bad "W2 http_request 没有调用 BoundedBody.read"

@@ -39,13 +39,29 @@ say()  { echo "$*"; }
 # 不剔的话 [A] 的行号比较会拿注释去比，结论随机。
 code() { grep -vE '^[[:space:]]*(\*|//|/\*)' "$1"; }
 
+# `code x | grep -q p` 在 `set -o pipefail` 下会假红：grep -q 命中即退出，上游 grep -v
+# 还在写就收到 SIGPIPE（141），整条管道判假。文件越大、匹配越靠前越容易碰上，
+# 表现为「同一份代码单跑全绿、全量跑偶发红」（2026-11-26 approval-overlay 就是这么红的）。
+# 先落地成变量再匹配，管道就不存在了。
+has() {
+  local text
+  text=$(code "$1") || true
+  grep -q -- "$2" <<<"$text"
+}
+
+hasE() {
+  local text
+  text=$(code "$1") || true
+  grep -qE -- "$2" <<<"$text"
+}
+
 # ── [A] 的检查抽成函数，[E] 反向自检直接喂坏样本 ─────────────────────────────
 silence_guard_ok() {
   local f=$1
   # 必须真的调用判定
-  code "$f" | grep -q 'SpeechPresence.voicedMillis' || return 1
+  has "$f" 'SpeechPresence.voicedMillis' || return 1
   # 必须拿判定结果跟阈值比较后早退
-  code "$f" | grep -q 'MIN_SPEECH_MS' || return 1
+  has "$f" 'MIN_SPEECH_MS' || return 1
   # 判定的行号必须早于 normalize 调用（这就是这一整轮的教训）
   local judge norm
   judge=$(grep -n 'SpeechPresence.voicedMillis' "$f" | grep -vE ':[[:space:]]*(\*|//)' | head -1 | cut -d: -f1)
@@ -70,12 +86,12 @@ fi
 
 say ""
 say "[B] 阈值只许有一份"
-if code "$PRESENCE" | grep -q 'MIN_SPEECH_MS' && code "$PRESENCE" | grep -q 'FLOOR_RMS'; then
+if has "$PRESENCE" 'MIN_SPEECH_MS' && has "$PRESENCE" 'FLOOR_RMS'; then
   good "阈值集中在 SpeechPresence"
 else
   bad "SpeechPresence 缺少阈值常量"
 fi
-if code "$OFFLINE" | grep -qE '(0\.006f|MIN_SPEECH_MS[[:space:]]*=[[:space:]]*200)'; then
+if hasE "$OFFLINE" '(0\.006f|MIN_SPEECH_MS[[:space:]]*=[[:space:]]*200)'; then
   bad "引擎里又写了一份阈值（两套阈值必然漂移）"
 else
   good "引擎没有内联阈值"
@@ -83,12 +99,12 @@ fi
 
 say ""
 say "[C] 流式识别同样要拦"
-if code "$STREAM" | grep -q 'SpeechPresence.hasSpeechInFrames'; then
+if has "$STREAM" 'SpeechPresence.hasSpeechInFrames'; then
   good "流式收尾走帧级判定"
 else
   bad "流式模型对底噪也会吐字，finish 里必须有判定"
 fi
-if code "$STREAM" | grep -q 'hasSpeech('; then
+if has "$STREAM" 'hasSpeech('; then
   bad "流式路径误用了 PCM 入口（第二参数是采样率，会把它当帧长）"
 else
   good "入口没串用"
@@ -121,7 +137,7 @@ if [ -f "$OFFLINE" ]; then
     good "坏样本被捕获"
   fi
   # 顺序反了也必须红：把判定挪到 normalize 之后
-  if code "$OFFLINE" | grep -q 'normalize(pcm)'; then
+  if has "$OFFLINE" 'normalize(pcm)'; then
     awk '{
       if ($0 ~ /SpeechPresence\.voicedMillis/) { held = held $0 "\n"; next }
       if ($0 ~ /normalize\(pcm\)/) { print; printf "%s", held; held = ""; next }

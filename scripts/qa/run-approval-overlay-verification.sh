@@ -36,20 +36,36 @@ say()  { echo "$*"; }
 # 不能被当成实现命中，否则判据会把一段正确的注释判成缺陷。
 code() { grep -vE '^[[:space:]]*(\*|//|/\*)' "$1"; }
 
+# `code x | grep -q p` 在 `set -o pipefail` 下会假红：grep -q 命中即退出，上游 grep -v
+# 还在写就收到 SIGPIPE（141），整条管道判假。文件越大、匹配越靠前越容易碰上，
+# 表现为「同一份代码单跑全绿、全量跑偶发红」（2026-11-26 approval-overlay 就是这么红的）。
+# 先落地成变量再匹配，管道就不存在了。
+has() {
+  local text
+  text=$(code "$1") || true
+  grep -q -- "$2" <<<"$text"
+}
+
+hasE() {
+  local text
+  text=$(code "$1") || true
+  grep -qE -- "$2" <<<"$text"
+}
+
 # ── 浮层要素：抽成函数，反向自检时喂坏样本 ────────────────────────────────────
 overlay_ok() {
   local f=$1
   # A：只能是无障碍浮层
-  code "$f" | grep -q 'TYPE_ACCESSIBILITY_OVERLAY' || return 1
-  if code "$f" | grep -q 'TYPE_APPLICATION_OVERLAY'; then return 1; fi
+  has "$f" 'TYPE_ACCESSIBILITY_OVERLAY' || return 1
+  if has "$f" 'TYPE_APPLICATION_OVERLAY'; then return 1; fi
   # B：不抢焦点 + 可触摸 + 窗外穿透
-  code "$f" | grep -q 'FLAG_NOT_FOCUSABLE' || return 1
-  if code "$f" | grep -q 'FLAG_NOT_TOUCHABLE'; then return 1; fi
-  code "$f" | grep -q 'FLAG_NOT_TOUCH_MODAL' || return 1
+  has "$f" 'FLAG_NOT_FOCUSABLE' || return 1
+  if has "$f" 'FLAG_NOT_TOUCHABLE'; then return 1; fi
+  has "$f" 'FLAG_NOT_TOUCH_MODAL' || return 1
   # C：不进无障碍树
-  code "$f" | grep -q 'IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS' || return 1
+  has "$f" 'IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS' || return 1
   # F：挂载失败必须显式降级
-  code "$f" | grep -q 'markOverlayReady(false)' || return 1
+  has "$f" 'markOverlayReady(false)' || return 1
   return 0
 }
 
@@ -60,12 +76,12 @@ say "[A] 浮层文件与窗口类型"
 if [ ! -f "$OVERLAY" ]; then
   bad "找不到 $OVERLAY"
 else
-  if code "$OVERLAY" | grep -q 'TYPE_ACCESSIBILITY_OVERLAY'; then
+  if has "$OVERLAY" 'TYPE_ACCESSIBILITY_OVERLAY'; then
     good "用 TYPE_ACCESSIBILITY_OVERLAY（不需要 SYSTEM_ALERT_WINDOW）"
   else
     bad "没有用 TYPE_ACCESSIBILITY_OVERLAY"
   fi
-  if code "$OVERLAY" | grep -q 'TYPE_APPLICATION_OVERLAY'; then
+  if has "$OVERLAY" 'TYPE_APPLICATION_OVERLAY'; then
     bad "用了 TYPE_APPLICATION_OVERLAY——它要求 SYSTEM_ALERT_WINDOW，等于多要一个用户得手动开的权限"
   else
     good "没有退化成 APPLICATION_OVERLAY"
@@ -75,15 +91,15 @@ fi
 say ""
 say "[B] 窗口标志：不抢焦点 / 可触摸 / 窗外穿透"
 if [ -f "$OVERLAY" ]; then
-  code "$OVERLAY" | grep -q 'FLAG_NOT_FOCUSABLE' \
+  has "$OVERLAY" 'FLAG_NOT_FOCUSABLE' \
     && good "FLAG_NOT_FOCUSABLE：不顶掉输入法（自动化可能正在打字）" \
     || bad "缺 FLAG_NOT_FOCUSABLE：浮层会抢焦点，把输入法顶掉"
-  if code "$OVERLAY" | grep -q 'FLAG_NOT_TOUCHABLE'; then
+  if has "$OVERLAY" 'FLAG_NOT_TOUCHABLE'; then
     bad "有 FLAG_NOT_TOUCHABLE：按钮永远点不动"
   else
     good "没有 FLAG_NOT_TOUCHABLE（按钮可点）"
   fi
-  code "$OVERLAY" | grep -q 'FLAG_NOT_TOUCH_MODAL' \
+  has "$OVERLAY" 'FLAG_NOT_TOUCH_MODAL' \
     && good "FLAG_NOT_TOUCH_MODAL：窗外触摸穿透到下面的应用" \
     || bad "缺 FLAG_NOT_TOUCH_MODAL：浮层会吞掉窗外触摸"
 fi
@@ -91,7 +107,7 @@ fi
 say ""
 say "[C] 不进无障碍树（否则模型能自己点「允许」）"
 if [ -f "$OVERLAY" ]; then
-  code "$OVERLAY" | grep -q 'IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS' \
+  has "$OVERLAY" 'IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS' \
     && good "浮层及其子节点对无障碍不可见" \
     || bad "缺 IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS：ui_tree 会读到「允许」按钮，模型可以自己批自己"
 fi

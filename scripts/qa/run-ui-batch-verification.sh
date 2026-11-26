@@ -34,12 +34,28 @@ say()  { echo "$*"; }
 # 不剔的话 grep 会把解释当成实现，尤其反向自检会永远绿。
 code() { grep -vE '^[[:space:]]*(\*|//|/\*)' "$1"; }
 
+# `code x | grep -q p` 在 `set -o pipefail` 下会假红：grep -q 命中即退出，上游 grep -v
+# 还在写就收到 SIGPIPE（141），整条管道判假。文件越大、匹配越靠前越容易碰上，
+# 表现为「同一份代码单跑全绿、全量跑偶发红」（2026-11-26 approval-overlay 就是这么红的）。
+# 先落地成变量再匹配，管道就不存在了。
+has() {
+  local text
+  text=$(code "$1") || true
+  grep -q -- "$2" <<<"$text"
+}
+
+hasE() {
+  local text
+  text=$(code "$1") || true
+  grep -qE -- "$2" <<<"$text"
+}
+
 say "ui_batch 判据"
 say ""
 
 # ---------- [A] 存在与注册 ----------
 if [ -f "$BATCH" ]; then good "[A1] UiBatchTool.kt 存在"; else bad "[A1] 找不到 $BATCH"; fi
-if code "$BATCH" | grep -q 'override val name = "ui_batch"'; then
+if has "$BATCH" 'override val name = "ui_batch"'; then
   good "[A2] 工具名是 ui_batch"
 else
   bad "[A2] 工具名不是 ui_batch（模型看不见它）"
@@ -62,13 +78,13 @@ else
 fi
 
 # ---------- [B] 安全边界 ----------
-if code "$BATCH" | grep -q 'ui_screenshot'; then
+if has "$BATCH" 'ui_screenshot'; then
   bad "[B1] 白名单或映射里出现了 ui_screenshot（一批 8 张图会打爆上下文）"
 else
   good "[B1] 白名单不含 ui_screenshot"
 fi
 
-if code "$BATCH" | grep -qE 'startsWith\("ui_"\)|name\.startsWith'; then
+if hasE "$BATCH" 'startsWith\("ui_"\)|name\.startsWith'; then
   bad "[B2] 出现 ui_ 前缀匹配（会把任意 ui 工具放进批处理，边界失效）"
 else
   good "[B2] 不做前缀匹配，白名单写死"
@@ -98,19 +114,19 @@ else
 fi
 
 # ---------- [D] 审批与副作用 ----------
-if code "$BATCH" | grep -q 'override val needsApproval = true'; then
+if has "$BATCH" 'override val needsApproval = true'; then
   good "[D1] needsApproval = true（整批一次审批）"
 else
   bad "[D1] 未声明 needsApproval，批处理会绕过用户审批"
 fi
-if code "$BATCH" | grep -q 'override val readOnly = false'; then
+if has "$BATCH" 'override val readOnly = false'; then
   good "[D2] readOnly = false（不被并行调度）"
 else
   bad "[D2] 未标注 readOnly=false，会被当成只读工具并行执行"
 fi
 
 # ---------- [E] 失败必须带修复指引 ----------
-if code "$BATCH" | grep -q 'code = "batch_stopped"'; then
+if has "$BATCH" 'code = "batch_stopped"'; then
   if code "$BATCH" | grep -A4 'code = "batch_stopped"' | grep -q 'hint ='; then
     good "[E1] 中途失败返回 batch_stopped 且带 hint"
   else
@@ -131,7 +147,7 @@ cp "$ASM" "$tmp/tools/ToolAssembler.kt"
 # 变异 1：白名单里塞一个 ui_screenshot
 awk '{ sub(/"tree" to "ui_tree"/, "\"tree\" to \"ui_tree\", \"shot\" to \"ui_screenshot\""); print }' \
   "$BATCH" > "$tmp/automation/m1.kt"
-if code "$tmp/automation/m1.kt" | grep -q 'ui_screenshot'; then
+if has "$tmp/automation/m1.kt" 'ui_screenshot'; then
   good "[F1] 变异捕获：白名单注入 ui_screenshot 后判据变红"
 else
   bad "[F1] 变异未被捕获：判据无法发现越权工具"
@@ -140,7 +156,7 @@ fi
 # 变异 2：拿掉 needsApproval
 sed 's/override val needsApproval = true/override val needsApproval = false/' \
   "$BATCH" > "$tmp/automation/m2.kt"
-if code "$tmp/automation/m2.kt" | grep -q 'override val needsApproval = true'; then
+if has "$tmp/automation/m2.kt" 'override val needsApproval = true'; then
   bad "[F2] 变异未被捕获：摘掉审批标注后判据仍绿"
 else
   good "[F2] 变异捕获：摘掉 needsApproval 后判据变红"

@@ -16,6 +16,15 @@
 # 「功能」折叠组，S8 的「用户可达入口」那处判据随之落到新文件 AppDrawerFeatures.kt。
 # 那 7 项 AppDest 与折叠开关是纯 Compose 声明，没有行为可调，只能看源码。
 text scripts/qa/Hotfix11Verification.kt 632
+# 2026-11-26 新增 10 条（0 → 8 + 2）：
+# 这两个 harness 原本就用 `code "$f" | grep -q 'X'` 做同一批检查，只是那个形态不被
+# 本脚本的正则计入（`^\s*(expect|fixed|refute|has|hasnt)`）。当天为了让 `grep -q` 不再
+# 撞 SIGPIPE（pipefail 下会假红），把它收敛成 `has`，这些断言第一次被看见——不是新写的。
+# 内容确实是纯静态的：「浮层必须用 TYPE_ACCESSIBILITY_OVERLAY 而非 APPLICATION_OVERLAY」
+# 「必须带 FLAG_NOT_FOCUSABLE」，要行为验证得真起无障碍服务去挂一个 View，
+# 在 CI 上没有可调的入口。
+text scripts/qa/run-approval-overlay-verification.sh 8
+text scripts/qa/run-asr-silence-verification.sh 2
 text scripts/qa/run-local-inference-perf-verification.sh 90
 text scripts/qa/PromptProtocolVerification.kt 47
 text scripts/qa/AppControlVerification.kt 40
@@ -110,4 +119,4 @@ text scripts/qa/run-knowledge-base-verification.sh 10
 text scripts/qa/run-cost-drilldown-verification.sh 10
 text scripts/qa/run-qr-verification.sh 9
 text scripts/qa/run-local-param-input-verification.sh 9
-text __TOTAL__ 1736
+text __TOTAL__ 1746
