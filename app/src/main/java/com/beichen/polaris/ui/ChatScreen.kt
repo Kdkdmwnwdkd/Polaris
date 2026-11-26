@@ -2158,6 +2158,10 @@ private fun ChatSendButton(enabled: Boolean, interrupting: Boolean = false, onCl
 @Composable
 private fun MessageRow(item: UiItem, streaming: Boolean, trace: TraceRun? = null) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
+        // BoxWithConstraintsScope 是 DslMarker 的，进到 Row / Column 的 scope 里就看不见
+        // 它的 maxWidth 了（K2 报 "can't be called in this context by implicit receiver"）。
+        // 在能看到的地方取一次，往里传。
+        val rowMaxWidth = this.maxWidth
         when (item) {
             is UiItem.User -> Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2167,30 +2171,35 @@ private fun MessageRow(item: UiItem, streaming: Boolean, trace: TraceRun? = null
                     text = item.text,
                     isUser = true,
                     streaming = false,
-                    maxWidth = (maxWidth * 0.76f).coerceIn(240.dp, 400.dp),
+                    maxWidth = (rowMaxWidth * 0.76f).coerceIn(240.dp, 400.dp),
                     // 发过的图与文件名：气泡里显示的是缩小后的副本（见 AttachmentViews.userBubbleItem）
                     images = item.images,
                     fileNames = item.fileNames
                 )
             }
 
-            is UiItem.Assistant -> Column(Modifier.fillMaxWidth()) {
-                // 思考是一段过程，不是正文的一部分：外置成一行，与工具组同一套视觉。
-                // 旧实现把它塞在气泡里当折叠块，于是「思考和工具」被拆成两种长得不一样的
-                // 东西——用户得分别找两个地方点开。
-                if (!item.reasoning.isNullOrBlank()) {
-                    ThinkingTraceRow(reasoning = item.reasoning, streaming = streaming)
+            is UiItem.Assistant -> {
+                // item.reasoning 是 core 模块的 public 属性，跨模块不能 smart cast，
+                // 先落到局部变量才过得了 isNullOrBlank 之后的非空收窄。
+                val reasoning = item.reasoning
+                Column(Modifier.fillMaxWidth()) {
+                    // 思考是一段过程，不是正文的一部分：外置成一行，与工具组同一套视觉。
+                    // 旧实现把它塞在气泡里当折叠块，于是「思考和工具」被拆成两种长得不一样的
+                    // 东西——用户得分别找两个地方点开。
+                    if (!reasoning.isNullOrBlank()) {
+                        ThinkingTraceRow(reasoning = reasoning, streaming = streaming)
+                    }
+                    MessageBubble(
+                        text = item.text,
+                        isUser = false,
+                        streaming = streaming,
+                        maxWidth = rowMaxWidth,
+                        // 功能五（P1-5）：token 用量（null = 供应商没给，不显示）
+                        usage = item.usage,
+                        // 2026-11-18：落盘截断时在正文底部明确标注（0 = 完整，不渲染）
+                        truncatedChars = item.truncatedChars
+                    )
                 }
-                MessageBubble(
-                    text = item.text,
-                    isUser = false,
-                    streaming = streaming,
-                    maxWidth = maxWidth,
-                    // 功能五（P1-5）：token 用量（null = 供应商没给，不显示）
-                    usage = item.usage,
-                    // 2026-11-18：落盘截断时在正文底部明确标注（0 = 完整，不渲染）
-                    truncatedChars = item.truncatedChars
-                )
             }
 
             // 过程轨迹由 itemsIndexed 算好后传进来：这一条若不是组首，trace 为 null，
