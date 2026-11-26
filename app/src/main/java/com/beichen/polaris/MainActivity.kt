@@ -16,6 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.beichen.polaris.browser.BrowserHost
 import com.beichen.polaris.pet.PetState
+import com.beichen.polaris.startup.StartupGuard
 import com.beichen.polaris.ui.AgentKitTheme
 import com.beichen.polaris.ui.AppearanceState
 import com.beichen.polaris.ui.AppScaffold
@@ -144,6 +145,10 @@ private fun AgentKitApp(
     val dynamicColor = AppearanceState.dynamicColor
     val accent = AppearanceState.accent
     val vm = viewModel<ChatViewModel>()
+    // 启动自救的第二个事实：**根组合成功**。LaunchedEffect 在整棵树组合并应用变更后
+    // 才启动，所以子组件（ChatScreen）抛异常时它不会跑——正是「这次没起来」的语义。
+    // 少了这一步，StartupGuard 只会看到「每次都开始了、永远没成功」，把正常使用也隔离掉。
+    LaunchedEffect(Unit) { StartupGuard.markBooted(ctx.applicationContext) }
     // W-17：点通知进入 → 自动把该任务的 prompt 作为一次对话发送
     LaunchedEffect(pendingWorkflowId) {
         if (pendingWorkflowId != null) {

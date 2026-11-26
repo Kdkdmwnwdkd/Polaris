@@ -7,6 +7,7 @@ import com.beichen.polaris.core.CompletionNotifier
 import com.beichen.polaris.core.lifecycle.AppBackgroundHooks
 import com.beichen.polaris.pet.PetState
 import com.beichen.polaris.startup.BootSequence
+import com.beichen.polaris.startup.StartupGuard
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -16,15 +17,14 @@ import java.util.concurrent.atomic.AtomicInteger
  * 十步初始化的顺序与失败语义都在 `startup/BootSequence.kt` 里，不再平铺在
  * `onCreate`——平铺时顺序只存在于语句次序，重排一次不会有任何东西报错。
  *
- * 历史教训（保留，因为它解释了这个文件为什么这么薄）：真机第四轮的核心矛盾是
- * 「开启屏幕捕捉 → 立刻闪退」，进程被杀时内存日志来不及落盘，日志页一条异常都
- * 抓不到。所以崩溃捕获必须是启动的第一步，且 `onCreate` 自身越轻越好——
- * 它自己出错就没有第二道防线了。
+ * 历史教训（保留，因为它解释了这个文件为什么这么薄）：真机第四轮「开启屏幕捕捉 → 立刻闪退」，
+ * 进程被杀时内存日志来不及落盘，一条异常都抓不到。所以崩溃捕获必须是第一步，`onCreate` 越轻越好。
  */
 class AgentKitApplication : Application() {
-
     override fun onCreate() {
         super.onCreate()
+        // 启动自救：必须在一切之前记账，否则崩了没证据（内部全程 runCatching，不挡路）
+        runCatching { StartupGuard.begin(this) }
         BootSequence.run(this)
         // 桌面助手开关：只读盘、不启服务（服务可能先于 Activity 被 START_STICKY 拉起）
         runCatching { PetState.sync(this) }
