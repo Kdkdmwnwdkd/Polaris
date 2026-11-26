@@ -72,7 +72,7 @@ for attempt in 1 2 3 4 5; do
   fi
   crc=$?
   set -e
-  if echo "$out" | grep -q "error:"; then echo "$out"; exit 1; fi
+  if grep -q "error:" <<<"$out"; then echo "$out"; exit 1; fi
   if [ $crc -eq 0 ]; then rc=0; break; fi
   echo "  (compile attempt $attempt failed, retrying ...)" >&2
   rm -rf "$OUT" && mkdir -p "$OUT"

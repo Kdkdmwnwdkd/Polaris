@@ -143,7 +143,7 @@ EOF
                 -d "$TMP/check.jar" -include-runtime >"$TMP/compile.log" 2>&1; then
             OUT=$(java -cp "$TMP/check.jar:$ZXING" CheckKt 2>&1)
             echo "$OUT"
-            echo "$OUT" | grep -q "FAIL=0" && pass "对拍与负载断言全过" || fail "对拍有红"
+            grep -q "FAIL=0" <<<"$OUT" && pass "对拍与负载断言全过" || fail "对拍有红"
         else
             echo "编译失败："; grep -a 'error' "$TMP/compile.log" | head -8
             fail "二维码层编译"

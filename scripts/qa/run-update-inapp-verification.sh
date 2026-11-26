@@ -85,7 +85,7 @@ grep -q 'GitHubMirror.sources(officialUrl)' "$APK_DL" \
   && good "多下载源，走统一候选表" || bad "缺少多下载源回退"
 grep -q 'https://ghfast.top/' "$MIRROR" \
   && good "候选表含加速通道" || bad "候选表里没有加速通道"
-awk '/PREFIXES = listOf/,/^    \)/' "$MIRROR" | grep -qE '^\s*""' \
+grep -qE '^\s*""' < <(awk '/PREFIXES = listOf/,/^    \)/' "$MIRROR") \
   && good "保留直连作为最后一跳" || bad "没有直连兜底"
 grep -q 'ensureActive()' "$APK_DL" && good "下载循环响应协程取消" \
   || bad "缺少取消检查（点取消后仍会写完整包）"

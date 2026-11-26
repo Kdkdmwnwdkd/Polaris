@@ -150,9 +150,9 @@ fi
 # G5：删除必须走 adopt，不能走 switchTo。走 switchTo 会把输入框内容存回刚删掉的 id，
 # 正是本轮修掉的那个孤儿草稿。这条用调用点判，不依赖注释。
 del_block=$(sed -n "/fun deleteConversation(id: String)/,/^    }/p" "$VM")
-if echo "$del_block" | grep -q 'editor.switchTo'; then
+if grep -q 'editor.switchTo' <<<"$del_block"; then
   g_bad "G5 删除路径调了 switchTo —— 会把输入框内容存回已删会话（孤儿草稿复发）"
-elif echo "$del_block" | grep -q 'editor.delete(id)'; then
+elif grep -q 'editor.delete(id)' <<<"$del_block"; then
   g_good "G5 删除走 editor.delete（内部用 adopt，不保存旧草稿）"
 else
   g_bad "G5 删除入口没有接到 editor.delete"

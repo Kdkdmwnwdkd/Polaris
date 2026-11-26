@@ -188,7 +188,7 @@ EOF
                 -d "$TMP/check.jar" -include-runtime >/dev/null 2>&1; then
             OUT=$(java -jar "$TMP/check.jar" 2>/dev/null)
             echo "$OUT"
-            echo "$OUT" | grep -q "FAIL=0" && pass "行为断言全过" || fail "行为断言有红"
+            grep -q "FAIL=0" <<<"$OUT" && pass "行为断言全过" || fail "行为断言有红"
         else
             fail "行为断言编译失败"
         fi

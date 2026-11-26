@@ -56,7 +56,7 @@ else
   rc=$?
 fi
 set -e
-if [ "$rc" -ne 0 ] || echo "$out" | grep -q "error:"; then
+if [ "$rc" -ne 0 ] || grep -q "error:" <<<"$out"; then
   echo "$out"
   echo "FATAL: conversations-screen 编译失败" >&2
   exit 1

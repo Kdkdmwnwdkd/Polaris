@@ -61,7 +61,7 @@ block_of() {  # 取某个 id 条目的块（从 id 行到该条目结束的 '),'
 ds=$(block_of 'id = "deepseek"')
 if [ -z "$ds" ]; then
   bad "A2 找不到 deepseek 条目（目录结构变了？）"
-elif echo "$ds" | grep -qE 'maxOutputTokens = [1-9][0-9]*'; then
+elif grep -qE 'maxOutputTokens = [1-9][0-9]*' <<<"$ds"; then
   good "A2 deepseek 声明了输出上限（$(echo "$ds" | grep -oE 'maxOutputTokens = [0-9_]+')）"
 else
   bad "A2 deepseek 未声明输出上限 —— 4K 截断仍会发生"
@@ -72,7 +72,7 @@ fi
 oa=$(block_of 'id = STYLE_OPENAI')
 if [ -z "$oa" ]; then
   bad "A3 找不到 OpenAI 兼容兜底条目"
-elif echo "$oa" | grep -qE 'maxOutputTokens = [1-9]'; then
+elif grep -qE 'maxOutputTokens = [1-9]' <<<"$oa"; then
   bad "A3 兜底条目声明了非零上限 —— o1/gpt-5 会因 max_tokens 被 400"
 else
   good "A3 兜底条目保持不声明（保护只认 max_completion_tokens 的模型）"
@@ -89,8 +89,8 @@ else
 fi
 
 create_body=$(awk '/fun create\(/,/^    \}/' "$CLIENT")
-if echo "$create_body" | grep -q 'ProviderCatalog.byId(' &&
-   echo "$create_body" | grep -q 'maxOutputTokens'; then
+if grep -q 'ProviderCatalog.byId(' <<<"$create_body" &&
+   grep -q 'maxOutputTokens' <<<"$create_body"; then
   good "B2 create() 从目录取值盖章进配置"
 else
   bad "B2 create() 未把目录值写进配置（同 R-01 的「过桥丢字段」）"

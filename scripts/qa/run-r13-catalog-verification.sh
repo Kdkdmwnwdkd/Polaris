@@ -97,7 +97,7 @@ fi
 
 extra=""
 for t in $(grep -oE 'CatalogTool\("[a-z0-9_]+"' "$CATALOG" | sed 's/.*"\(.*\)"/\1/'); do
-  printf '%s\n' "$names" | grep -qx "$t" || extra="$extra $t"
+  grep -qx "$t" <<<"$names" || extra="$extra $t"
 done
 if [ -z "$extra" ]; then
   pass "B3 目录里没有幽灵条目（每个名字都真有实现）"

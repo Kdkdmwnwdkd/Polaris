@@ -148,7 +148,7 @@ OUT8=$(bash "$ROOT/scripts/qa/gate.sh" "$LOG8" 2>&1)
 RC8=$?
 set -e
 if [ "$RC8" -ne 0 ]; then ok "退出码非 0"; else bad "退出码非 0" "实际 $RC8"; fi
-if printf '%s' "$OUT8" | grep -q "只跑了"; then ok "输出说明有 runner 没跑到"
+if grep -q "只跑了" <<<"$OUT8"; then ok "输出说明有 runner 没跑到"
 else bad "输出说明有 runner 没跑到" "$(printf '%s' "$OUT8" | tail -3)"; fi
 
 # ---------------------------------------------------------------- 场景 9
@@ -189,7 +189,7 @@ OUT10=$(bash "$ROOT/scripts/qa/gate.sh" "$LOG10" 2>&1)
 RC10=$?
 set -e
 if [ "$RC10" -ne 0 ]; then ok "退出码非 0"; else bad "退出码非 0" "实际 0"; fi
-if printf '%s' "$OUT10" | grep -q "低于基线"; then ok "输出说明 PASS 低于基线"
+if grep -q "低于基线" <<<"$OUT10"; then ok "输出说明 PASS 低于基线"
 else bad "输出说明 PASS 低于基线" "$(printf '%s' "$OUT10" | tail -3)"; fi
 
 # ---------------------------------------------------------------- 场景 10b
@@ -208,9 +208,9 @@ LOG10B="$WORK/qa10b.log"
 set +e
 OUT10B=$(bash "$ROOT/scripts/qa/gate.sh" "$LOG10B" 2>&1)
 set -e
-if printf '%s' "$OUT10B" | grep -q "PASS 下限不可比"; then ok "输出说明不可比（让位）"
+if grep -q "PASS 下限不可比" <<<"$OUT10B"; then ok "输出说明不可比（让位）"
 else bad "输出说明不可比（让位）" "$(printf '%s' "$OUT10B" | grep 'GATE' | head -4)"; fi
-if printf '%s' "$OUT10B" | grep -q "PASS=0 低于基线"; then
+if grep -q "PASS=0 低于基线" <<<"$OUT10B"; then
   bad "不再拿 PASS 跟基线比" "仍然报了低于基线"
 else
   ok "不再拿 PASS 跟基线比"
@@ -236,10 +236,10 @@ OUT11=$(cd "$R" && bash scripts/qa/gate.sh "$LOG11" 2>&1)
 RC11=$?
 set -e
 if [ "$RC11" -ne 0 ]; then ok "退出码非 0"; else bad "退出码非 0" "实际 0"; fi
-if printf '%s' "$OUT11" | grep -q "产物比源码旧"; then ok "输出说明产物陈旧"
+if grep -q "产物比源码旧" <<<"$OUT11"; then ok "输出说明产物陈旧"
 else bad "输出说明产物陈旧" "$(printf '%s' "$OUT11" | grep 'GATE' | head -3)"; fi
 # 红必须来自产物陈旧，不是别的门禁顺带触发（否则断言指向了别的原因）
-if printf '%s' "$OUT11" | grep -q "GATE OK 5/5"; then ok "门禁 5 仍放行（红的是产物陈旧）"
+if grep -q "GATE OK 5/5" <<<"$OUT11"; then ok "门禁 5 仍放行（红的是产物陈旧）"
 else bad "门禁 5 仍放行（红的是产物陈旧）" "$(printf '%s' "$OUT11" | grep 'GATE' | head -5)"; fi
 
 # ---------------------------------------------------------------- 场景 12
@@ -258,10 +258,10 @@ OUT12=$(bash "$R/scripts/qa/gate.sh" "$LOG12" 2>&1)
 RC12=$?
 set -e
 if [ "$RC12" -ne 0 ]; then ok "退出码非 0"; else bad "退出码非 0" "实际 0"; fi
-if printf '%s' "$OUT12" | grep -q "没有在 skip-allowlist.txt 登记"; then ok "输出说明未登记"
+if grep -q "没有在 skip-allowlist.txt 登记" <<<"$OUT12"; then ok "输出说明未登记"
 else bad "输出说明未登记" "$(printf '%s' "$OUT12" | grep 'GATE' | head -3)"; fi
 # 红必须来自门禁 6：门禁 4 满足、门禁 5 让位，否则断言指向了别的原因
-if printf '%s' "$OUT12" | grep -q "GATE OK 4/5"; then ok "门禁 4 仍放行（红的是门禁 6）"
+if grep -q "GATE OK 4/5" <<<"$OUT12"; then ok "门禁 4 仍放行（红的是门禁 6）"
 else bad "门禁 4 仍放行（红的是门禁 6）" "$(printf '%s' "$OUT12" | grep 'GATE' | head -5)"; fi
 
 # ---------------------------------------------------------------- 场景 13
@@ -274,7 +274,7 @@ RC13=$?
 set -e
 if [ "$RC13" -eq 0 ]; then ok "退出码 0"
 else bad "退出码 0" "实际 $RC13：$(printf '%s' "$OUT13" | grep 'GATE' | head -3)"; fi
-if printf '%s' "$OUT13" | grep -q "GATE OK 6/6"; then ok "输出 GATE OK 6/6"
+if grep -q "GATE OK 6/6" <<<"$OUT13"; then ok "输出 GATE OK 6/6"
 else bad "输出 GATE OK 6/6" "$(printf '%s' "$OUT13" | grep 'GATE' | head -4)"; fi
 
 # ---------------------------------------------------------------- 场景 14
@@ -293,7 +293,7 @@ OUT14=$(bash "$R/scripts/qa/gate.sh" "$LOG14" 2>&1)
 RC14=$?
 set -e
 if [ "$RC14" -ne 0 ]; then ok "退出码非 0"; else bad "退出码非 0" "实际 0"; fi
-if printf '%s' "$OUT14" | grep -q "超过上限"; then ok "输出说明超上限"
+if grep -q "超过上限" <<<"$OUT14"; then ok "输出说明超上限"
 else bad "输出说明超上限" "$(printf '%s' "$OUT14" | grep 'GATE' | head -3)"; fi
 
 # ---------------------------------------------------------------- 场景 15
@@ -311,7 +311,7 @@ OUT15=$(bash "$R/scripts/qa/gate.sh" "$LOG15" 2>&1)
 RC15=$?
 set -e
 if [ "$RC15" -ne 0 ]; then ok "退出码非 0"; else bad "退出码非 0" "实际 0"; fi
-if printf '%s' "$OUT15" | grep -q "已不存在的 runner"; then ok "输出说明条目已失效"
+if grep -q "已不存在的 runner" <<<"$OUT15"; then ok "输出说明条目已失效"
 else bad "输出说明条目已失效" "$(printf '%s' "$OUT15" | grep 'GATE' | head -3)"; fi
 
 echo

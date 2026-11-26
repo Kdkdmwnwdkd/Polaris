@@ -92,7 +92,7 @@ fi
 
 # 两套模型是互补的，但优先级只能是「准的那个先」：真机上流式模型把
 # 「你在这吗」认成「你在这好」，那种错字用户没法用，快 0.8 秒毫无意义。
-if awk '/fun active\(\)/,/^    }/' "$ROUTER" | grep -q 'accurate.isInstalled()'; then
+if grep -q 'accurate.isInstalled()' < <(awk '/fun active\(\)/,/^    }/' "$ROUTER"); then
   pass "A7 路由优先「更准」那套（装了就压过流式）"
 else
   fail "A7 路由顺序变了 —— 更准的模型装了却不用"
@@ -105,7 +105,7 @@ echo "[B] 接入：两条入口都优先用自带识别"
 # 变成「没模型就明确拒绝并指路」，以及「文件里不该再有 SpeechRecognizer」。
 # 只看代码行：KDoc 里解释「为什么删掉系统识别」时必然会写 SpeechRecognizer。
 if grep -qF 'if (!localAsr.isInstalled())' "$PET" \
-   && ! grep -vE '^[[:space:]]*(\*|//)' "$PET" | grep -qF 'SpeechRecognizer'; then
+   && ! grep -qF 'SpeechRecognizer' < <(grep -vE '^[[:space:]]*(\*|//)' "$PET"); then
   pass "B1 桌宠只用自带模型，没装时明确拒绝并指路（系统识别已删）"
 else
   fail "B1 桌宠还在走/还留着系统识别 —— 那条路在真机上一个字都出不了"

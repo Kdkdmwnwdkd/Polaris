@@ -166,7 +166,7 @@ PY
     OUT2=$(compile_and_run); rc2=$?
     if [ $rc2 -eq 0 ]; then
       g_bad "M1 撤销失效后断言仍然绿——断言没测到点子上"
-    elif echo "$OUT2" | grep -q 'A2'; then
+    elif grep -q 'A2' <<<"$OUT2"; then
       g_good "M1 撤销失效后 A2 变红（exit=$rc2）"
     else
       g_bad "M1 变红了但红的不是撤销相关断言"

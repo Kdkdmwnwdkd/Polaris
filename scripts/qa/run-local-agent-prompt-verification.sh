@@ -78,7 +78,7 @@ if cut:
 print("".join(re.findall(r'"(?:[^"\\]|\\.)*"', body)))
 PY
 )
-if printf '%s' "$prompt_text" | grep -qE '【|】|请|不要|如果|可以'; then
+if grep -qE '【|】|请|不要|如果|可以' <<<"$prompt_text"; then
   check "提示词不含中文长句（token 经济）" 0
 else
   check "提示词不含中文长句（token 经济）" 1

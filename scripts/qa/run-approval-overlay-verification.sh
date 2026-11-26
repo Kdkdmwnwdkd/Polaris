@@ -129,7 +129,7 @@ if grep -q 'ApprovalBridge.publish(' "$VM"; then
 else
   bad "ChatViewModel 没发布审批请求——浮层永远不显示"
 fi
-if grep -B4 '_pendingApproval.value = null' "$VM" | grep -q 'ApprovalBridge.withdraw()'; then
+if grep -q 'ApprovalBridge.withdraw()' < <(grep -B4 '_pendingApproval.value = null' "$VM"); then
   good "finally 里撤销浮层卡"
 else
   bad "finally 没撤销浮层卡——审批结束后卡片会留在屏幕上"

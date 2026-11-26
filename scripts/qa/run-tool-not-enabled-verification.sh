@@ -170,7 +170,7 @@ out2=$(run_harness); rc2=$?
 if [ $rc2 -eq 0 ]; then
   bad "回退后断言仍然绿——这条断言没测到点子上（是装饰）"
   exit 1
-elif echo "$out2" | grep -q "tool_not_enabled"; then
+elif grep -q "tool_not_enabled" <<<"$out2"; then
   ok "回退后断言变红（exit=$rc2）——断言确实在测这条路径"
 else
   bad "回退后变红了，但红的不是预期的断言（exit=$rc2）"

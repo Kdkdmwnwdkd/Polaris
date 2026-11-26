@@ -154,7 +154,7 @@ PY
     f2=$(echo "$OUT2" | grep -oE '[0-9]+ 失败' | tail -1 | tr -dc '0-9')
     if [ "${f2:-0}" -eq 0 ]; then
       g_bad "M1 全部暴露后断言仍然绿——断言没测到点子上"
-    elif echo "$OUT2" | grep -qE 'FAIL  A[23]'; then
+    elif grep -qE 'FAIL  A[23]' <<<"$OUT2"; then
       g_good "M1 全部暴露后 A 组变红（$f2 条失败）"
     else
       g_bad "M1 变红了但红的不是 schema 取值断言"

@@ -90,7 +90,7 @@ fi
 cd_block=$(awk '/LaunchedEffect\(request, visible\)/{f=1} f{print} f&&/^    \}$/{exit}' "$SCREEN")
 if [ -z "$cd_block" ]; then
   g_bad "G2 找不到审批倒计时块（ChatScreen 结构变了，断言失效）"
-elif echo "$cd_block" | grep -q 'denyApproval'; then
+elif grep -q 'denyApproval' <<<"$cd_block"; then
   g_bad "G2 倒计时块里仍在调 denyApproval —— 弹窗一走就没兜底了"
 else
   g_good "G2 倒计时只做展示，不再自行拒绝"

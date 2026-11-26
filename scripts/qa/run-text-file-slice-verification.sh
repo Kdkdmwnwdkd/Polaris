@@ -70,7 +70,7 @@ echo "[G] 接线"
 # W1：read_file 里不能再有整份载入。判据写对、调用点还留着 readText，等于没修。
 # 只扫 ReadFileTool 自己的类体：edit_file 读全文做替换是另一回事（它必须看到全文）。
 READFILE_BODY=$(awk '/^class ReadFileTool/{f=1;next} f && /^(abstract )?class /{exit} f{print}' "$TOOLS")
-if echo "$READFILE_BODY" | grep -q '\.readText()'; then
+if grep -q '\.readText()' <<<"$READFILE_BODY"; then
   w_bad "W1 ReadFileTool 仍在 readText() 整份载入"
 else
   w_good "W1 ReadFileTool 不再整份载入"
@@ -108,7 +108,7 @@ fi
 # W6：edit_file 不能再走 readText()。它对非 UTF-8 文件做的是「替换成 U+FFFD 再写回」——
 # 不报错、不抛异常，只是把用户的字节永久换掉。这条守的是「文件不会被写坏」，不是代码长相。
 EDITFILE_BODY=$(awk '/^class EditFileTool/{f=1;next} f && /^class /{exit} f{print}' "$TOOLS")
-if echo "$EDITFILE_BODY" | grep -q '\.readText()'; then
+if grep -q '\.readText()' <<<"$EDITFILE_BODY"; then
   w_bad "W6 edit_file 仍用 readText() 整份载入（非 UTF-8 文件会被写坏）"
 else
   w_good "W6 edit_file 不再用 readText()"

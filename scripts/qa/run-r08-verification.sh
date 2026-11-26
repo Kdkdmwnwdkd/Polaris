@@ -174,7 +174,7 @@ PY
     OUT2=$(compile_and_run); rc2=$?
     if [ $rc2 -eq 0 ]; then
       g_bad "M1 危险判定失效后断言仍然绿——断言没测到点子上"
-    elif echo "$OUT2" | grep -qE 'A 危险：rm|C4'; then
+    elif grep -qE 'A 危险：rm|C4' <<<"$OUT2"; then
       g_good "M1 危险判定失效后 A/C 组变红（exit=$rc2）"
     else
       g_bad "M1 变红了但红的不是危险分类断言"

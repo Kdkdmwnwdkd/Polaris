@@ -63,8 +63,8 @@ compile_once() {
       -no-stdlib -no-reflect -classpath "$DEPS" -d "$OUT" $SOURCES 2>&1) || true
   fi
   echo "$out" | grep -v "^warning:" || true
-  echo "$out" | grep -q "error:" && return 1
-  echo "$out" | grep -q "BackendException\|NoClassDefFoundError" && return 2
+  grep -q "error:" <<<"$out" && return 1
+  grep -q "BackendException\|NoClassDefFoundError" <<<"$out" && return 2
   return 0
 }
 

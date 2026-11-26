@@ -111,7 +111,7 @@ else
   brc=$?
   # 没有结果行 = harness 中途崩了（R-19 的 N1 教训：进程崩掉时 grep 全不命中，
   # 若默认「没失败就是通过」，整段会静默消失）。
-  if ! echo "$B_OUT" | grep -q 'R10 行为结果：'; then
+  if ! grep -q 'R10 行为结果：' <<<"$B_OUT"; then
     B_OUT="$B_OUT"$'\n'"  B0 FAIL  行为 harness 没有产出结果行（rc=$brc）"
   fi
 fi

@@ -155,12 +155,12 @@ expect "能力声明写清离线与无权限" \
 # 断言只看 TEXT 字面量本身（注释里会引用旧版本当反例，不能一起判）。
 PROMPT_FILE=core/src/main/java/com/beichen/polaris/core/llm/local/LocalChatPrompt.kt
 _text_lit=$(sed -n '/const val TEXT: String =/,/^$/p' "$PROMPT_FILE")
-if printf '%s' "$_text_lit" | grep -q '不能做'; then
+if grep -q '不能做' <<<"$_text_lit"; then
   bad "不再罗列「不能做」清单（TEXT 里仍有 /不能做/）"
 else
   ok "不再罗列「不能做」清单"
 fi
-if printf '%s' "$_text_lit" | grep -q '两三句'; then
+if grep -q '两三句' <<<"$_text_lit"; then
   ok "能力声明带语气约束（治模板腔、顺带压短输出）"
 else
   bad "能力声明带语气约束（TEXT 里找不到 /两三句/）"

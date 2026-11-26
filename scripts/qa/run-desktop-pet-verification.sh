@@ -72,13 +72,13 @@ else
 fi
 
 svc_block=$(awk '/\.pet\.PetOverlayService/{f=1} f{print} f&&/\/>/{exit}' "$MANI")
-if printf '%s' "$svc_block" | grep -q 'foregroundServiceType="specialUse"'; then
+if grep -q 'foregroundServiceType="specialUse"' <<<"$svc_block"; then
   good "A2 前台服务类型为 specialUse（Android 14 上不声明会起不来）"
 else
   bad "A2 缺少 foregroundServiceType=\"specialUse\""
 fi
 
-if printf '%s' "$svc_block" | grep -q 'android:exported="false"'; then
+if grep -q 'android:exported="false"' <<<"$svc_block"; then
   good "A3 exported=false（只由本 App 启动，不对外暴露）"
 else
   bad "A3 服务没有显式 exported=false"
@@ -104,7 +104,7 @@ else
   bad "B1 startForeground 必须在加窗之前（当前 fg=${l_fg:-无} show=${l_show:-无}）"
 fi
 
-if awk '/override fun onStartCommand/,/^    }/' "$SERVICE" | grep -q 'overlay == null'; then
+if grep -q 'overlay == null' < <(awk '/override fun onStartCommand/,/^    }/' "$SERVICE"); then
   good "B2 onStartCommand 里判空：被 START_STICKY 重建但 onCreate 已判定不该存在时，立刻退出"
 else
   bad "B2 onStartCommand 没检查 overlay 是否为空 —— 服务会空转"
@@ -119,7 +119,7 @@ fi
 # 启动请求排在主线程消息队列里，而主线程正忙首帧渲染，超过 5 秒。那个窗口由系统
 # 计时，超时在 ActivityThread 里抛，进程直接死，runCatching 抓不住。
 # 换 startService 就没有这个计时（服务照样在 onCreate 里 startForeground）。
-if awk '/fun ensureRunning/,/^    }/' "$STATE" | grep -q 'ensureForeground = false'; then
+if grep -q 'ensureForeground = false' < <(awk '/fun ensureRunning/,/^    }/' "$STATE"); then
   good "B3 ensureRunning 用 startService（不参与 5 秒窗口，冷启动不闪退）"
 else
   bad "B3 ensureRunning 仍走 startForegroundService —— 主线程一忙就闪退（真机复现过）"
@@ -137,25 +137,25 @@ say ""
 # ---------------------------------------------------------------- C 状态回路
 say "[C] 开关状态与运行态的回路"
 
-if awk '/override fun onDestroy/,/^    }/' "$SERVICE" | grep -q 'markRunning(false)'; then
+if grep -q 'markRunning(false)' < <(awk '/override fun onDestroy/,/^    }/' "$SERVICE"); then
   good "C1 onDestroy 回报 running=false（否则设置页永远显示运行中）"
 else
   bad "C1 onDestroy 没有 PetState.markRunning(false)"
 fi
 
-if awk '/override fun onCreate/,/^    }/' "$SERVICE" | grep -q 'markRunning(true)'; then
+if grep -q 'markRunning(true)' < <(awk '/override fun onCreate/,/^    }/' "$SERVICE"); then
   good "C2 onCreate 回报 running=true"
 else
   bad "C2 onCreate 没有 PetState.markRunning(true)"
 fi
 
-if awk '/fun start\(/,/^    }/' "$STATE" | grep -q 'canDrawOverlays'; then
+if grep -q 'canDrawOverlays' < <(awk '/fun start\(/,/^    }/' "$STATE"); then
   good "C3 启动前复查悬浮窗权限（权限被回收时不会静默失败）"
 else
   bad "C3 PetState.start 没有检查 canDrawOverlays"
 fi
 
-if awk '/fun stop\(/,/^    }/' "$STATE" | grep -q 'stopService'; then
+if grep -q 'stopService' < <(awk '/fun stop\(/,/^    }/' "$STATE"); then
   good "C4 PetState.stop 真的停服务，不只是改标志位"
 else
   bad "C4 PetState.stop 没有 stopService —— 关不掉"
@@ -196,7 +196,7 @@ if [ -z "$registered" ]; then
 else
   rogue=""
   for t in $registered; do
-    if ! printf '%s' " $allowed " | grep -q " $t "; then
+    if ! grep -q " $t " <<<" $allowed "; then
       rogue="$rogue $t"
     fi
   done
@@ -364,7 +364,7 @@ else
   # 然后一个字都没有，还以为是 App 坏了。
   # 只查**代码**行：KDoc 里为了解释「为什么删掉」必然会写这个词。
   # 按全文匹配会把说明当成实现，逼着下一个人删注释——那是最坏的一种断言。
-  if grep -vE '^[[:space:]]*(\*|//)' "$VOICE" | grep -q 'SpeechRecognizer'; then
+  if grep -q 'SpeechRecognizer' < <(grep -vE '^[[:space:]]*(\*|//)' "$VOICE"); then
     bad "H1 PetVoice 里还有 SpeechRecognizer —— 系统识别已删除，不该复活"
   else
     good "H1 桌宠不走系统识别（只用自带离线模型）"
@@ -454,20 +454,20 @@ else
   # I1 没有这条权限，系统根本不会绑定 TileService：磁贴不出现在可选列表里，
   # 用户「添加了怎么没有」是最难查的一类反馈（无异常、无日志、无红字）。
   tile_block=$(awk '/\.pet\.PetTileService/{f=1} f{print} f&&/<\/service>/{exit}' "$MANI")
-  if printf '%s' "$tile_block" | grep -q 'BIND_QUICK_SETTINGS_TILE'; then
+  if grep -q 'BIND_QUICK_SETTINGS_TILE' <<<"$tile_block"; then
     good "I1 磁贴声明 BIND_QUICK_SETTINGS_TILE（否则系统静默不绑定）"
   else
     bad "I1 缺少 BIND_QUICK_SETTINGS_TILE —— 磁贴加不上去，且没有任何报错"
   fi
 
   # I2/I3 绑定方是系统 UI。exported=false 会让系统绑不上；action 写错则列表里没有。
-  if printf '%s' "$tile_block" | grep -q 'android:exported="true"'; then
+  if grep -q 'android:exported="true"' <<<"$tile_block"; then
     good "I2 磁贴 exported=true（绑定方是系统 UI）"
   else
     bad "I2 磁贴 exported 不是 true —— 系统绑不上这个服务"
   fi
 
-  if printf '%s' "$tile_block" | grep -q 'android.service.quicksettings.action.QS_TILE'; then
+  if grep -q 'android.service.quicksettings.action.QS_TILE' <<<"$tile_block"; then
     good "I3 声明了 QS_TILE intent-filter"
   else
     bad "I3 缺少 QS_TILE action —— 快捷设置里找不到「北辰」"
@@ -500,14 +500,14 @@ fi
 # I7 服务只认显式 action。START_STICKY 重建时 intent 为 null，
 # 若在 onCreate 里无条件开始听，就是「系统替你打开了麦克风」。
 sc_block=$(awk '/override fun onStartCommand/,/^    }/' "$SERVICE")
-if printf '%s' "$sc_block" | grep -q 'ACTION_LISTEN'; then
+if grep -q 'ACTION_LISTEN' <<<"$sc_block"; then
   good "I7 服务处理 ACTION_LISTEN"
 else
   bad "I7 服务不处理 ACTION_LISTEN —— 磁贴与通知按钮点了没反应"
 fi
 
 oc_block=$(awk '/override fun onCreate/,/^    }/' "$SERVICE")
-if printf '%s' "$oc_block" | grep -q 'beginVoice'; then
+if grep -q 'beginVoice' <<<"$oc_block"; then
   bad "I7b onCreate 里就开始听 —— 系统重建服务会未经同意打开麦克风"
 else
   good "I7b 只有显式 ACTION_LISTEN 才开始听"
@@ -516,7 +516,7 @@ fi
 # I8 listen() 必须把 action 一路带进启动意图。少了这一句，磁贴只会「把桌宠叫出来」，
 # 用户张着嘴等半天没反应——功能看起来是好的，实际差了最关键的一步。
 listen_block=$(awk '/fun listen\(/,/^        }/' "$SERVICE")
-if printf '%s' "$listen_block" | grep -q 'ACTION_LISTEN'; then
+if grep -q 'ACTION_LISTEN' <<<"$listen_block"; then
   good "I8 listen() 把 ACTION_LISTEN 一并交给服务"
 else
   bad "I8 listen() 没传 ACTION_LISTEN —— 点磁贴只是「打开桌宠」，不会开始听"
@@ -551,7 +551,7 @@ say "[J] 收尾与状态一致性"
 hide_block=$(awk '/fun hide\(\)/,/^    }/' "$OVERLAY")
 # 匹配调用表达式而不是关键词：注释里也写着 `arbiter.stopSpeech()`，
 # 只 grep 词根的话，把代码删掉、注释留着照样能绿——那是假绿。
-if printf '%s' "$hide_block" | grep -q 'AudioGraph.arbiter(context).stopSpeech()'; then
+if grep -q 'AudioGraph.arbiter(context).stopSpeech()' <<<"$hide_block"; then
   good "J1 关闭桌宠会停掉正在播报的那句"
 else
   bad "J1 hide() 没停播报 —— 关掉桌宠后声音还在念"
@@ -584,7 +584,7 @@ fi
 
 # J5 重新贴边要真按「新屏幕宽高」夹一次，而不是把旧 x 原样留住。
 osc_block=$(awk '/fun onScreenChanged/,/^    }/' "$OVERLAY")
-if printf '%s' "$osc_block" | grep -q 'screenSize()' && printf '%s' "$osc_block" | grep -q 'applyConstraints'; then
+if grep -q 'screenSize()' <<<"$osc_block" && grep -q 'applyConstraints' <<<"$osc_block"; then
   good "J5 重新贴边按新屏幕尺寸算，并夹进可见范围"
 else
   bad "J5 onScreenChanged 没重算坐标 —— 旋转后仍然可能出屏"
@@ -595,7 +595,7 @@ say "[K] 能停 / 能记住：说话中可中止，关掉再开上下文还在"
 # K1 气泡里的「停」要真能止住声音。判据是 stopSpeaking 的实现体里调了仲裁器，
 # 而不是只让 UI 把按钮藏起来——「点了没反应」比没有按钮更糟。
 ss_block=$(awk '/fun stopSpeaking\(\)/,/^    }/' "$OVERLAY")
-if printf '%s' "$ss_block" | grep -q 'arbiter(context).stopSpeech()'; then
+if grep -q 'arbiter(context).stopSpeech()' <<<"$ss_block"; then
   good "K1 「停」走仲裁器停播报（并释放播报租约）"
 else
   bad "K1 stopSpeaking 没有停掉音频 —— 按钮只是装饰"
@@ -675,14 +675,14 @@ else
 fi
 
 # L4 清空必须同时清盘。只清内存的话，「清空对话」在重启后原样复活。
-if awk '/fun clearHistory\(/,/^    }/' "$SESSION" | grep -q 'store.clear()'; then
+if grep -q 'store.clear()' < <(awk '/fun clearHistory\(/,/^    }/' "$SESSION"); then
   good "L4 清空对话同时清磁盘"
 else
   bad "L4 clearHistory 只清了内存 —— 重启后对话会回来"
 fi
 
 # L5 回放只给对话，且剥掉给模型看的时间戳前缀（否则小气泡变成日志）
-if awk '/suspend fun replay\(/,/^    }/' "$SESSION" | grep -q 'stripStamp'; then
+if grep -q 'stripStamp' < <(awk '/suspend fun replay\(/,/^    }/' "$SESSION"); then
   good "L5 回放剥掉 [日期 时间] 前缀"
 else
   bad "L5 回放把给模型的时间戳也显示给用户了"
@@ -695,9 +695,9 @@ fi
 
 # L6 落盘里不能有 tool 轨迹：残缺的 tool 配对会让下一轮请求直接 400
 rec_block=$(awk '/private fun toRecord/,/^    }/' "$STORE")
-if printf '%s' "$rec_block" | grep -q 'is UserMessage' &&
-   printf '%s' "$rec_block" | grep -q 'is AssistantMessage' &&
-   ! printf '%s' "$rec_block" | grep -q 'toolCalls'; then
+if grep -q 'is UserMessage' <<<"$rec_block" &&
+   grep -q 'is AssistantMessage' <<<"$rec_block" &&
+   ! grep -q 'toolCalls' <<<"$rec_block"; then
   good "L6 只落 user/assistant 文本，不带 toolCalls"
 else
   bad "L6 落盘映射把 tool 轨迹也带上了（下一次请求会因配对不全失败）"
@@ -719,12 +719,12 @@ else
 fi
 
 # L9 接线：Service → host → panel，任一环断开都是「代码在、功能没生效」
-if awk '/PetOverlayHost\(/,/onOpenApp/' "$SERVICE" | grep -q 'loadHistory = { s.replay() }'; then
+if grep -q 'loadHistory = { s.replay() }' < <(awk '/PetOverlayHost\(/,/onOpenApp/' "$SERVICE"); then
   good "L9a Service 把回放接到宿主"
 else
   bad "L9a Service 没接 loadHistory —— 展开气泡仍然是空的"
 fi
-if awk '/PetOverlayHost\(/,/onOpenApp/' "$SERVICE" | grep -q 'onClearHistory = { s.clearHistory() }'; then
+if grep -q 'onClearHistory = { s.clearHistory() }' < <(awk '/PetOverlayHost\(/,/onOpenApp/' "$SERVICE"); then
   good "L9b Service 把清空接到宿主"
 else
   bad "L9b Service 没接 onClearHistory —— 菜单里的清空点了没反应"

@@ -136,7 +136,7 @@ fi
 # runCatching，于是无论内层有没有兜都会判绿——这条断言本身踩过一次假绿。
 probe_block=$(awk '/Step.DEVICE_PROBE ->/{f=1} f{print} f&&/\.start\(\)/{exit}' "$BOOT")
 # 只认真正的调用，不认注释里解释「为什么要兜」的那句话——否则断言会被自己的注释骗过。
-if echo "$probe_block" | grep -qE 'runCatching[[:space:]]*\{[[:space:]]*AndroidDeviceProbe'; then
+if grep -qE 'runCatching[[:space:]]*\{[[:space:]]*AndroidDeviceProbe' <<<"$probe_block"; then
   good "C4 设备画像线程内自带 runCatching（跨线程异常外层抓不到）"
 else
   bad "C4 设备画像缺线程内 runCatching —— probe 崩了只留一行 worker 日志"

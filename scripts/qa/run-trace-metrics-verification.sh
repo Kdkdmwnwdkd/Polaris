@@ -55,8 +55,8 @@ field() { echo "$json" | python3 -c "import json,sys;d=json.load(sys.stdin);prin
 [ "$(field repaired)" = "1" ] && ok "重放次数 1" || bad "repaired=$(field repaired)"
 
 human=$(python3 "$PY" "$TMP/sample.ndjson" 2>&1)
-echo "$human" | grep -q "不该重试的错误被重试了" && ok "人读输出点名了「不该重试却重试」" || bad "人读输出缺少归因"
-echo "$human" | grep -q "目标 <1MB" && ok "人读输出带目标值（不带目标的数字没法判断好坏）" || bad "人读输出缺目标"
+grep -q "不该重试的错误被重试了" <<<"$human" && ok "人读输出点名了「不该重试却重试」" || bad "人读输出缺少归因"
+grep -q "目标 <1MB" <<<"$human" && ok "人读输出带目标值（不带目标的数字没法判断好坏）" || bad "人读输出缺目标"
 
 echo "[3/3] 门禁"
 python3 "$PY" "$TMP/sample.ndjson" --max-deterministic-ms=500 >/dev/null 2>&1

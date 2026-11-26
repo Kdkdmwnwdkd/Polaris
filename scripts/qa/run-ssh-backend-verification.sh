@@ -60,7 +60,7 @@ has "ssh 不进候选链（known 名单含它）" "$FACTORY" "TerminalBackend.KE
 # 候选顺序（val order = if … 到 val known 之间）里必须没有 ssh。
 # 不用 grep -F 塞多行：grep -F 会把换行当「多个模式」，于是单行 KEY_ADB 就能命中，
 # 断言看起来红了却什么都没证明（这里踩过一次）。
-if awk '/val order = if/,/val known/' "$FACTORY" | grep -qF "TerminalBackend.KEY_SSH"; then
+if grep -qF "TerminalBackend.KEY_SSH" < <(awk '/val order = if/,/val known/' "$FACTORY"); then
     fail "候选顺序里没有 ssh（order 段出现了 KEY_SSH）"
 else
     pass "候选顺序里没有 ssh"

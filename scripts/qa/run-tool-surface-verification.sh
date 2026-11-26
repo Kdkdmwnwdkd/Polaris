@@ -30,7 +30,7 @@ echo "$out" | sed -n '/预算门/,/^$/p' | sed 's/^/    /'
 [ $rc -eq 0 ] && ok "预算门通过（默认面 ≤525 / 满载 ≤3500）" || bad "预算门未通过（exit=$rc）"
 
 echo "[2/3] 清单覆盖"
-if echo "$out" | grep -q "全部登记（0 个落进 misc）"; then
+if grep -q "全部登记（0 个落进 misc）" <<<"$out"; then
   ok "所有工具都在清单里"
 else
   bad "有工具没登记：$(echo "$out" | grep "不在清单里" || echo '未输出覆盖行')"
@@ -38,7 +38,7 @@ fi
 
 echo "[3/3] 反向验证：把预算压到 1 token，门必须红"
 out2=$(python3 "$AUDIT" --gate --budget-default=1 --budget-peak=1 2>&1); rc2=$?
-if [ $rc2 -ne 0 ] && echo "$out2" | grep -q "❌"; then
+if [ $rc2 -ne 0 ] && grep -q "❌" <<<"$out2"; then
   ok "预算超标时确实报红（exit=$rc2）"
 else
   bad "预算被压到 1 仍不报红——这道门是装饰（exit=$rc2）"

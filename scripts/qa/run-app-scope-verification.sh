@@ -60,7 +60,7 @@ echo "[B] 生命周期没有被收口（关键）"
 if grep -qE 'val io: CoroutineContext[[:space:]]*=' "$HUB"; then
   # io 必须是「Dispatchers + Name + Handler」，一旦混入 Job 就会顶掉实例自己的 Job
   io_line=$(grep -A2 'val io: CoroutineContext' "$HUB" | tr '\n' ' ')
-  if echo "$io_line" | grep -q "SupervisorJob\|Job()"; then
+  if grep -q "SupervisorJob\|Job()" <<<"$io_line"; then
     bad "B1 AppScope.io 里混入了 Job —— 会顶掉实例自有生命周期"
   else
     good "B1 AppScope.io 不含 Job（生命周期仍归各实例）"

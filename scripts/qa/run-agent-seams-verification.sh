@@ -131,7 +131,7 @@ echo "[C] 出站通道的覆盖面"
 # 而 read_file → web_open("…?d=" + 内容) 全程零弹窗（web_* 在 ToolCatalog 里免审批）。
 EGRESS_SET=$(awk '/val DEFAULT_EGRESS_TOOLS/,/^        \)$/' "$EGRESS")
 for t in web_search web_open web_eval web_click web_type; do
-  if printf '%s' "$EGRESS_SET" | grep -q "\"$t\""; then
+  if grep -q "\" <<<"$EGRESS_SET"$t\""; then
     pass "C1 出站通道包含 $t"
   else
     fail "C1 出站通道漏了 $t —— 它免审，可以直接把刚读到的内容送出去"
@@ -140,7 +140,7 @@ done
 
 # http_request 有自己的逐域审批，塞进出站集合会让同一个动作弹两次框。
 # 重复确认是负价值：用户会学会无脑点「允许」。
-if printf '%s' "$EGRESS_SET" | grep -q '"http_request"'; then
+if grep -q '"http_request"' <<<"$EGRESS_SET"; then
   fail "C2 http_request 被塞进出站通道 —— 同一动作会连弹两次审批"
 else
   pass "C2 http_request 不在出站通道（走自己的逐域审批）"

@@ -169,12 +169,12 @@ fi
 # 于是「主界面在念 + 桌宠开麦」两条通道互不可见，麦克风把播报录进去（识别成一团乱码）。
 # 断言只看 TtsController 这一段：文件里其它地方出现引擎名（注释解释为什么不再自建）不算。
 tts_block=$(awk '/internal class TtsController/,/^}$/' "$CHAT_SCREEN")
-if printf '%s' "$tts_block" | grep -q 'AudioGraph.arbiter('; then
+if grep -q 'AudioGraph.arbiter(' <<<"$tts_block"; then
   pass "A17 主界面朗读走进程级仲裁器"
 else
   fail "A17 ChatScreen 的 TtsController 没有走 AudioGraph.arbiter —— 主界面不参与音频仲裁"
 fi
-if printf '%s' "$tts_block" | grep -qE 'TextToSpeech\('; then
+if grep -qE 'TextToSpeech\(' <<<"$tts_block"; then
   fail "A18 TtsController 又自建了 TextToSpeech —— 一个进程两份「谁在说话」"
 else
   pass "A18 主界面不再自建 TTS 引擎"

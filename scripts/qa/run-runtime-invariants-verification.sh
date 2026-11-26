@@ -92,7 +92,7 @@ echo ""
 echo "[B] 不变量 4：进程内仅一个 Semaphore；SubAgentRunner 不自带并发限制器"
 
 sem_files=$(grep -rEl 'Semaphore\(' core/src/main/java app/src/main/java --include="*.kt" 2>/dev/null | grep -v '/build/')
-if [ "$(echo "$sem_files" | grep -c .)" = "1" ] && echo "$sem_files" | grep -q 'runtime/AgentRuntime.kt'; then
+if [ "$(echo "$sem_files" | grep -c .)" = "1" ] && grep -q 'runtime/AgentRuntime.kt' <<<"$sem_files"; then
   pass "B1 Semaphore( 构造只出现在 runtime/AgentRuntime.kt（$sem_files）"
 else
   fail "B1 Semaphore( 出现在多处：$(echo "$sem_files" | tr '\n' ' ')——并发闸的真源不止一个"
@@ -137,7 +137,7 @@ echo "[C] 不变量 1：RealAgentLoop( 生产代码仅 1 处，且位于 runtime
 
 loop_sites=$(prod_matches 'RealAgentLoop[(]' | grep -v 'class RealAgentLoop')
 loop_n=$(echo "$loop_sites" | grep -c . || true)
-if [ "$loop_n" = "1" ] && echo "$loop_sites" | grep -q 'runtime/'; then
+if [ "$loop_n" = "1" ] && grep -q 'runtime/' <<<"$loop_sites"; then
   pass "C1 RealAgentLoop( 仅 1 处且在 runtime/：$loop_sites"
 else
   fail "C1 RealAgentLoop( 现 $loop_n 处，唯一构造点必须只在 runtime/AgentLoopFactory.kt"

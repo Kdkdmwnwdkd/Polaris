@@ -104,7 +104,7 @@ mk r-empty.sh 'echo "=== 结果：0 通过 / 0 失败 ==="'
 out=$(run_all); rc=$?
 [ "$(num "$out" FAIL)" = "1" ] && ok "FAIL=1" || bad "FAIL=1" "$(printf '%s' "$out" | tail -3)"
 [ "$(num "$out" PASS)" = "0" ] && ok "PASS=0（没被当成空跑通过）" || bad "PASS=0（没被当成空跑通过）" "$(printf '%s' "$out" | tail -3)"
-printf '%s' "$out" | grep -q "0 条断言" && ok "失败原因写明「0 条断言」" \
+grep -q "0 条断言" <<<"$out" && ok "失败原因写明「0 条断言」" \
   || bad "失败原因写明「0 条断言」" "$(printf '%s' "$out" | grep FAIL | head -2)"
 
 # ---------------------------------------------------------------- 场景 7
@@ -132,7 +132,7 @@ reset
 mk r-revived.sh 'echo "=== 结果：5 通过 / 0 失败 ==="'
 printf 'r-revived.sh\t已修好但忘了删\n' > "$REPO/scripts/qa/known-broken.txt"
 out=$(run_all); rc=$?
-printf '%s' "$out" | grep -q "^XPASS " && ok "输出 XPASS 行" || bad "输出 XPASS 行" "$(printf '%s' "$out" | grep -E 'PASS|XFAIL' | head -3)"
+grep -q "^XPASS " <<<"$out" && ok "输出 XPASS 行" || bad "输出 XPASS 行" "$(printf '%s' "$out" | grep -E 'PASS|XFAIL' | head -3)"
 [ "$(num "$out" PASS)" = "1" ] && ok "PASS=1（不因在清单里就扣掉）" || bad "PASS=1" "$(printf '%s' "$out" | tail -3)"
 
 # ---------------------------------------------------------------- 场景 10
@@ -172,9 +172,9 @@ sleep 1                      # 秒级 mtime 精度，必须拉开
 printf 'fun x() {}\n' > "$REPO/app/src/main/java/x/X.kt"
 mk r-ok.sh 'echo "=== 结果：5 通过 / 0 失败 ==="'
 out=$(run_all)
-printf '%s' "$out" | grep -q "^ENV STALE" && ok "打了 ENV STALE" \
+grep -q "^ENV STALE" <<<"$out" && ok "打了 ENV STALE" \
   || bad "打了 ENV STALE" "$(printf '%s' "$out" | tail -3)"
-printf '%s' "$out" | grep -q "^WARN  编译产物陈旧" && ok "开头有 WARN 提示" \
+grep -q "^WARN  编译产物陈旧" <<<"$out" && ok "开头有 WARN 提示" \
   || bad "开头有 WARN 提示" "$(printf '%s' "$out" | head -4)"
 
 # ---------------------------------------------------------------- 场景 13
@@ -188,7 +188,7 @@ sleep 1
 printf 'x\n' > "$REPO/app/build/tmp/kotlin-classes/debug/X.class"
 mk r-ok.sh 'echo "=== 结果：5 通过 / 0 失败 ==="'
 out=$(run_all)
-if printf '%s' "$out" | grep -q "^ENV STALE"; then
+if grep -q "^ENV STALE" <<<"$out"; then
   bad "不打 ENV STALE" "产物较新却仍打了标记：$(printf '%s' "$out" | grep '^ENV' | head -1)"
 else
   ok "不打 ENV STALE"
@@ -233,7 +233,7 @@ mk r-liar.sh "echo \"KS_HARNESS_SKIP r-liar.sh 缺 AGP 产物：$REPO/present-di
 out=$(run_all); rc=$?
 [ "$(num "$out" FAIL)" = "1" ] && ok "FAIL=1" || bad "FAIL=1" "$(printf '%s' "$out" | tail -3)"
 [ "$(num "$out" SKIP)" = "0" ] && ok "SKIP=0（没被当成环境跳过）" || bad "SKIP=0" "$(printf '%s' "$out" | tail -3)"
-printf '%s' "$out" | grep -q "理由不成立" && ok "失败原因写明「理由不成立」" \
+grep -q "理由不成立" <<<"$out" && ok "失败原因写明「理由不成立」" \
   || bad "失败原因写明「理由不成立」" "$(printf '%s' "$out" | grep FAIL | head -2)"
 
 # ---------------------------------------------------------------- 场景 18

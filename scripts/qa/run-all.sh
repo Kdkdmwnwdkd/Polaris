@@ -67,7 +67,7 @@ BROKEN_FILE="scripts/qa/known-broken.txt"
 is_known_broken() {
     [ -f "$BROKEN_FILE" ] || return 1
     grep -qvE '^\s*(#|$)' "$BROKEN_FILE" || return 1
-    awk '!/^[[:space:]]*(#|$)/ {print $1}' "$BROKEN_FILE" | grep -qx "$(basename "$1")"
+    grep -qx "$(basename "$1")" < <(awk '!/^[[:space:]]*(#|$)/ {print $1}' "$BROKEN_FILE")
 }
 
 # 被测 runner 集合。默认仓库内的 run-*.sh；自测（run-runall-verification.sh）时
@@ -87,9 +87,9 @@ RUNNER_GLOB="${QA_RUNNER_GLOB:-scripts/qa/run-*.sh}"
 # 代价是漏掉不带任何汇总前缀的裸计数——宁可漏检，不可误杀（误杀会让整轮红）。
 zero_assertions() {
   local ctx='结果|汇总|RESULT|SUMMARY|TOTAL|统计|小计'
-  echo "$1" | grep -qE "($ctx).*(^|[^0-9])0 *通过 */ *0 *失败" && return 0
+  grep -qE "($ctx).*(^|[^0-9])0 *通过 */ *0 *失败" <<<"$1" && return 0
   echo "$1" | grep -qiE "($ctx).*(^|[^0-9])0 *passed.*(^|[^0-9])0 *failed" && return 0
-  echo "$1" | grep -qE 'PASS[:=] *0([^0-9]|$).*FAIL[:=] *0([^0-9]|$)' && return 0
+  grep -qE 'PASS[:=] *0([^0-9]|$).*FAIL[:=] *0([^0-9]|$)' <<<"$1" && return 0
   return 1
 }
 
@@ -138,8 +138,8 @@ skip_claim_is_true() {
 nonzero_failures() {
   local last
   last=$(echo "$1" | grep -v '^[[:space:]]*$' | tail -1)
-  echo "$last" | grep -qE "(^|[^0-9])[1-9][0-9]* *(失败|failed)" && return 0
-  echo "$last" | grep -qE "FAIL[:=] *[1-9][0-9]*" && return 0
+  grep -qE "(^|[^0-9])[1-9][0-9]* *(失败|failed)" <<<"$last" && return 0
+  grep -qE "FAIL[:=] *[1-9][0-9]*" <<<"$last" && return 0
   return 1
 }
 
@@ -226,7 +226,7 @@ for s in $RUNNER_GLOB; do
   #
   # R-04：每个计数都加左边界。`(^|[^0-9])0 失败` 不会命中 `10 失败`；
   # `FAIL=0([^0-9]|$)` 不会命中 `FAIL=01`（后者是坏的，不该算通过）。
-  elif echo "$out" | grep -qE "(^|[^0-9])0 failed|FAIL=0([^0-9]|$)|FAIL: 0([^0-9]|$)|(^|[^0-9])0 失败|_OK [0-9]|全部通过"; then
+  elif grep -qE "(^|[^0-9])0 failed|FAIL=0([^0-9]|$)|FAIL: 0([^0-9]|$)|(^|[^0-9])0 失败|_OK [0-9]|全部通过" <<<"$out"; then
     if is_known_broken "$s"; then
       echo "XPASS $s（已修复！请从 known-broken.txt 移除）"
     fi

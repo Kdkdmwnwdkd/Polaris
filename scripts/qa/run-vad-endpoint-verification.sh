@@ -56,10 +56,10 @@ compile_ctx() {
     out=$(java -cp "$kcp" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
       -no-stdlib -no-reflect -classpath "$DEPS" -d "$OUT" "$SRC_SPEECH" "$SRC_HARNESS" 2>&1) || true
   fi
-  if echo "$out" | grep -q "error:"; then
+  if grep -q "error:" <<<"$out"; then
     echo "$out"; return 1
   fi
-  if echo "$out" | grep -q "BackendException\|NoClassDefFoundError"; then
+  if grep -q "BackendException\|NoClassDefFoundError" <<<"$out"; then
     echo "  (compile attempt $attempt hit backend annotation race, retrying ...)" >&2
     return 2
   fi

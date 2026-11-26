@@ -47,7 +47,7 @@ viol=0
 while IFS= read -r hit; do
   [ -z "$hit" ] && continue
   file=${hit%%:*}
-  if printf '%s\n' "$layer_paths" | grep -qx "$file"; then
+  if grep -qx "$file" <<<"$layer_paths"; then
     continue
   fi
   bad "分层违规（未在基线中）：$hit"
@@ -323,7 +323,7 @@ fi
 # 那会给悬浮球 52 个工具（含 shell、写文件、装应用）。它没有界面让人确认，
 # 用户说完就走——这条边界一旦破了，表现只是「桌宠偶尔会自己干点什么」。
 pet_body=$(awk '/fun pet[(]/,/fun attachSkillTools[(]/' "$ASM")
-if printf '%s' "$pet_body" | grep -qE 'WriteFileTool|EditFileTool|ShellRunTool|ShellBackgroundTool|AppInstallTool'; then
+if grep -qE 'WriteFileTool|EditFileTool|ShellRunTool|ShellBackgroundTool|AppInstallTool' <<<"$pet_body"; then
   bad "[H] 桌宠装配里出现写文件 / shell / 装应用——悬浮球没有确认界面，这条边界不能靠自觉"
 else
   good "[H] 桌宠只拿只读工具 + 一个带确认的 app_launch"
@@ -368,7 +368,7 @@ fi
 # 构造函数是 private 的：只能经 build() 造。这一条钉住 TurnJournal 真的调了 build
 # （而不是拿一份空结论充数——那样会把「有写操作已生效」整个吞掉，且不报错）。
 TJ=core/src/main/java/com/beichen/polaris/core/agent/journal/TurnJournal.kt
-if awk '/suspend fun recoveryFor[(]/,/^    }/' "$TJ" | grep -q 'StartupRecovery.build(orphans'; then
+if grep -q 'StartupRecovery.build(orphans' < <(awk '/suspend fun recoveryFor[(]/,/^    }/' "$TJ"); then
   good "[I] recoveryFor 把扫描结果真的合成了（build(orphans)）"
 else
   bad "[I] recoveryFor 没有调用 StartupRecovery.build —— 日志结论被吞，写操作会被重做"
@@ -548,7 +548,7 @@ PY
 
 if [ -z "$SCHEMA_BAD" ]; then
   bad "[K] schema 审计脚本没有输出（python 没跑起来？）"
-elif printf '%s' "$SCHEMA_BAD" | grep -q '^__OK__ '; then
+elif grep -q '^__OK__ ' <<<"$SCHEMA_BAD"; then
   n=$(printf '%s' "$SCHEMA_BAD" | sed -n 's/^__OK__ //p')
   good "[K] 显式 required 与描述一致（检查了 $n 处显式声明）"
 else

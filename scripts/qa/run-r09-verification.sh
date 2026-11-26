@@ -134,7 +134,7 @@ PY
     OUT2=$(java -cp "$OUT:$RUNTIME" R09VerificationKt); rc2=$?
     if [ $rc2 -eq 0 ]; then
       g_bad "M1 闸门失效后断言仍然绿——断言没测到点子上"
-    elif echo "$OUT2" | grep -q 'B2'; then
+    elif grep -q 'B2' <<<"$OUT2"; then
       g_good "M1 闸门失效后 B2 变红（exit=$rc2）"
     else
       g_bad "M1 变红了但红的不是可见输出相关断言"
