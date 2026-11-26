@@ -31,6 +31,9 @@ import com.beichen.polaris.core.UiItem
 import com.beichen.polaris.core.toMsgRecord
 import com.beichen.polaris.ui.ConversationProjection
 import com.beichen.polaris.ui.GenerationRunController
+import com.beichen.polaris.ui.TraceOwnership
+import com.beichen.polaris.ui.traceOwnership
+import com.beichen.polaris.ui.traceRunAt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -439,6 +442,71 @@ fun main() {
         gen.cancel()
         awaitJob(job)
         eq(settledOwner, "conv-1", "取消路径的收口 owner")
+    }
+
+    // ── [H] 过程流聚合：思考与工具按发生顺序连成一条 ──────────────
+    // 2026-11-26：原来只有「相邻工具」才聚在一起，思考被切成独立的一块。
+    // 这条规则全是边界判断（段在哪断、正文那条算不算、纯问答要不要折），
+    // 错哪一种都不报错，只是少一段或重复一段。所以直接跑真函数。
+    println()
+    println("[H] 过程流：思考与工具交错")
+
+    val hUser = UiItem.User("换个法子再试")
+    val hThink1 = UiItem.Assistant(text = "", reasoning = "先探一下网络能力")
+    val hThink2 = UiItem.Assistant(text = "", reasoning = "GET 带 body 不行，换 POST")
+    val hAnswer = UiItem.Assistant(text = "我按你的要求请求了……", reasoning = "四条都失败了，如实说明")
+    val hTool1 = toolItem("t1", "ok", running = false)
+    val hTool2 = toolItem("t2", "boom", running = false, isError = true)
+
+    check("H1 思考→工具→思考→工具→思考，连成一条并按顺序排") {
+        val msgs = listOf(hUser, hThink1, hTool1, hThink2, hTool2, hAnswer)
+        val flow = traceRunAt(msgs, 1)
+        expect(flow != null, "段首应当拿得到流")
+        flow!!
+        eq(flow.steps.size, 5, "步数（3 段思考 + 2 次工具）")
+        eq(
+            flow.steps.map { it.title },
+            listOf("思考", "run_shell", "思考", "run_shell", "思考"),
+            "步骤顺序必须与发生顺序一致，不能把思考全排到工具前面"
+        )
+        eq(flow.toolCount, 2, "工具数")
+        eq(flow.failedCount, 1, "失败数")
+        eq(flow.absorbed, setOf(1, 3), "两条无正文的思考整条吸收")
+        eq(flow.tailIndex, 5, "交出正文的那条是段尾")
+    }
+
+    check("H2 段内非首条不重复渲染") {
+        val msgs = listOf(hUser, hThink1, hTool1, hThink2, hTool2, hAnswer)
+        expect(traceRunAt(msgs, 2) == null, "段内的工具不该自己再开一段")
+        expect(traceRunAt(msgs, 3) == null, "段内的思考不该自己再开一段")
+        // 段首若被判成「被吸收」，整条流就没人画了——段首必须是 NONE（自己渲染流）。
+        eq(traceOwnership(msgs, 1), TraceOwnership.NONE, "段首自己负责渲染流，不能被吸收")
+        eq(traceOwnership(msgs, 3), TraceOwnership.ABSORBED, "无正文的思考：整条跳过")
+        eq(traceOwnership(msgs, 5), TraceOwnership.TAIL, "有正文的那条：只渲染正文")
+    }
+
+    check("H3 没有工具的问答不折成流") {
+        val msgs = listOf(hUser, UiItem.Assistant(text = "答案是 42", reasoning = "先算一遍"))
+        expect(traceRunAt(msgs, 1) == null, "纯问答不该变成折叠的过程")
+        eq(traceOwnership(msgs, 1), TraceOwnership.NONE, "思考仍按正文上方一行渲染")
+    }
+
+    check("H4 正文是墙：它后面的工具属于下一段") {
+        val msgs = listOf(hUser, hAnswer, hTool1)
+        expect(traceRunAt(msgs, 1) == null, "带正文的助手消息不能当流首，否则正文被吞")
+        val second = traceRunAt(msgs, 2)
+        expect(second != null, "它后面的工具应当自成一（新）段")
+        eq(second!!.steps.size, 1, "新段里只有它自己")
+        eq(second.tailIndex, -1, "新段没有正文尾巴")
+    }
+
+    check("H5 中断的步骤带文字说明") {
+        val dead = toolItem("t9", "", running = false).copy(interrupted = true)
+        val flow = traceRunAt(listOf(hUser, dead), 1)
+        expect(flow != null, "中断的工具照样成流")
+        eq(flow!!.steps[0].note, "已中断", "中断态要有文案，不能只给一个灰点")
+        eq(flow.interruptedCount, 1, "中断计数")
+        eq(flow.running, false, "中断不是运行中")
     }
 
     // ── 汇总 ────────────────────────────────────────────────────

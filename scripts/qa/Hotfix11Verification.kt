@@ -1051,7 +1051,10 @@ private fun testReasoningFold() {
         // 组件搬进 ChatToolTrace.kt。判据随之从 ReasoningBlock 改判到 ThinkingTraceRow，
         // 并补上本次改动的核心行为——**跑完自动折回**（旧实现只手动开合，从不自己收）。
         assertContains("U10", traceUi, "internal fun ThinkingTraceRow(reasoning: String, streaming: Boolean)")
-        assertContains("U10", screen, "if (!item.reasoning.isNullOrBlank())")
+        // 2026-11-26：思考与工具合并成一条过程流后，这行 if 外面多了 thinkingInFlow 前置，
+        // 原来的字面量不再连续。这里不新增断言、直接把旧那条换成更强的一条：
+        // 既守住 isNullOrBlank 判据（组件只收非空），也守住「并进流的思考不再画第二遍」。
+        assertContains("U10", screen, "!thinkingInFlow && !item.reasoning.isNullOrBlank()")
         assertContains("U10", screen, "reasoning = item.reasoning")
         assertContains("U10", screen, "streaming = streaming")
         // 折叠头常驻可反复开合；展开图标随状态旋转
@@ -1060,7 +1063,9 @@ private fun testReasoningFold() {
         assertContains("U10", traceUi, "targetValue = if (expanded) 180f else 0f")
         // 自动折回：流结束折思考，run 结束折工具组；用户手动开过就不折
         assertContains("U10", traceUi, "if (!streaming && !touchedByUser) expanded = false")
-        assertContains("U10", traceUi, "if (!run.running && !touchedByUser)")
+        // 2026-11-26：折回判据从 run.running 扩成 active（= run.running || live）。
+        // 模型在思考时还没有新工具进来，只看 tools.running 会把刚出现的思考立刻折起来。
+        assertContains("U10", traceUi, "if (!active && !touchedByUser)")
         // null 不渲染：由调用处的 isNullOrBlank 判据保证，组件只接收非空
         assertTrue("U10", !traceUi.contains("reasoning == null"))
     }

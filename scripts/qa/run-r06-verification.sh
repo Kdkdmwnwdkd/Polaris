@@ -71,6 +71,8 @@ SOURCES=(
   "$SRC_CORE/core/llm/JsonSafe.kt"
   "$SRC/ui/ConversationProjection.kt"
   "$SRC/ui/GenerationRunController.kt"
+  # 2026-11-26：过程流聚合（思考与工具交错）拆成无 Compose 依赖的纯逻辑文件，才编得动。
+  "$SRC/ui/TraceFlow.kt"
 )
 for f in "${SOURCES[@]}" "$HARNESS"; do
   [ -f "$f" ] || { echo "FAIL 缺少源文件 $f（无法判定，视为失败）"; exit 1; }
@@ -107,6 +109,8 @@ echo "[G] 接线与文案单点"
 VM=app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt
 SCREEN=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
 TRACE=app/src/main/java/com/beichen/polaris/ui/ChatToolTrace.kt
+# 2026-11-26：聚合与状态分发拆出渲染文件，判据要跟着状态机走，不跟着画笔走。
+FLOW=app/src/main/java/com/beichen/polaris/ui/TraceFlow.kt
 UIITEM=core/src/main/java/com/beichen/polaris/core/UiItem.kt
 
 if grep -q 'onSettling = { owner -> projection.settleInterrupted(owner) },' "$VM"; then
@@ -116,17 +120,17 @@ else
 fi
 
 # 2026-11-26：工具卡收成一行「过程轨迹」，状态分发从 ChatScreen.ToolStatus 搬到
-# ChatToolTrace.toolState()。判的是**同一件事**——中断单列成中性态、不混进「已失败」，
-# 只是不再叫 ToolStatus。别的地方没松：下面 G5 仍然盯着落库那行。
-if grep -q 't.interrupted -> TraceState.NEUTRAL' "$TRACE"; then
+# TraceFlow.toolState()（渲染留在 ChatToolTrace）。判的是**同一件事**——中断单列成
+# 中性态、不混进「已失败」，只是不再叫 ToolStatus。别的地方没松：G5 仍盯着落库那行。
+if grep -q 't.interrupted -> TraceState.NEUTRAL' "$FLOW"; then
   g_good "G2 中断态在 toolState() 里单列（不混进「已失败」）"
 else
   g_bad "G2 缺 interrupted 分支 —— 中断卡会被渲染成已完成/已失败"
 fi
 
-# 这条不是「跟着实现改」，是补一次真丢的：搬到新文件时 NEUTRAL 只剩一个灰点，
+# 这条不是「跟着实现改」，是补一次真丢的：收成一行时 NEUTRAL 只剩一个灰点，
 # 「已中断」「已拒绝」的文案没跟过来，用户看不出这步为什么没有结果。
-if grep -q 't.interrupted -> "已中断"' "$TRACE" &&
+if grep -q 't.interrupted -> "已中断"' "$FLOW" &&
    grep -q 'step.note?.let' "$TRACE"; then
   g_good "G3 状态文案「已中断」有渲染出口（note 字段进 StepRow）"
 else

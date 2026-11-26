@@ -384,15 +384,13 @@ fun ChatScreen(
                 // F17 兜底：messageKeys 由 remember(messages) 算，key lambda 却在测量阶段调用，
                 // 此时 messages 可能已是下一帧的（刚插入工具卡）——直接索引会越界崩页（模拟器实测）。
                 itemsIndexed(messages, key = { index, _ -> messageKeys.getOrNull(index) ?: "fallback-$index" }) { index, item ->
-                    // 2026-11-26：工具调用收成一行「过程轨迹」。这里算两件事——
-                    // ① 本条的轨迹组（只有组首拿得到，组内其余返回 null）；
-                    // ② 本条是否已被别人接管（组内非首条 / 被工具组吸收的纯思考）。
-                    // 接管的只跳渲染，不删数据：落盘与模型上下文一个字都没动，
-                    // 所以历史会话、导出、续跑全都与改前一致。
-                    val trace = if (item is UiItem.Tool) traceRunAt(messages, index) else null
-                    if ((item is UiItem.Tool && trace == null) ||
-                        (item is UiItem.Assistant && thinkingAbsorbedBy(messages, index))
-                    ) {
+                    // 2026-11-26：工具与思考收成一条「过程流」。这里算两件事——
+                    // ① 本条的流（只有段首拿得到，段内其余返回 null）；
+                    // ② 助手消息的归属：整条被吸收 / 只留正文 / 自己全渲染。
+                    // 跳过的只是不渲染，数据一条没删：落盘与模型上下文都与改前一致。
+                    val trace = traceRunAt(messages, index)
+                    val own = if (item is UiItem.Assistant) traceOwnership(messages, index) else TraceOwnership.NONE
+                    if ((item is UiItem.Tool && trace == null) || own == TraceOwnership.ABSORBED) {
                         return@itemsIndexed
                     }
                     val prev = messages.getOrNull(index - 1)
@@ -406,7 +404,10 @@ fun ChatScreen(
                             item,
                             // 流式光标只在「末尾且无草稿气泡」时显示；有草稿时草稿自己带光标
                             streaming = running && index == messages.lastIndex && streamDraft == null,
-                            trace = trace
+                            trace = trace,
+                            // 思考已进上方过程流：段首自己画流，段尾只画正文；段末还在长时保持展开
+                            thinkingInFlow = trace != null || own == TraceOwnership.TAIL,
+                            traceLive = running && trace != null && trace.lastIndex == messages.lastIndex
                         )
                         // W-30：翻译结果（按消息下标缓存；只显示、不写入会话内容）
                         translations[index]?.let { tr ->
@@ -2156,7 +2157,7 @@ private fun ChatSendButton(enabled: Boolean, interrupting: Boolean = false, onCl
  * 身份不需要两个记号：用户靠右对齐 + 淡色底，助手靠「没有底色」。
  */
 @Composable
-private fun MessageRow(item: UiItem, streaming: Boolean, trace: TraceRun? = null) {
+private fun MessageRow(item: UiItem, streaming: Boolean, trace: TraceRun? = null, thinkingInFlow: Boolean = false, traceLive: Boolean = false) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val rowMaxWidth = this.maxWidth // DslMarker：进到 Row / Column 的 scope 后看不见它
         when (item) {
@@ -2176,9 +2177,9 @@ private fun MessageRow(item: UiItem, streaming: Boolean, trace: TraceRun? = null
             }
 
             is UiItem.Assistant -> Column(Modifier.fillMaxWidth()) {
-                // 思考是过程不是正文：外置成一行，与工具组同一套视觉。orEmpty 只为收窄
-                // 类型——reasoning 是 core 的 public 属性，上面挡住的 null 编译期不认。
-                if (!item.reasoning.isNullOrBlank()) {
+                trace?.let { ToolTraceRow(it, traceLive) }
+                // 没进流的思考才在这里单起一行（普通问答）。orEmpty 只为收窄跨模块属性。
+                if (!thinkingInFlow && !item.reasoning.isNullOrBlank()) {
                     ThinkingTraceRow(reasoning = item.reasoning.orEmpty(), streaming = streaming)
                 }
                 MessageBubble(
@@ -2193,9 +2194,8 @@ private fun MessageRow(item: UiItem, streaming: Boolean, trace: TraceRun? = null
                 )
             }
 
-            // 过程轨迹由 itemsIndexed 算好后传进来：这一条若不是组首，trace 为 null，
-            // 调用方已经跳过、不会走到这里。
-            is UiItem.Tool -> trace?.let { ToolTraceRow(it) }
+            // 段内非首条由调用方跳过，走不到这里。
+            is UiItem.Tool -> trace?.let { ToolTraceRow(it, traceLive) }
         }
     }
 }
@@ -2235,6 +2235,7 @@ private fun MessageBubble(
     images: List<String> = emptyList(),
     fileNames: List<String> = emptyList()
 ) {
+    if (!isUser && text.isBlank() && images.isEmpty()) return // 纯思考只在流里，正文位置不留空气泡
     if (isUser) {
         Column(
             Modifier

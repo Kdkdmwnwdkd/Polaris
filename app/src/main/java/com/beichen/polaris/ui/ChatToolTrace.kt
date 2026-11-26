@@ -46,8 +46,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.Canvas
-import com.beichen.polaris.core.ToolCall
-import com.beichen.polaris.core.UiItem
 
 /**
  * 一次 run 的「过程轨迹」：把相邻的工具调用、以及被吸收进来的纯思考，
@@ -73,177 +71,9 @@ import com.beichen.polaris.core.UiItem
  *
  * ## 边界
  *
- * 纯渲染。聚合只在 [traceRunAt] 里做，读的是 `List<UiItem>` 的相邻关系，
+ * 纯渲染。聚合只在 [traceRunAt] 里做，读的是 `List<UiItem>` 的发生顺序，
  * 不写任何状态、不碰落盘格式、不改 `send()` 那条主链。
  */
-
-/**
- * 一步的状态。
- *
- * 只有三种颜色语义：跑（主色）/ 成（success）/ 败（error）。
- * 「已拒绝」「已中断」归 [NEUTRAL]——它们是用户的决定或环境的终止，不是故障，
- * 染成红色会让用户以为出了错（继承 v2.1 R3 的判断）。
- */
-internal enum class TraceState { RUNNING, DONE, FAILED, NEUTRAL }
-
-/** 过程中的一步：一次工具调用，或一段思考。 */
-internal data class TraceStep(
-    /** 工具名（mono）；思考固定为「思考」。 */
-    val title: String,
-    /** 一行摘要：工具的参数里最有信息量的那个值，或思考的首句。 */
-    val summary: String,
-    /** 点开单步时显示的正文：工具的入参 + 结果，思考的全文。 */
-    val detail: String,
-    val state: TraceState,
-    val isThinking: Boolean,
-    /**
-     * 非故障终态的文字说明：「已中断」「已拒绝」。
-     *
-     * 这两态与「跑完了」共用中性色（见 [TraceState.NEUTRAL]），只靠颜色区分的话
-     * 用户看不出这一步是没跑完、还是被自己拒绝了——旧 `ToolStatus` 有文案，
-     * 收成一行时漏掉了，等于把「为什么没有结果」这个信息弄丢。
-     */
-    val note: String? = null,
-    /** 工具返回的图片（data URL）。它是产物不是过程，收起时也照常显示。 */
-    val images: List<String> = emptyList()
-)
-
-/**
- * 一组相邻的过程步骤。
- *
- * @param absorbedThinking 被本组吸收掉的「纯思考」消息下标（`-1` = 没有）。
- *   列表渲染时那一条要跳过，否则同一段思考会显示两次：一次在组里，一次在它自己的位置。
- */
-internal data class TraceRun(
-    val steps: List<TraceStep>,
-    val toolCount: Int,
-    val failedCount: Int,
-    /** 被中断的步数：它不是失败，但「没跑完」得让用户在收起态也看得见。 */
-    val interruptedCount: Int,
-    val running: Boolean,
-    val absorbedThinking: Int
-)
-
-/**
- * 从 [index] 处取一组过程步骤；返回 null 表示「这一条不该由自己渲染」。
- *
- * 两种情况返回 null：
- * 1. `index` 不是工具调用（不是本函数的职责）；
- * 2. `index` 是工具调用，但前一条也是工具调用——它属于前一组，由组首统一渲染。
- *
- * 第三件事：如果紧邻前一条是「有思考、无正文」的助手消息，把它吸收进来。
- * 那条消息是模型在决定调工具之前的推理，本来就是这段过程的第一步；
- * 单独占一行会让「思考 → 工具」看起来是两件事。
- */
-internal fun traceRunAt(messages: List<UiItem>, index: Int): TraceRun? {
-    val head = messages.getOrNull(index) as? UiItem.Tool ?: return null
-    if (messages.getOrNull(index - 1) is UiItem.Tool) return null
-
-    val lead = messages.getOrNull(index - 1)
-    val absorbed = if (lead is UiItem.Assistant &&
-        lead.text.isBlank() &&
-        !lead.reasoning.isNullOrBlank()
-    ) index - 1 else -1
-
-    var end = index
-    while (messages.getOrNull(end + 1) is UiItem.Tool) end++
-
-    val tools = (index..end).map { messages[it] as UiItem.Tool }
-    val steps = ArrayList<TraceStep>(tools.size + 1)
-    if (absorbed >= 0) {
-        steps += TraceStep(
-            title = "思考",
-            summary = thinkingSummary((lead as UiItem.Assistant).reasoning.orEmpty()),
-            detail = lead.reasoning.orEmpty(),
-            state = TraceState.DONE,
-            isThinking = true
-        )
-    }
-    tools.forEach { steps += toolStep(it) }
-
-    return TraceRun(
-        steps = steps,
-        toolCount = tools.size,
-        failedCount = tools.count { toolState(it) == TraceState.FAILED },
-        interruptedCount = tools.count { it.interrupted },
-        running = tools.any { it.running },
-        absorbedThinking = absorbed
-    )
-}
-
-/**
- * [index] 处那条「纯思考」是否已被后面的工具组吸收。
- *
- * 判据与 [traceRunAt] 必须完全一致，否则会出现「组里有一份、原地还有一份」，
- * 或者「两边都不显示」——所以两处都从 [isPureThinking] 取判据，不各写一遍。
- */
-internal fun thinkingAbsorbedBy(messages: List<UiItem>, index: Int): Boolean {
-    val item = messages.getOrNull(index) as? UiItem.Assistant ?: return false
-    return isPureThinking(item) && messages.getOrNull(index + 1) is UiItem.Tool
-}
-
-/** 只有思考、没有正文的助手消息：它是一段过程，不是一条回答。 */
-private fun isPureThinking(item: UiItem.Assistant): Boolean =
-    item.text.isBlank() && !item.reasoning.isNullOrBlank()
-
-private fun toolState(t: UiItem.Tool): TraceState = when {
-    t.running -> TraceState.RUNNING
-    t.interrupted -> TraceState.NEUTRAL
-    // 拒绝是用户决策不是故障（core/AgentLoop 回填的固定文案）
-    t.isError && t.result.contains("用户拒绝了") -> TraceState.NEUTRAL
-    t.isError -> TraceState.FAILED
-    else -> TraceState.DONE
-}
-
-private fun toolStep(t: UiItem.Tool): TraceStep = TraceStep(
-    title = t.call.name,
-    summary = summarizeCall(t.call),
-    detail = buildString {
-        append("入参\n")
-        append(t.call.arguments.toString())
-        if (!t.running) {
-            append("\n\n结果\n")
-            append(t.result.take(2_000))
-        }
-    },
-    state = toolState(t),
-    isThinking = false,
-    // 文案与状态同源：判据和 toolState() 用同一对条件，不各写一遍。
-    note = when {
-        t.interrupted -> "已中断"
-        t.isError && t.result.contains("用户拒绝了") -> "已拒绝"
-        else -> null
-    },
-    images = t.images
-)
-
-/**
- * 从参数里挑一个最有信息量的值当摘要。
- *
- * 顺序不是随便排的：路径/命令/查询能让人一眼认出「它在干嘛」，
- * 而 `id`、`timeout` 这类字段几乎每步都有、却什么也没说明。
- * 全都没有时退回整个 JSON——总比空着强，但截断，不然一行里塞进几百字符。
- */
-internal fun summarizeCall(call: ToolCall): String {
-    val keys = listOf(
-        "path", "file_path", "file", "command", "cmd", "query",
-        "url", "prompt", "name", "action", "id"
-    )
-    for (k in keys) {
-        val v = call.arguments[k]?.toString()?.trim('"')
-        if (!v.isNullOrBlank() && v != "null") return v.oneLine(46)
-    }
-    val raw = call.arguments.toString()
-    return if (raw.isBlank() || raw == "{}") "" else raw.oneLine(46)
-}
-
-/** 思考的首句：用户扫一眼就知道「它在想什么」，不需要读全文。 */
-internal fun thinkingSummary(reasoning: String): String = reasoning.oneLine(46)
-
-private fun String.oneLine(max: Int): String =
-    replace('\n', ' ').replace(Regex("\\s+"), " ").trim().let {
-        if (it.length <= max) it else it.take(max - 1) + "…"
-    }
 
 /**
  * 一组过程的收起态 + 展开态。
@@ -255,15 +85,18 @@ private fun String.oneLine(max: Int): String =
  * 用户手动展开过就不再自动折：他正在看的东西不该被程序合上。
  */
 @Composable
-internal fun ToolTraceRow(run: TraceRun) {
-    var expanded by remember { mutableStateOf(run.running) }
+internal fun ToolTraceRow(run: TraceRun, live: Boolean = false) {
+    // active：这一段正长到消息列表末尾。模型思考时还没有新工具进来（tools.running 全 false），
+    // 光看 run.running 会在「思考刚出现」那一刻就折回去，用户看不到它在想什么。
+    val active = run.running || live
+    var expanded by remember { mutableStateOf(active) }
     var touchedByUser by remember { mutableStateOf(false) }
     var openStep by remember { mutableStateOf(-1) }
 
-    // 运行结束 -> 没被用户干预过就折回。用 LaunchedEffect 而不是 remember(running)：
+    // 运行结束 -> 没被用户干预过就折回。用 LaunchedEffect 而不是 remember(active)：
     // 后者会在每次状态变化时重建 state，运行中每来一步就把用户的展开态冲掉。
-    LaunchedEffect(run.running) {
-        if (!run.running && !touchedByUser) {
+    LaunchedEffect(active) {
+        if (!active && !touchedByUser) {
             expanded = false
             openStep = -1
         }
@@ -286,10 +119,10 @@ internal fun ToolTraceRow(run: TraceRun) {
                 },
             verticalAlignment = Alignment.CenterVertically
         ) {
-            StateMark(run)
+            StateMark(run, active)
             Spacer(Modifier.width(AgentSpacing.space2))
             Text(
-                text = headline(run),
+                text = headline(run, active),
                 style = MaterialTheme.typography.bodySmall,
                 color = if (run.failedCount > 0) MaterialTheme.colorScheme.error
                 else MaterialTheme.colorScheme.onSurfaceVariant
@@ -388,10 +221,10 @@ internal fun ThinkingTraceRow(reasoning: String, streaming: Boolean) {
 // —— 下面是小件，全部无状态 ——
 
 @Composable
-private fun StateMark(run: TraceRun) {
+private fun StateMark(run: TraceRun, active: Boolean) {
     val ak = LocalAkColors
     when {
-        run.running -> CircularProgressIndicator(
+        active -> CircularProgressIndicator(
             modifier = Modifier.size(12.dp),
             strokeWidth = 1.5.dp,
             color = MaterialTheme.colorScheme.primary
@@ -562,12 +395,12 @@ private fun DetailBlock(text: String, modifier: Modifier = Modifier) {
 }
 
 /** 收起行的文案：跑的时候说「在跑什么」，跑完只说「跑了几步、错了几个」。 */
-private fun headline(run: TraceRun): String = when {
-    run.running -> "正在执行"
-    run.failedCount > 0 -> "${run.toolCount} 个工具 · ${run.failedCount} 个失败"
+private fun headline(run: TraceRun, active: Boolean): String = when {
+    active -> "正在执行"
+    run.failedCount > 0 -> "${run.toolCount} 次工具调用 · ${run.failedCount} 个失败"
     // 中断不是失败，但也不能显示成「跑完了」：收起态一行里就要能看出来。
-    run.interruptedCount > 0 -> "${run.toolCount} 个工具 · 已中断"
-    else -> "${run.toolCount} 个工具"
+    run.interruptedCount > 0 -> "${run.toolCount} 次工具调用 · 已中断"
+    else -> "已完成 · ${run.toolCount} 次工具调用"
 }
 
 /** 展开区的左侧竖线：把散落的步骤连成一段，而不是若干条独立文字。 */
