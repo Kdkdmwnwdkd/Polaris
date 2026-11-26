@@ -178,7 +178,6 @@ fun SettingsScreen(
             val profiles by vm.profiles.collectAsStateWithLifecycle()
             AkGroup(
                 title = "轻量任务",
-                description = "标题生成等轻量任务用哪个模型，默认跟随主配置"
             ) {
                 // v5：不加图标。这一组是「单选：轻量任务用哪个模型」，档案行本来就没有图标，
                 // 只给「跟随主配置」配一个等于暗示它是另一种东西。单选靠 selected 表达。
@@ -217,8 +216,7 @@ fun SettingsScreen(
             val planMode by vm.planMode.collectAsStateWithLifecycle()
             val autoResume by vm.autoResume.collectAsStateWithLifecycle()
             AkGroup(
-                title = "通用",
-                description = "界面、通知与执行方式"
+                title = "通用"
             ) {
                 AkListItem(
                     icon = Icons.Outlined.Palette,
@@ -419,7 +417,6 @@ fun SettingsScreen(
 
             AkGroup(
                 title = "桌面助手",
-                description = "常驻桌面角落的小浮球，点开问一句，答案会念出来"
             ) {
                 AkListItem(
                     icon = Icons.Outlined.SmartToy,
@@ -503,7 +500,7 @@ fun SettingsScreen(
             val shownRows = if (showAllGroups) toolGroups else activeRows
             AkGroup(
                 title = "工具范围",
-                description = "每轮请求都会带上这些工具的定义。用不到的取消勾选，就别再为它付 token"
+                description = "勾选的随每轮请求发出，都算 token"
             ) {
                 shownRows.forEachIndexed { i, row ->
                     AkListItem(
@@ -566,7 +563,6 @@ fun SettingsScreen(
             // 同一件事（拿 uid 2000 的权限），现在两条调试通道都收进权限中心页。
             AkGroup(
                 title = "设备能力",
-                description = "关掉后 Agent 只能对话，不能操作手机"
             ) {
                 AkListItem(
                     icon = Icons.Outlined.Bolt,
@@ -583,7 +579,6 @@ fun SettingsScreen(
                 AkListItem(
                     icon = Icons.Outlined.Shield,
                     title = "权限中心",
-                    description = "无障碍、通知、使用情况与调试通道（Shizuku / 无线调试）",
                     onClick = { onNavigate(AppDest.PERMISSIONS) }
                 )
                 // 语音识别引擎（2026-11-14）。
@@ -596,7 +591,7 @@ fun SettingsScreen(
                 AkListItem(
                     icon = Icons.Outlined.Mic,
                     title = "语音识别",
-                    description = "选桌宠用哪个识别引擎（很多机型设置里没有这一项）",
+                    description = "很多机型设置里没有这一项",
                     onClick = { onNavigate(AppDest.VOICE) }
                 )
                 // 语音诊断：让用户自己看出「语音为什么不能用」。
@@ -610,7 +605,6 @@ fun SettingsScreen(
                 AkListItem(
                     icon = Icons.Outlined.Description,
                     title = "语音诊断",
-                    description = "查本机的语音识别环境：权限、识别服务、默认引擎、语言",
                     onClick = {
                         // 先探一遍再出报告，不读缓存——用户点它就是要看**现在**的结论。
                         // 探测要连上每个引擎问一句（最坏 2.5 秒/个，并行），
@@ -640,7 +634,6 @@ fun SettingsScreen(
                 AkListItem(
                     icon = Icons.Outlined.PieChart,
                     title = "存储空间",
-                    description = "每一笔占了多少、删了会损失什么；临时文件可一键清",
                     onClick = { onNavigate(AppDest.STORAGE) }
                 )
                 // 存活自检：给没有电脑、拉不了 adb 的用户一个自测入口。
@@ -648,7 +641,7 @@ fun SettingsScreen(
                 AkListItem(
                     icon = Icons.Outlined.Refresh,
                     title = "后台存活自检",
-                    description = "锁屏 5 分钟，通知里的秒数还在涨说明任务不会被冻结",
+                    description = "锁屏 5 分钟，看秒数还涨不涨",
                     onClick = {
                         SurvivalCheckService.start(context)
                         Toast.makeText(
@@ -662,55 +655,46 @@ fun SettingsScreen(
 
             // —— 工具：从抽屉搬来的常用入口（用户反馈侧边栏拥挤，参照 RikkaHub 收纳）——
             AkGroup(
-                title = "工具",
-                description = "日常用的入口都在这里"
+                title = "工具"
             ) {
                 AkListItem(
                     icon = Icons.Outlined.Cloud,
                     title = "模型配置",
-                    description = "接口地址、API Key、模型名与系统提示词",
                     onClick = { onNavigate(AppDest.MODEL) }
                 )
                 AkListItem(
                     icon = Icons.Outlined.Apps,
                     title = "容器",
-                    description = "Termux 容器会话与命令执行状态",
                     onClick = { onNavigate(AppDest.CONTAINER) }
                 )
                 AkListItem(
                     icon = Icons.Outlined.Edit,
                     title = "编辑器",
-                    description = "查看与修改工作区内的代码文件",
                     onClick = { onNavigate(AppDest.EDITOR) }
                 )
                 AkListItem(
                     icon = Icons.Outlined.AutoAwesome,
                     title = "提示词库",
-                    description = "输入栏闪电按钮唤起的快捷指令，可新建与编辑",
                     onClick = { onNavigate(AppDest.PROMPTS) }
                 )
                 AkListItem(
                     icon = Icons.Outlined.Bookmark,
                     title = "收藏",
-                    description = "对话里收藏的消息；删会话也不丢",
                     onClick = { onNavigate(AppDest.BOOKMARKS) }
                 )
                 AkListItem(
                     icon = Icons.Outlined.Extension,
                     title = "MCP",
-                    description = "管理外部 MCP 服务器与工具接入",
                     onClick = { onNavigate(AppDest.MCP) }
                 )
                 AkListItem(
                     icon = Icons.Outlined.Image,
                     title = "创作工坊",
-                    description = "生图、视频等多模态创作与结果管理",
                     onClick = { onNavigate(AppDest.MEDIA) }
                 )
                 AkListItem(
                     icon = Icons.Outlined.Build,
                     title = "构建",
-                    description = "推源码到 GitHub、CI 构建并装回本机",
                     onClick = { onNavigate(AppDest.BUILD) }
                 )
             }
@@ -721,36 +705,31 @@ fun SettingsScreen(
             // 得往下翻两屏。
             AkGroup(
                 title = "数据",
-                description = "技能、日志、记忆与备份；导出含 API Key，请勿外传"
+                description = "导出含 API Key，请勿外传"
             ) {
                 AkListItem(
                     icon = Icons.Outlined.Extension,
                     title = "技能中心",
-                    description = "启停、导入与信任等级",
                     onClick = { onNavigate(AppDest.SKILLS) }
                 )
                 AkListItem(
                     icon = Icons.Outlined.Description,
                     title = "运行日志",
-                    description = "LLM 请求、工具调用与错误记录",
                     onClick = { onNavigate(AppDest.LOGS) }
                 )
                 AkListItem(
                     icon = Icons.Outlined.Folder,
                     title = "记忆库",
-                    description = "跨会话长期记忆",
                     onClick = { onNavigate(AppDest.MEMORY) }
                 )
                 AkListItem(
                     icon = Icons.Outlined.Save,
                     title = "导出备份",
-                    description = "选择保存位置，生成 ZIP（含会话、记忆与模型配置）",
                     onClick = { exportLauncher.launch("beichen-backup.zip") }
                 )
                 AkListItem(
                     icon = Icons.Outlined.Folder,
                     title = "恢复备份",
-                    description = "从 ZIP 备份恢复，覆盖当前全部数据",
                     onClick = { confirmRestore = true }
                 )
             }
@@ -759,13 +738,11 @@ fun SettingsScreen(
             // 两行都在回答「不会用 / 想了解这个 App 时去哪」。关于页里第一张卡就是应用介绍，
             // 紧接着是「权限怎么给」，点一次两件事都看得到。
             AkGroup(
-                title = "帮助",
-                description = "上手引导、产品介绍与权限怎么给"
+                title = "帮助"
             ) {
                 AkListItem(
                     icon = Icons.Outlined.Refresh,
                     title = "重看上手引导",
-                    description = "回到对话页，重新指出输入框、发送键与抽屉的位置",
                     onClick = {
                         // 两件事一起做：清聚光灯标记 + 标记权限引导已看过。
                         // 只清前者的话，没用过权限引导的用户点「重看」会什么都不发生——
@@ -778,7 +755,6 @@ fun SettingsScreen(
                 AkListItem(
                     icon = Icons.Outlined.Info,
                     title = "关于与帮助",
-                    description = "产品介绍 · 权限怎么给 · 版本与开源许可",
                     onClick = { onNavigate(AppDest.ABOUT) }
                 )
             }
@@ -882,7 +858,7 @@ private fun BackupKeySection(vm: SettingsScreenContract) {
 
     AkGroup(
         title = "备用 Key",
-        description = "主 Key 被限流（429）或额度耗尽时自动换下一把，冷却期内不再浪费请求"
+        description = "主 Key 429 或额度用尽时自动切换"
     ) {
         Text(
             text = summary,
@@ -1001,7 +977,6 @@ private fun ResourceLeaseSection() {
 
     AkGroup(
         title = "重资源",
-        description = "本地模型、终端与容器会话的占用；空闲超时的会被自动回收"
     ) {
         snapshots.forEachIndexed { index, lease ->
             AkListItem(

@@ -1,26 +1,19 @@
 package com.beichen.polaris.ui
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Shield
-import androidx.compose.material.icons.outlined.Style
-import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -33,7 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import android.os.Build
 import android.os.Handler
@@ -127,15 +120,6 @@ fun AboutScreen(onOpenPermissionGuide: () -> Unit = {}) {
                 )
             }
 
-            // —— 设计规范 ----
-            AkSectionCard(
-                title = "设计规范",
-                icon = Icons.Outlined.Style,
-                description = "视觉规范 v3.1（暖纸 Warm Paper）+ UX v1（信息架构与交互规则）。" +
-                    "三层底色分层、0 阴影 0 描边、按压 = scale 0.97 + 100ms、" +
-                    "动效只四个 token；色值全部取自规范 §3 色板，本页不引入规范外色相。"
-            )
-
             // —— 数据去向 ----
             AkSectionCard(
                 title = "数据去向",
@@ -145,47 +129,22 @@ fun AboutScreen(onOpenPermissionGuide: () -> Unit = {}) {
                     "可在「运行日志」「记忆库」两页自行导出或清空。"
             )
 
-            // —— 开源许可 ----
-            AkSectionCard(
-                title = "开源许可",
-                icon = Icons.Outlined.Info,
-                description = "本项目使用下列开源组件，各组件版权归其作者所有：" +
-                    "\n· Jetpack Compose（UI / Material3 / Icons）— Apache 2.0" +
-                    "\n· AndroidX Activity、Lifecycle — Apache 2.0" +
-                    "\n· Kotlin、Kotlinx Coroutines、kotlinx.serialization — Apache 2.0" +
-                    "\n· OkHttp — Apache 2.0" +
-                    "\n· Rhino（Mozilla）— MPL 2.0"
+            // —— 落款：一行灰字 ——
+            //
+            // 这里原来还有两张卡：「设计规范」和「开源许可」。
+            // 前者是写给协作者的（v3.1、0 阴影、scale 0.97、四个动效 token），
+            // 后者是五行手写的组件清单——不全，也不会随依赖更新而更新。
+            // 两样都不是用户要看的东西：正式应用的关于页只有名字、版本、更新、隐私。
+            // 设计规范留在 docs/，许可清单的事实来源本来就是 docs/DEPENDENCIES.md。
+            Text(
+                text = "北辰 · $versionName",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = AgentSpacing.space2),
+                textAlign = TextAlign.Center
             )
-
-            // —— 收尾印记：应用标记 + 规范版本，一屏的落款 ——
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Outlined.Shield,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-                Spacer(Modifier.width(AgentSpacing.space2))
-                Text(
-                    text = "北辰 · 设计规范 v3.1 · UX v1",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
         }
     }
 }
