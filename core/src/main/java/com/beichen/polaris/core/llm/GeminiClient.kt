@@ -95,41 +95,39 @@ class GeminiClient(
         AgentLogger.apiTrace(endpointUrl(false), effectiveModel(), effectiveApiKey())
         val startedAt = System.currentTimeMillis()
 
-        val resp = try {
-            http.newCall(request).execute()
+        try {
+            http.runCancellable(request) { r ->
+                if (!r.isSuccessful) {
+                    val errBody = runCatching {
+            // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+            r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+        }.getOrDefault("")
+                    val safeBody = AgentLogger.sanitize(errBody)
+                    AgentLogger.httpError(r.code, safeBody)
+                    throw LlmHttpException(r.code, "Gemini 请求失败 ${r.code}：${safeBody.take(300)}", safeBody)
+                }
+                // 审计 F38：同 F36。
+                val slice = r.body?.byteStream()
+                    ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
+                    ?: throw LlmHttpException(r.code, "Gemini 响应体为空（HTTP ${r.code}）", "")
+                if (slice.truncated) {
+                    throw LlmHttpException(
+                        r.code,
+                        "Gemini 响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析",
+                        ""
+                    )
+                }
+                val text = slice.text
+                AgentLogger.llmResponse(
+                    effectiveModel(), true,
+                    System.currentTimeMillis() - startedAt,
+                    "响应长度=${text.length}"
+                )
+                parseResponse(text)
+            }
         } catch (e: IOException) {
             AgentLogger.e("LLM", "Gemini 网络请求异常", e)
             throw e
-        }
-
-        resp.use { r ->
-            if (!r.isSuccessful) {
-                val errBody = runCatching {
-        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
-        r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
-    }.getOrDefault("")
-                val safeBody = AgentLogger.sanitize(errBody)
-                AgentLogger.httpError(r.code, safeBody)
-                throw LlmHttpException(r.code, "Gemini 请求失败 ${r.code}：${safeBody.take(300)}", safeBody)
-            }
-            // 审计 F38：同 F36。
-            val slice = r.body?.byteStream()
-                ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
-                ?: throw LlmHttpException(r.code, "Gemini 响应体为空（HTTP ${r.code}）", "")
-            if (slice.truncated) {
-                throw LlmHttpException(
-                    r.code,
-                    "Gemini 响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析",
-                    ""
-                )
-            }
-            val text = slice.text
-            AgentLogger.llmResponse(
-                effectiveModel(), true,
-                System.currentTimeMillis() - startedAt,
-                "响应长度=${text.length}"
-            )
-            parseResponse(text)
         }
     }
 
@@ -264,19 +262,18 @@ class GeminiClient(
         }
         val request = buildRequest(requestJson, stream = false)
         AgentLogger.apiTrace(endpointUrl(false), effectiveModel(), effectiveApiKey())
-        val resp = try {
-            http.newCall(request).execute()
+        try {
+            http.runCancellable(request) { r ->
+                val body = runCatching {
+            // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+            r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+        }.getOrDefault("")
+                val safe = AgentLogger.sanitize(body)
+                PingResult(code = r.code, bodyPreview = safe.take(200))
+            }
         } catch (e: IOException) {
             AgentLogger.e("LLM", "Gemini 测试连接网络异常", e)
             throw e
-        }
-        resp.use { r ->
-            val body = runCatching {
-        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
-        r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
-    }.getOrDefault("")
-            val safe = AgentLogger.sanitize(body)
-            PingResult(code = r.code, bodyPreview = safe.take(200))
         }
     }
 

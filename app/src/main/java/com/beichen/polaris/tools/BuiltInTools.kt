@@ -2,6 +2,7 @@ package com.beichen.polaris.tools
 
 import com.beichen.polaris.core.llm.LlmHttp
 import com.beichen.polaris.core.llm.primOrNull
+import com.beichen.polaris.core.llm.runCancellable
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.ClipData
@@ -88,6 +89,18 @@ class HttpRequestTool(
      * 用户换会话后旧的撞墙记录不该继续影响新对话的判断。
      */
     private val failStreak = HttpFailStreak()
+
+    /**
+     * 一跳的结果。
+     *
+     * 本来这是 while 循环体里的 `continue` 与 `return@withContext`。改用
+     * [runCancellable] 后循环体成了 lambda，两种跳转都跨不过去——于是把「是再来一跳
+     * 还是就此定型」变成返回值，跳转逻辑留在外层的 while。行为与改造前逐行等价。
+     */
+    private sealed interface Hop {
+        data class Follow(val url: String, val method: String, val dropBody: Boolean) : Hop
+        data class Done(val result: ToolResult) : Hop
+    }
 
     override val name = "http_request"
     override val description =
@@ -198,20 +211,16 @@ class HttpRequestTool(
                     builder.method(method, null).build()
                 }
 
-                // 不走 execute()：阻塞调用吞掉协程取消，用户点停止要等它自己读到超时
-                // （真机上 14 秒）。awaitResponse 在取消时真正 cancel 这条调用。
-                val resp = client.newCall(request).awaitResponse()
-                try {
+                // 不用 execute()：阻塞调用吞掉协程取消，用户点停止要等它自己读到超时
+                // （真机 14 秒）。runCancellable 在协程取消时同步 call.cancel()，连 body
+                // 读取一起中断——这是审计 F22 在流式路径上已经跑了三周的做法，不是新发明。
+                // 跨 lambda 的 continue 变成了 Hop.Follow 返回值，跳转逻辑留在外层 while。
+                val step = client.runCancellable(request) { resp ->
                     if (resp.isRedirect) {
                         when (val d = RedirectPolicy.decide(currentUrl, resp.header("Location"), hop, resp.code, method)) {
-                            is RedirectPolicy.Redirect.Follow -> {
-                                currentUrl = d.to
-                                method = d.method
-                                if (d.dropBody) bodyText = null
-                                hop++
-                                continue
-                            }
-                            is RedirectPolicy.Redirect.Stop -> return@withContext ToolResult.fail(
+                            is RedirectPolicy.Redirect.Follow ->
+                                return@runCancellable Hop.Follow(d.to, d.method, d.dropBody)
+                            is RedirectPolicy.Redirect.Stop -> return@runCancellable Hop.Done(ToolResult.fail(
                                 code = "http_redirect_stopped",
                                 message = "⛔ ${d.reason}",
                                 // 这条 hint 是模型撞墙后唯一能读到的东西，所以必须给出**下一步**。
@@ -225,7 +234,7 @@ class HttpRequestTool(
                                 } else {
                                     "改用最终地址直接请求，或检查服务端重定向配置。搜索用 web_search，读正文用 web_open。"
                                 }
-                            )
+                            ))
                         }
                     }
 
@@ -274,25 +283,34 @@ class HttpRequestTool(
                             else -> "服务端出错" to
                                 "服务端故障，不是调用方的问题：稍后重试，或直接换一个数据源。"
                         }
-                        return@withContext ToolResult.fail(
+                        return@runCancellable Hop.Done(ToolResult.fail(
                             code = "http_${resp.code}",
                             message = "HTTP ${resp.code}$where：$why",
                             hint = how,
                             data = out,
-                        )
+                        ))
                     }
                     // 只有 2xx/3xx 才算「这个地址活着」，并清掉历史失败。
                     failStreak.noteSuccess(probeKey)
-                    return@withContext ToolResult.ok(
+                    Hop.Done(ToolResult.ok(
                         code = "http_${resp.code}",
                         message = "HTTP ${resp.code}$where",
                         data = out
-                    )
-                } finally {
-                    resp.close()
+                    ))
+                }
+
+                when (step) {
+                    is Hop.Follow -> {
+                        currentUrl = step.url
+                        method = step.method
+                        if (step.dropBody) bodyText = null
+                        hop++
+                    }
+                    is Hop.Done -> return@withContext step.result
                 }
             }
             // 循环的每个出口都已经 return；这一行只为让 lambda 的类型是 ToolResult 而不是 Unit。
+            @Suppress("UNREACHABLE_CODE")
             error("unreachable: 请求循环必然以 return 结束")
         }.getOrElse {
             // 取消不是「请求失败」。getOrElse 走的是 runCatching，它会连

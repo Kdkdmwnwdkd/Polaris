@@ -272,9 +272,12 @@ fun main() {
     check("结构：BalanceService 的网络调用必须在 Dispatchers.IO 里") {
         val src = readRepoFile("core/src/main/java/com/beichen/polaris/core/llm/BalanceService.kt")
         val io = src.indexOf("withContext(Dispatchers.IO)")
-        val exec = src.indexOf(".execute()")
+        // 2026-11-26 起网络调用走 runCancellable（可取消），不再是裸 execute()。
+        // 「必须在 IO 线程上」这条约束不变，判据跟着改；另外补一条「必须可取消」。
+        val call = src.indexOf("runCancellable(")
         assertTrue("没有 withContext(Dispatchers.IO)：主线程会抛 NetworkOnMainThreadException", io >= 0)
-        assertTrue("execute() 在切线程之前：仍然阻塞主线程", io < exec)
+        assertTrue("没走 runCancellable：点停止会等它自己读到超时", call >= 0)
+        assertTrue("网络调用在切线程之前：仍然阻塞主线程", io < call)
         assertTrue("不该再用 runCatching（会吞 CancellationException）", "runCatching {" !in src)
     }
 

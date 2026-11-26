@@ -35,6 +35,9 @@ if [ ! -f "${STDLIB:-/nonexistent}" ]; then
   echo "FATAL: 缺少 kotlin-stdlib" >&2
   exit 1
 fi
+# 本地 Gradle 缓存缺失时退回 /tmp/gcache（容器里预置的依赖目录，与其余 QA 脚本同源）
+[ -n "${COROUTINES:-}" ] || COROUTINES=$(find /tmp/gcache -name "kotlinx-coroutines-core-jvm-*.jar" 2>/dev/null | head -1) || true
+
 if [ -z "${COROUTINES:-}" ] || [ ! -f "${COROUTINES:-/nonexistent}" ]; then
   echo "FATAL: 缺少 kotlinx-coroutines-core-jvm（CapabilityReadiness 要它）" >&2
   exit 1

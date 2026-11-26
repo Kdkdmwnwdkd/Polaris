@@ -2,11 +2,13 @@ package com.beichen.polaris.tools
 
 import com.beichen.polaris.core.llm.LlmHttp
 import com.beichen.polaris.core.llm.primOrNull
+import com.beichen.polaris.core.llm.runCancellable
 import com.beichen.polaris.core.AgentTool
 import com.beichen.polaris.core.JsonSchema
 import com.beichen.polaris.core.ToolResult
 import com.beichen.polaris.core.net.BoundedBody
 import okhttp3.Response
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -71,9 +73,16 @@ class WebSearchTool(
             // 引擎顺序：Bing 优先（国内可达），DDG 兜底（海外/代理）
             val failures = mutableListOf<String>()
             for (engine in ENGINES) {
-                val items = runCatching { engine.search(query, max) }
-                    .onFailure { failures += "${engine.name}：${it.message?.take(80) ?: "失败"}" }
-                    .getOrDefault(emptyList())
+                // 不用 runCatching：它把 CancellationException 一起吞掉，用户点停止会被
+                // 记成「Bing：已取消」，然后继续试下一个引擎——停止变成了「换个引擎再搜」。
+                val items = try {
+                    engine.search(query, max)
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (e: Throwable) {
+                    failures += "${engine.name}：${e.message?.take(80) ?: "失败"}"
+                    emptyList()
+                }
                 if (items.isNotEmpty()) {
                     return@withContext ToolResult.ok(
                         code = "search_ok",
@@ -119,11 +128,11 @@ class WebSearchTool(
     /** 一个搜索引擎：名称 + 检索函数（便于引擎顺序显式可读）。 */
     private class Engine(
         val name: String,
-        val search: (String, Int) -> List<WebSearchParsing.SearchItem>
+        val search: suspend (String, Int) -> List<WebSearchParsing.SearchItem>
     )
 
     /** Bing：GET `cn.bing.com/search?q=…`（国内可达，实测稳定）。 */
-    private fun searchBing(query: String, max: Int): List<WebSearchParsing.SearchItem> {
+    private suspend fun searchBing(query: String, max: Int): List<WebSearchParsing.SearchItem> {
         val url = "$BING_ENDPOINT?q=${java.net.URLEncoder.encode(query, "UTF-8")}&setlang=zh-Hans"
         val request = Request.Builder()
             .url(url)
@@ -131,14 +140,14 @@ class WebSearchTool(
             .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             .get()
             .build()
-        client.newCall(request).execute().use { resp ->
+        return client.runCancellable(request) { resp ->
             if (resp.code !in 200..299) throw IllegalStateException("HTTP ${resp.code}")
-            return WebSearchParsing.parseBing(htmlOf(resp), max)
+            WebSearchParsing.parseBing(htmlOf(resp), max)
         }
     }
 
     /** DuckDuckGo：POST `html.duckduckgo.com/html/`（海外/代理环境兜底）。 */
-    private fun searchDdg(query: String, max: Int): List<WebSearchParsing.SearchItem> {
+    private suspend fun searchDdg(query: String, max: Int): List<WebSearchParsing.SearchItem> {
         val form = "q=${java.net.URLEncoder.encode(query, "UTF-8")}"
             .toRequestBody("application/x-www-form-urlencoded".toMediaType())
         val request = Request.Builder()
@@ -147,9 +156,9 @@ class WebSearchTool(
             .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             .post(form)
             .build()
-        client.newCall(request).execute().use { resp ->
+        return client.runCancellable(request) { resp ->
             if (resp.code !in 200..299) throw IllegalStateException("HTTP ${resp.code}")
-            return WebSearchParsing.parse(htmlOf(resp), max)
+            WebSearchParsing.parse(htmlOf(resp), max)
         }
     }
 

@@ -1,6 +1,7 @@
 package com.beichen.polaris.skill.market
 
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.llm.runCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -95,18 +96,19 @@ class MarketClient(
 
     /* ------------------------------ 内部实现 ------------------------------ */
 
-    private fun getText(url: String, limit: Int): String =
+    private suspend fun getText(url: String, limit: Int): String =
         String(getBytes(url, limit), Charsets.UTF_8)
 
     /** 受限读取：Content-Length 预判 + 流式计数，任何一步超限立即中止。 */
-    private fun getBytes(url: String, limit: Int): ByteArray {
+    private suspend fun getBytes(url: String, limit: Int): ByteArray {
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/json, application/zip, */*")
             .header("User-Agent", USER_AGENT)
             .get()
             .build()
-        http.newCall(request).execute().use { resp ->
+        // runCancellable：市场包下载可能体量大、服务端慢吐，取消要能立刻停
+        return http.runCancellable(request) { resp ->
             if (!resp.isSuccessful) {
                 throw IOException("HTTP ${resp.code}（${url.take(80)}）")
             }
@@ -128,7 +130,7 @@ class MarketClient(
                 }
                 out.write(buf, 0, n)
             }
-            return out.toByteArray()
+            out.toByteArray()
         }
     }
 

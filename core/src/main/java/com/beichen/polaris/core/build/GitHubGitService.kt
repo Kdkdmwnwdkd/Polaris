@@ -5,8 +5,10 @@ import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.llm.arrOrNull
 import com.beichen.polaris.core.llm.objOrNull
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.llm.runCancellable
 import com.beichen.polaris.core.net.BoundedBody
 import com.beichen.polaris.core.net.BodySlice
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -237,7 +239,7 @@ class GitHubGitService(
     }
 
     /** 原始下载（不走 API，不带 Authorization；失败返回 null）。 */
-    private fun fetchRaw(url: String): ByteArray? {
+    private suspend fun fetchRaw(url: String): ByteArray? {
         val req = Request.Builder()
             .url(url)
             .header("Accept", "application/zip")
@@ -245,9 +247,10 @@ class GitHubGitService(
             .build()
         val out = java.io.ByteArrayOutputStream()
         val result = runCatching {
-            http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return@runCatching null
-                val body = resp.body ?: return@runCatching null
+            // runCancellable：仓库 zip 可能几十 MB，服务端慢吐时取消要能立刻停
+            http.runCancellable(req) { resp ->
+                if (!resp.isSuccessful) return@runCancellable null
+                val body = resp.body ?: return@runCancellable null
                 body.byteStream().use { input ->
                     val buf = ByteArray(64 * 1024)
                     var total = 0L
@@ -265,7 +268,8 @@ class GitHubGitService(
                 }
                 out.toByteArray()
             }
-        }
+        // 取消不是「下载失败」：runCatching 会把它一起收进来
+        }.onFailure { if (it is CancellationException) throw it }
         // 超上限要让用户看到具体原因，不能被当成普通的"下载失败"
         val error = result.exceptionOrNull()
         if (error is IOException && error.message?.contains("超过") == true) throw error
@@ -273,7 +277,7 @@ class GitHubGitService(
     }
 
     /** 统一取远端分支的 path → blob sha 映射（递归 tree）。 */
-    private fun remoteBlobs(branch: String): Map<String, String> {
+    private suspend fun remoteBlobs(branch: String): Map<String, String> {
         val ref = get("/repos/${cfg.fullName}/git/ref/heads/$branch")
         val headSha = ref["object"]?.objOrNull()?.get("sha")?.primOrNull()?.contentOrNull
             ?: throw IOException("读不到分支 $branch 的最新提交")
@@ -310,44 +314,44 @@ class GitHubGitService(
 
     // —————————————————— HTTP ——————————————————
 
-    private fun get(path: String): JsonObject = exec(
+    private suspend fun get(path: String): JsonObject = exec(
         Request.Builder().url(BASE + path).get().build()
     )
 
-    private fun post(path: String, body: JsonObject): JsonObject = exec(
+    private suspend fun post(path: String, body: JsonObject): JsonObject = exec(
         Request.Builder()
             .url(BASE + path)
             .post(body.toString().toRequestBody(JSON_MEDIA))
             .build()
     )
 
-    private fun patch(path: String, body: JsonObject): JsonObject = exec(
+    private suspend fun patch(path: String, body: JsonObject): JsonObject = exec(
         Request.Builder()
             .url(BASE + path)
             .patch(body.toString().toRequestBody(JSON_MEDIA))
             .build()
     )
 
-    private fun getArray(path: String): kotlinx.serialization.json.JsonArray {
+    private suspend fun getArray(path: String): kotlinx.serialization.json.JsonArray {
         val text = execRaw(Request.Builder().url(BASE + path).get().build())
         return json.parseToJsonElement(text) as? kotlinx.serialization.json.JsonArray
             ?: throw IOException("GitHub 返回了非数组响应")
     }
 
-    private fun exec(request: Request): JsonObject {
+    private suspend fun exec(request: Request): JsonObject {
         val text = execRaw(request)
         if (text.isBlank()) return JsonObject(emptyMap())
         return json.parseToJsonElement(text) as? JsonObject ?: JsonObject(emptyMap())
     }
 
     /** 发请求并返回原始响应体；非 2xx 抛 IOException（带状态码与服务端消息）。 */
-    private fun execRaw(request: Request): String {
+    private suspend fun execRaw(request: Request): String {
         val authed = request.newBuilder()
             .header("Authorization", "Bearer ${cfg.pat}")
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .build()
-        http.newCall(authed).execute().use { resp ->
+        return http.runCancellable(authed) { resp ->
             // 审计 F40：`body?.string()` 整份进堆。GitHub 的 trees 接口在仓库文件极多时
             // 会返回几 MB JSON，加上网络中间层异常响应，没有上限就没有兜底。
             val slice = resp.body?.byteStream()
@@ -361,7 +365,7 @@ class GitHubGitService(
             if (slice.truncated) {
                 throw IOException("GitHub 响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止")
             }
-            return text
+            text
         }
     }
 

@@ -101,5 +101,46 @@ else
 fi
 
 echo ""
+echo "[D] 阻塞调用收口"
+
+# 为什么守这条：`newCall(x).execute()` 在协程被取消时**不会停**——线程照旧卡在 socket
+# 读上，要等对端发完或 readTimeout（llm 档 180s）。用户点「停止」只停了界面，请求还在跑、
+# 还在计费。2026-11-26 真机实测：点停止到收尾隔了 14 秒。
+# 正确做法只有一处：LlmHttp.runCancellable（把 Call 挂到协程完成回调，取消时 cancel()）。
+#
+# 批二还没做：媒体供应商 9 处 + ModelDownloader 2 处。全部改完后**删掉这个白名单**，
+# 让 D1 覆盖全仓。
+PENDING="core/media/providers/|polaris/model/ModelDownloader\.kt"
+
+stray_exec=$(grep -rn "\.execute()" --include=*.kt "$SRC" "$SRC_CORE" \
+  | grep -v "core/llm/LlmHttp.kt" \
+  | grep -vE "$PENDING" \
+  | grep -vE ":[0-9]+:[[:space:]]*(//|\*)" || true)
+if [ -z "$stray_exec" ]; then
+  good "D1 除 runCancellable 内部与批二白名单外，无裸 execute()"
+else
+  bad "D1 出现裸 execute()（点停止会等它自己读到超时）："
+  echo "$stray_exec" | sed 's/^/         /'
+fi
+
+# 反面：别再用 enqueue 只等响应头那套。它覆盖不到 body 读取——真机上「回了头、
+# 慢慢吐 body」的请求照样卡满，但看起来像修好了（906 就是这么误判的）。
+# 注：suspendCancellableCoroutine 本身没问题，把系统回调转挂起（无障碍、OCR、WebView、
+# GGUF 下载）是正当用法，所以这里只拦「给 OkHttp 造等待器」这一种。
+dup=$(grep -rnE "fun Call\.awaitResponse|class CancellableCall" --include=*.kt "$SRC" "$SRC_CORE" || true)
+if [ -z "$dup" ]; then
+  good "D2 没有第二套 OkHttp 取消实现（enqueue 方案覆盖不到 body 读取）"
+else
+  bad "D2 出现自造的 OkHttp 等待器：改用 runCancellable"
+  echo "$dup" | sed 's/^/         /'
+fi
+
+if grep -q "suspend fun <T> OkHttpClient.runCancellable" "$HUB"; then
+  good "D3 runCancellable 入口仍在"
+else
+  bad "D3 runCancellable 被删或改了签名"
+fi
+
+echo ""
 echo "=== $npass 通过 / $fail 失败 ==="
 [ "$fail" -eq 0 ]

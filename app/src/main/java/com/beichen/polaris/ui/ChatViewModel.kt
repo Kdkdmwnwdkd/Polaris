@@ -44,6 +44,7 @@ import com.beichen.polaris.core.PromptDeleteResult
 import com.beichen.polaris.core.llm.ProviderCatalog
 import com.beichen.polaris.core.llm.objOrNull
 import com.beichen.polaris.core.llm.primOrNull
+import com.beichen.polaris.core.llm.runCancellable
 import com.beichen.polaris.core.PromptItem
 import com.beichen.polaris.core.PromptStore
 import com.beichen.polaris.core.PromptUpsertResult
@@ -184,7 +185,6 @@ import java.io.File
 import java.util.UUID
 
 /** `SkillUiInfo` / `SkillToolInfo` 已搬到 SkillUi.kt（纯数据，不必占这个冻结文件的行数）。 */
-
 
 
 
@@ -3199,7 +3199,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 .header("User-Agent", "Polaris")
                 .get()
                 .build()
-            client.newCall(request).execute().use { resp ->
+            client.runCancellable(request) { resp ->
                 if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
                 val body = resp.body ?: throw IOException("响应体为空")
                 if (body.contentLength() > LoadSkillLogic.MAX_ZIP_BYTES) {
@@ -3221,7 +3221,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                 }
                 out.toByteArray()
             }
-        }
+        }.onFailure { if (it is CancellationException) throw it }   // 取消不是「下载失败」
     }
 
     /**

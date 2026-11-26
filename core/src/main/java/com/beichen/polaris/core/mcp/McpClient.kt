@@ -5,7 +5,9 @@ import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.llm.arrOrNull
 import com.beichen.polaris.core.llm.objOrNull
 import com.beichen.polaris.core.AgentLogger
+import com.beichen.polaris.core.llm.runCancellable
 import com.beichen.polaris.core.net.BoundedBody
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -60,7 +62,7 @@ class McpClient(
                 name = info?.get("name")?.primOrNull()?.contentOrNull ?: "unknown",
                 version = info?.get("version")?.primOrNull()?.contentOrNull ?: "?"
             )
-        }
+        }.onFailure { if (it is CancellationException) throw it }
     }
 
     /** tools/list：列举服务器暴露的工具。 */
@@ -78,7 +80,7 @@ class McpClient(
                     inputSchema = o["inputSchema"]
                 )
             }
-        }
+        }.onFailure { if (it is CancellationException) throw it }
     }
 
     /**
@@ -100,7 +102,7 @@ class McpClient(
     }.getOrElse { buildJsonObject { } }
 
     /** 发送单个 JSON-RPC 请求，返回 result 或抛 [McpException]。 */
-    private fun rpc(method: String, params: JsonObject): JsonElement {
+    private suspend fun rpc(method: String, params: JsonObject): JsonElement {
         val id = nextId.getAndIncrement()
         val payload = json.encodeToString(
             JsonRpcRequest.serializer(),
@@ -111,7 +113,8 @@ class McpClient(
             .post(payload.toRequestBody(JSON_MEDIA))
             .header("Accept", "application/json, text/event-stream")
             .build()
-        http.newCall(request).execute().use { resp ->
+        // runCancellable：MCP 服务器是用户填的外部地址，卡住时要能被取消
+        return http.runCancellable(request) { resp ->
             // 审计 F29：`body?.string()` 是整份进堆，修前对响应体大小毫无限制。
             // MCP 服务器由用户自己填，返回一个超长 JSON（或流式无限输出）会把进程读挂。
             // 与 F19/F21/F23 同一条规则：边读边计数，到上限即停。
@@ -125,7 +128,7 @@ class McpClient(
                 JsonRpcResponse.serializer(), extractJson(text)
             )
             envelope.error?.let { throw McpException(it.code, it.message) }
-                ?: return envelope.result ?: JsonObject(emptyMap())
+            envelope.result ?: JsonObject(emptyMap())
         }
     }
 

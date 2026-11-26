@@ -1,5 +1,6 @@
 package com.beichen.polaris.core.llm
 
+import com.beichen.polaris.core.llm.runCancellable
 import com.beichen.polaris.core.net.BoundedBody
 import com.beichen.polaris.core.net.BodySlice
 import com.beichen.polaris.core.net.EndpointPolicy
@@ -117,7 +118,7 @@ object BalanceService {
     private class BalanceHttpError(val url: String, val code: Int, val body: String) :
         IllegalStateException("HTTP $code @ $url：${body.take(160)}")
 
-    private fun fetch(
+    private suspend fun fetch(
         url: String,
         providerId: String,
         apiKey: String,
@@ -129,7 +130,8 @@ object BalanceService {
             .header("Accept", "application/json")
             .get()
             .build()
-        client.newCall(request).execute().use { resp ->
+        // runCancellable：余额查询也可能卡在 socket 读上，切走页面时要能立刻停
+        return client.runCancellable(request) { resp ->
             // 审计 F35：同 F34。余额接口是第三方地址（用户可填），响应体不受我们控制。
             // 1MB 对 JSON 余额来说已经极宽松；撞到就明说，不把半截 JSON 交给 parser。
             val slice = resp.body?.byteStream()
@@ -138,7 +140,7 @@ object BalanceService {
             val body = slice.text
             if (!resp.isSuccessful) throw BalanceHttpError(url, resp.code, body)
             if (slice.truncated) throw IllegalStateException("余额响应超过 1 MB，已中止解析")
-            return BalanceParsing.parse(providerId, body)
+            BalanceParsing.parse(providerId, body)
                 ?: throw IllegalStateException("响应里没有可识别的余额字段（$url）")
         }
     }

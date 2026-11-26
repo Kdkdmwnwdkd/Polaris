@@ -1,6 +1,10 @@
 package com.beichen.polaris.core.llm
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -103,27 +107,45 @@ object LlmHttp {
  *
  * ## 修的是什么
  *
- * 全项目 32 处 `newCall(request).execute()` 都是**阻塞**调用。上面 [LlmHttp] 的注释写着
+ * 全项目 28 处 `newCall(request).execute()` 都是**阻塞**调用。上面 [LlmHttp] 的注释写着
  * 「真正的失控由协程取消（用户点停止 / ViewModel 回收）兜底」——但这句话在此之前是假的：
  * `execute()` 阻塞在 socket 读上时，`Job.cancel()` 只是把协程标记成取消，**线程照样停在
- * `readUtf8Line()` 里**，要等对端发完或 readTimeout（llm 预设 180s）才返回。
+ * `read()` 里**，要等对端发完或 readTimeout（llm 预设 180s）才返回。
  *
  * 用户看到的现象：点「停止」后界面立刻恢复，但请求还在跑——流式 token 继续被服务端推送、
  * 继续计费，连接与线程也一直被占着。停止按钮只停了「显示」，没停「请求」。
  *
  * ## 做法
  *
- * 把 `Call` 挂到当前协程的完成回调上：协程被取消时同步 `call.cancel()`，OkHttp 会立刻
- * 中断 socket 读并让 `execute()` 抛 `IOException("Canceled")`。再把那个 IOException
- * 还原成 [CancellationException]——否则上层会把它当网络故障，触发重试与「网络异常」提示，
- * 用户明明是自己点的停止。
+ * 挂一个子协程停在 [awaitCancellation] 上。父协程一被取消，它立刻被唤醒并执行 finally，
+ * 在**取消发生的同一时刻**同步 `call.cancel()`，OkHttp 中断 socket 读并让 `execute()` 抛
+ * `IOException("Canceled")`。再把那个 IOException 还原成 [CancellationException]——否则
+ * 上层会把它当网络故障，触发重试与「网络异常」提示，用户明明是自己点的停止。
+ *
+ * ## 为什么不能用 `Job.invokeOnCompletion { }`
+ *
+ * 这是本函数 2026-11-26 之前的写法，**从来没生效过**。单参数重载等价于
+ * `onCancelling = false`，只在 job **完成**后回调；而 job 完成要求协程体返回，
+ * 协程体正卡在阻塞读里——永远不返回。回调永不触发，`call.cancel()` 永不执行。
+ *
+ * 只带 `onCancelling = true` 才是对的，但那个重载是 internal API，所以改用子协程 +
+ * [awaitCancellation]：语义等价，且全是公开 API。
  *
  * ## 为什么不是 `suspendCancellableCoroutine` + `enqueue`
  *
  * 本项目的流式读取是「拿到 Response 后在自己的循环里逐行读」，enqueue 只能异步拿到响应头，
- * 后续仍是阻塞读，等于没解决。改动面最小、语义最直白的还是「阻塞 + 取消时 cancel call」。
+ * 一旦 resume，`invokeOnCancellation` 就不再被调用——后续的阻塞读彻底失去保护。
  *
- * 回调在线程池上执行，`dispose()` 防止正常结束后残留引用。
+ * ## 实测（/tmp/probe/CancelProbe.kt，服务端先回 200 头，再每 500ms 吐一块共 5 秒，
+ * 300ms 时取消）
+ *
+ * ```
+ * A 裸 execute()                    5056 ms   ← 等于没取消
+ * B enqueue 只等头（906 那版）        5005 ms   ← 同上，覆盖不到 body 读取
+ * C runCancellable（本节修后）         303 ms   ← 立即停
+ * ```
+ *
+ * 修前的 C 也是 5004ms。这个函数被调用点了三周，取消一直是空转的。
  */
 suspend fun <T> OkHttpClient.runCancellable(
     request: Request,
@@ -131,9 +153,22 @@ suspend fun <T> OkHttpClient.runCancellable(
 ): T {
     val call = newCall(request)
     val job = currentCoroutineContext()[Job]
-    val watchdog = job?.invokeOnCompletion { cause ->
-        // 正常完成时 cause 为 null，不能误伤已成功的请求
-        if (cause is CancellationException) runCatching { call.cancel() }
+    // 取消要在协程**开始取消**的那一刻就掐掉连接，而不是等它「完成」。
+    //
+    // `Job.invokeOnCompletion(onCancelling = true)` 能做这件事，但那个重载是 internal API。
+    // 这里改用等价的公开写法：挂一个子协程，让它停在 awaitCancellation() 上——
+    // 父 job 一取消，它就立刻被唤醒并执行 finally，此时同步 call.cancel()，阻塞读马上抛
+    // IOException。start = UNDISPATCHED 保证不切线程、不占用调度器。
+    val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+    val watchdog = job?.let { parent ->
+        CoroutineScope(parent).launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                // 正常走完时不能误伤已成功的请求（否则连接会被标记为不可复用）
+                if (!finished.get()) runCatching { call.cancel() }
+            }
+        }
     }
     try {
         val resp = call.execute()
@@ -149,6 +184,7 @@ suspend fun <T> OkHttpClient.runCancellable(
         }
         throw e
     } finally {
-        watchdog?.dispose()
+        finished.set(true)
+        watchdog?.cancel()
     }
 }

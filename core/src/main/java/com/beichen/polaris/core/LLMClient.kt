@@ -366,57 +366,58 @@ class OpenAIClient(
         AgentLogger.apiTrace(endpointUrl(), effectiveModel(), slot.key)
         val startedAt = System.currentTimeMillis()
 
-        // 超时/DNS/连接失败都走 IOException，记下堆栈后原样抛出
-        val resp = try {
-            http.newCall(request).execute()
+        // 超时/DNS/连接失败都走 IOException，记下堆栈后原样抛出。
+        // runCancellable：协程取消时同步 call.cancel()，否则点停止要等整条响应读完
+        // （流式路径三周前就这么做了，见上面的 streamText；非流式这一发同样是阻塞读）。
+        // 它会在 block 结束时关闭响应体，所以把「读响应」整段搬进来。
+        return try {
+            http.runCancellable(request) { r ->
+                if (!r.isSuccessful) {
+                    // ⚠️ resp.body?.string() 只能读一次，必须先存变量再使用
+                    val errBody = runCatching {
+            // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+            r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+        }.getOrDefault("")
+                    // 401/403 的响应体常回显 sk-xxx 或 token，落日志与抛出的异常文案都必须先脱敏
+                    val safeBody = AgentLogger.sanitize(errBody)
+                    AgentLogger.httpError(r.code, safeBody)
+                    // 带上状态码抛出：上层据此判断是否值得重试、以及给用户什么文案
+                    throw LlmHttpException(
+                        r.code,
+                        "LLM 请求失败 ${r.code}：${safeBody.take(300)}",
+                        safeBody,
+                        // W-21：429 优先听服务端的等待建议（秒或 HTTP 日期两种写法都解析）
+                        parseRetryAfterMs(r.header("Retry-After"))
+                    )
+                }
+                // 空体不是「空回答」而是协议异常：旧写法对 body 直接加了非空断言，
+                // 空体时抛 NPE，文案退化成「请求失败：null」，既看不出是哪种失败、
+                // 也没法按状态码归类。
+                // 审计 F36：非流式响应体此前也是 `body?.string()` 整份进堆。baseUrl 是用户
+                // 自己填的，服务端异常时返回一个超大 JSON，这一发就把进程打挂。
+                // 截断的 JSON 只会解析出残缺回答，比报错更难排查，所以撞到上限直接失败。
+                val slice = r.body?.byteStream()
+                    ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
+                    ?: throw LlmHttpException(r.code, "LLM 响应体为空（HTTP ${r.code}）", "")
+                if (slice.truncated) {
+                    throw LlmHttpException(
+                        r.code,
+                        "LLM 响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析",
+                        ""
+                    )
+                }
+                val text = slice.text
+                AgentLogger.llmResponse(
+                    effectiveModel(),
+                    true,
+                    System.currentTimeMillis() - startedAt,
+                    "响应长度=${text.length}"
+                )
+                parseResponse(text)
+            }
         } catch (e: IOException) {
             AgentLogger.e("LLM", "网络请求异常", e)
             throw e
-        }
-
-        return resp.use { r ->
-            if (!r.isSuccessful) {
-                // ⚠️ resp.body?.string() 只能读一次，必须先存变量再使用
-                val errBody = runCatching {
-        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
-        r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
-    }.getOrDefault("")
-                // 401/403 的响应体常回显 sk-xxx 或 token，落日志与抛出的异常文案都必须先脱敏
-                val safeBody = AgentLogger.sanitize(errBody)
-                AgentLogger.httpError(r.code, safeBody)
-                // 带上状态码抛出：上层据此判断是否值得重试、以及给用户什么文案
-                throw LlmHttpException(
-                    r.code,
-                    "LLM 请求失败 ${r.code}：${safeBody.take(300)}",
-                    safeBody,
-                    // W-21：429 优先听服务端的等待建议（秒或 HTTP 日期两种写法都解析）
-                    parseRetryAfterMs(r.header("Retry-After"))
-                )
-            }
-            // 空体不是「空回答」而是协议异常：旧写法对 body 直接加了非空断言，
-            // 空体时抛 NPE，文案退化成「请求失败：null」，既看不出是哪种失败、
-            // 也没法按状态码归类。
-            // 审计 F36：非流式响应体此前也是 `body?.string()` 整份进堆。baseUrl 是用户
-            // 自己填的，服务端异常时返回一个超大 JSON，这一发就把进程打挂。
-            // 截断的 JSON 只会解析出残缺回答，比报错更难排查，所以撞到上限直接失败。
-            val slice = r.body?.byteStream()
-                ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
-                ?: throw LlmHttpException(r.code, "LLM 响应体为空（HTTP ${r.code}）", "")
-            if (slice.truncated) {
-                throw LlmHttpException(
-                    r.code,
-                    "LLM 响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析",
-                    ""
-                )
-            }
-            val text = slice.text
-            AgentLogger.llmResponse(
-                effectiveModel(),
-                true,
-                System.currentTimeMillis() - startedAt,
-                "响应长度=${text.length}"
-            )
-            parseResponse(text)
         }
     }
 
@@ -718,20 +719,20 @@ class OpenAIClient(
         val request = buildRequest(requestJson)
         // 记录实际端点/模型/Key 指纹，让测试也能在日志里自证
         AgentLogger.apiTrace(endpointUrl(), effectiveModel(), effectiveApiKey())
-        val resp = try {
-            http.newCall(request).execute()
+        // 测试连接同样是阻塞一发，取消语义与 callOnce 一致
+        try {
+            http.runCancellable(request) { r ->
+                // 响应体可能回显 sk-xxx，必须先脱敏再截断
+                val body = runCatching {
+            // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+            r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+        }.getOrDefault("")
+                val safe = AgentLogger.sanitize(body)
+                PingResult(code = r.code, bodyPreview = safe.take(200))
+            }
         } catch (e: IOException) {
             AgentLogger.e("LLM", "测试连接网络异常", e)
             throw e
-        }
-        resp.use { r ->
-            // 响应体可能回显 sk-xxx，必须先脱敏再截断
-            val body = runCatching {
-        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
-        r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
-    }.getOrDefault("")
-            val safe = AgentLogger.sanitize(body)
-            PingResult(code = r.code, bodyPreview = safe.take(200))
         }
     }
 

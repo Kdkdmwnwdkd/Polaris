@@ -3,6 +3,7 @@ package com.beichen.polaris.core.llm
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.ChatMessage
 import com.beichen.polaris.core.UserMessage
+import com.beichen.polaris.core.llm.runCancellable
 import com.beichen.polaris.core.net.BoundedBody
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -32,19 +33,19 @@ internal object ImageUris {
     }
 
     /** 把 http(s) 图片下载后转成 data URI；失败返回 null（调用方跳过该图）。 */
-    fun downloadAsDataUri(http: OkHttpClient, url: String): String? = try {
-        val resp = http.newCall(Request.Builder().url(url).build()).execute()
-        resp.use { r ->
+    suspend fun downloadAsDataUri(http: OkHttpClient, url: String): String? = try {
+        // runCancellable：图片地址由模型或用户给出，可能挂在一个不响应的服务器上
+        http.runCancellable(Request.Builder().url(url).build()) { r ->
             if (!r.isSuccessful) {
                 AgentLogger.i("LLM", "图片下载失败 ${r.code}: ${url.take(80)}")
-                return null
+                return@runCancellable null
             }
             // 审计 F39：修前 `body?.bytes()` 完全无上限。URL 来自模型输出或用户消息，
             // 模型给出一个 500MB 的链接，下载就把进程打挂；base64 之后还要再翻 4/3。
             // 多数接口 5MB 就拒图，8MB 已经够宽松，超了直接跳过这张图。
             val bytes = r.body?.byteStream()
                 ?.let { BoundedBody.readBytes(it, BoundedBody.MAX_READ_BYTES) }
-                ?: return null
+                ?: return@runCancellable null
             val mime = r.header("Content-Type")?.substringBefore(';')?.trim() ?: "image/png"
             "data:$mime;base64," + android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
         }

@@ -101,39 +101,40 @@ class ClaudeClient(
      * 400 且响应体提到 cache_control / system 时返回 null 交给调用方重试，
      * 其余错误照旧快速失败（401/403 重试多少次都没用）。
      */
-    private fun executeChat(body: JsonObject): String? {
-        val resp = try {
-            http.newCall(buildRequest(body)).execute()
+    private suspend fun executeChat(body: JsonObject): String? {
+        // 取消感知：llm 档 callTimeout=0，这一发会一直卡在 socket 读上。流式路径
+        // 三周前就用 runCancellable 了，非流式这里补齐；它在 block 结束时关闭响应。
+        return try {
+            http.runCancellable(buildRequest(body)) { r ->
+                if (!r.isSuccessful) {
+                    // body.string() 只能读一次：先存变量；401 响应体可能回显 key，必须先脱敏
+                    val errBody = runCatching {
+            // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+            r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+        }.getOrDefault("")
+                    val safeBody = AgentLogger.sanitize(errBody)
+                    AgentLogger.httpError(r.code, safeBody)
+                    if (r.code == 400 && looksLikeCacheRejection(safeBody)) return@runCancellable null
+                    throw LlmHttpException(r.code, "Claude 请求失败 ${r.code}：${safeBody.take(300)}", safeBody)
+                }
+                // 空体不能复用下面的 null（null 是「400 缓存被拒、降级重试」的专用信号），
+                // 必须单独抛：否则空响应会被当成「缓存不兼容」，白白重发一次还是空。
+                // 审计 F37：同 F36。非流式响应限 8MB，截断则明确失败。
+                val slice = r.body?.byteStream()
+                    ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
+                    ?: throw LlmHttpException(r.code, "Claude 响应体为空（HTTP ${r.code}）", "")
+                if (slice.truncated) {
+                    throw LlmHttpException(
+                        r.code,
+                        "Claude 响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析",
+                        ""
+                    )
+                }
+                slice.text
+            }
         } catch (e: IOException) {
             AgentLogger.e("LLM", "Claude 网络请求异常", e)
             throw e
-        }
-        return resp.use { r ->
-            if (!r.isSuccessful) {
-                // body.string() 只能读一次：先存变量；401 响应体可能回显 key，必须先脱敏
-                val errBody = runCatching {
-        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
-        r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
-    }.getOrDefault("")
-                val safeBody = AgentLogger.sanitize(errBody)
-                AgentLogger.httpError(r.code, safeBody)
-                if (r.code == 400 && looksLikeCacheRejection(safeBody)) return@use null
-                throw LlmHttpException(r.code, "Claude 请求失败 ${r.code}：${safeBody.take(300)}", safeBody)
-            }
-            // 空体不能复用下面的 null（null 是「400 缓存被拒、降级重试」的专用信号），
-            // 必须单独抛：否则空响应会被当成「缓存不兼容」，白白重发一次还是空。
-            // 审计 F37：同 F36。非流式响应限 8MB，截断则明确失败。
-            val slice = r.body?.byteStream()
-                ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
-                ?: throw LlmHttpException(r.code, "Claude 响应体为空（HTTP ${r.code}）", "")
-            if (slice.truncated) {
-                throw LlmHttpException(
-                    r.code,
-                    "Claude 响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析",
-                    ""
-                )
-            }
-            slice.text
         }
     }
 
@@ -278,19 +279,18 @@ class ClaudeClient(
         }
         val request = buildRequest(requestJson)
         AgentLogger.apiTrace(endpointUrl(), effectiveModel(), effectiveApiKey())
-        val resp = try {
-            http.newCall(request).execute()
+        try {
+            http.runCancellable(request) { r ->
+                val body = runCatching {
+            // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
+            r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
+        }.getOrDefault("")
+                val safe = AgentLogger.sanitize(body)
+                PingResult(code = r.code, bodyPreview = safe.take(200))
+            }
         } catch (e: IOException) {
             AgentLogger.e("LLM", "Claude 测试连接网络异常", e)
             throw e
-        }
-        resp.use { r ->
-            val body = runCatching {
-        // 审计 F44：只用于日志/预览，却把整份响应读进堆。64KB 够放下 300 字符的提示。
-        r.body?.byteStream()?.let { BoundedBody.read(it, 64L * 1024).text }.orEmpty()
-    }.getOrDefault("")
-            val safe = AgentLogger.sanitize(body)
-            PingResult(code = r.code, bodyPreview = safe.take(200))
         }
     }
 
