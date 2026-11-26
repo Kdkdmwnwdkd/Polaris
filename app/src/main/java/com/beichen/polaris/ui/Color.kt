@@ -11,20 +11,33 @@ import androidx.compose.ui.graphics.luminance
 /**
  * 暖纸 Warm Paper 色板（视觉规范 v3.1 §3.2 / §3.3）。
  *
- * 设计取向：暖粉底 + 白卡 + 暖灰内嵌的三层明度分层，全 App 0 阴影 0 描边；
- * 单一主色「青碧」与暖粉底近似互补；语义色严格四槽（danger / warning / success / trust-sandbox）。
+ * 设计取向：冷灰底 + 白卡 + 更浅内嵌的三层明度分层，全 App 0 阴影 0 描边；
+ * 单一主色「藏蓝」落在冷底上同族，语义色严格四槽（danger / warning / success / trust-sandbox）。
+ *
+ * ## 2026-11-26：色温统一（真机反馈「颜色怪怪的，但说不上哪里」）
+ *
+ * 这套色板原本叫「暖纸」——暖粉底 + 暖棕语义色。后来底与主色整体转冷（#F4F6F9 / #22406B），
+ * **四个中性槽却漏在暖棕一侧**：trustSandbox #6B5B4E、scrim #1A120D、inverseSurface #2E2620、
+ * logDebug #756450。它们不是语义色（没有「必须橙」「必须红」的理由），只是中性灰，
+ * 带暖就与整屏冷调对冲——人眼说不出哪一处不对，只觉得脏。
+ *
+ * 判据：**中性槽一律取主色的色相、零饱和度偏移**；只有 danger / warning / success 允许
+ * 保留语义色相（红 / 橙 / 绿）。深色的主色是星金，金配夜蓝成立，故只改中性槽、不动 DarkPrimary。
+ *
+ * 同一批还修了三处注释与实现不符（surface2 / outlineStrong / scrim 的注释里还写着暖值），
+ * 它们正是「漏改」这件事的化石。
  * 本文件是全 App 唯一允许出现硬编码 Color(0x..) 的地方，改色值必须先回规范 §3.4 复测对比度。
  */
 
 // —— Light（主设计套）§3.2 ——
-private val LightBg = Color(0xFFF4F6F9)
+private val LightBg = Color(0xFFF7F8FB)
 private val LightSurface = Color(0xFFFFFFFF)
-private val LightSurface1 = Color(0xFFEEF1F6)
-private val LightSurface2 = Color(0xFFE6EAF2)
+private val LightSurface1 = Color(0xFFF1F3F7)
+private val LightSurface2 = Color(0xFFE7EBF1)
 private val LightSurfaceVar = Color(0xFFF0F3F8)
-private val LightOnSurface = Color(0xFF16202E)
-private val LightOnSurfaceVar = Color(0xFF5A6472)
-private val LightOutline = Color(0xFFE2E6EE)
+private val LightOnSurface = Color(0xFF121821)
+private val LightOnSurfaceVar = Color(0xFF5C6675)
+private val LightOutline = Color(0xFFE4E8EF)
 private val LightOutlineStrong = Color(0xFF7A8496)
 private val LightPrimary = Color(0xFF22406B)
 private val LightOnPrimary = Color(0xFFFFFFFF)
@@ -40,13 +53,13 @@ private val LightOnWarningContainer = Color(0xFF5C3A05)
 private val LightSuccess = Color(0xFF177245)
 private val LightSuccessContainer = Color(0xFFDCF0E3)
 private val LightOnSuccessContainer = Color(0xFF0F4A2A)
-private val LightTrustSandbox = Color(0xFF6B5B4E)
-private val LightLogDebug = Color(0xFF756450)
+private val LightTrustSandbox = Color(0xFF5E6B7A)
+private val LightLogDebug = Color(0xFF6B7787)
 private val LightLogInfo = Color(0xFF0E5D6B)
-private val LightInverseSurface = Color(0xFF2E2620)
-private val LightInverseOnSurface = Color(0xFFF8EFE9)
-/** 弹窗遮罩：暖黑 #1A120D @ 40%（不用纯黑）。 */
-private val LightScrim = Color(0x661A120D)
+private val LightInverseSurface = Color(0xFF1C2430)
+private val LightInverseOnSurface = Color(0xFFF2F6FB)
+/** 弹窗遮罩：冷墨 #0E1420 @ 40%（不用纯黑——纯黑会把下面的层次压死）。 */
+private val LightScrim = Color(0x660E1420)
 
 // —— Dark（配套平行套，暖黑非冷黑）§3.3 ——
 private val DarkBg = Color(0xFF101724)
@@ -74,11 +87,11 @@ private val DarkOnWarningContainer = Color(0xFFF5D9A0)
 private val DarkSuccess = Color(0xFF62D996)
 private val DarkSuccessContainer = Color(0xFF123828)
 private val DarkOnSuccessContainer = Color(0xFFBFF0D4)
-private val DarkTrustSandbox = Color(0xFFA8988A)
-private val DarkLogDebug = Color(0xFFA89A89)
+private val DarkTrustSandbox = Color(0xFF94A1B2)
+private val DarkLogDebug = Color(0xFF94A0AF)
 private val DarkLogInfo = Color(0xFF7FC8CE)
-private val DarkInverseSurface = Color(0xFFF2EAE3)
-private val DarkInverseOnSurface = Color(0xFF17110E)
+private val DarkInverseSurface = Color(0xFFEAF0F7)
+private val DarkInverseOnSurface = Color(0xFF111823)
 /** 弹窗遮罩：纯黑 @ 56%。 */
 private val DarkScrim = Color(0x8F000000)
 
@@ -166,9 +179,9 @@ internal val AgentKitDarkColorScheme = darkColorScheme(
 internal data class AgentKitColors(
     /** 内嵌块 / 图标底座 / chip 底 / 抽屉底（Light #EEF1F6 / Dark #1E2A3D）。 */
     val surface1: Color,
-    /** 按压态 / 更深内嵌（Light #EFE2D9 / Dark #2A211C）。 */
+    /** 按压态 / 更深内嵌（Light #E7EBF1 / Dark #2A211C）。 */
     val surface2: Color,
-    /** 交互边界强轨 ≥3:1（Light #8A7563 / Dark #9C8672）。 */
+    /** 交互边界强轨 ≥3:1（Light #7A8496 / Dark #8B97AC）。 */
     val outlineStrong: Color,
     val success: Color,
     val successContainer: Color,
@@ -185,7 +198,7 @@ internal data class AgentKitColors(
     val logInfo: Color,
     val logWarn: Color,
     val logError: Color,
-    /** 抽屉 / 弹窗遮罩（Light #1A120D@40% / Dark #000@56%）。 */
+    /** 抽屉 / 弹窗遮罩（Light #0E1420@40% / Dark #000@56%）。 */
     val scrim: Color
 )
 
