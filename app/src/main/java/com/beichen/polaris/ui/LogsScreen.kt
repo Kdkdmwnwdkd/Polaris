@@ -287,9 +287,9 @@ fun LogsScreen(vm: LogsContract) {
 
         Spacer(Modifier.height(AgentSpacing.space3))
 
-        // —— 操作行：导出（复制到剪贴板）/ 清空（二次确认）——
+        // —— 操作行：导出（复制到剪贴板）/ 删除（二次确认）——
         //
-        // v5：三个描边按钮（导出 / 诊断包 / 清空）原来占满一整行 100dp，
+        // v5：三个描边按钮（导出 / 诊断包 / 删除）原来占满一整行 100dp，
         // 是这一页最重的元素，可它们全是低频维护动作。改成一行纯文字动作：
         // 低频操作不该有按钮的体量，需要它的人仍然一眼看得见。
         // 诊断包的两条出口（复制全文 / 分享文件）都放在这个菜单里。
@@ -367,7 +367,7 @@ fun LogsScreen(vm: LogsContract) {
             }
             Spacer(Modifier.weight(1f))
             AkTextButton(
-                text = "清空",
+                text = "删除",
                 onClick = { showClear = true },
                 tint = MaterialTheme.colorScheme.error
             )
@@ -524,7 +524,7 @@ fun LogsScreen(vm: LogsContract) {
         }
     }
 
-    // —— 清空二次确认：日志是排查依据，删前拦一道 ——
+    // —— 删除二次确认：日志是排查依据，删前拦一道 ——
     AkModalHost(target = if (showClear) Unit else null) { _, dialogVisible ->
         AkConfirmDialog(
             title = "删除全部日志",

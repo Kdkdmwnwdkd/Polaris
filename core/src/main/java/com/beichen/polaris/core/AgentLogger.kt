@@ -79,9 +79,27 @@ object AgentLogger {
     /** 「目录里没有 agent 日志」这条 WARN 的最小间隔：搜索按输入触发，不节流会刷屏。 */
     private const val DISK_MISS_WARN_INTERVAL_MS = 30_000L
 
+    /**
+     * 点完「删除全部日志」之后的静默期：这段时间里「目录为空」是用户自己造成的，不算故障。
+     *
+     * 为什么非要静默：那条 WARN 走 [record] → [appendToDisk]，**它会把刚删空的目录又建出文件**。
+     * 真机 2026-11-26 10:29 就是这个样子——用户删完立刻搜了一次，屏幕上显示
+     * 「日志文件 1 个：agent-20261126.log(181B)」，181B 正是这条 WARN 自己。
+     * 用写文件的方式记录「没有文件」，把要证明的事实毁掉了。
+     */
+    private const val CLEAR_QUIET_MS = 5_000L
+
     /** 上次写「目录里没有日志」的时间戳。仅用于节流，读写在 IO 线程，@Volatile 足够。 */
     @Volatile
     private var lastDiskMissWarnAt = 0L
+
+    /**
+     * 上次「删除全部日志」的时刻，用于 [CLEAR_QUIET_MS] 静默期判定。
+     *
+     * 初值 0：`now - 0` 远大于静默期，未清空过的进程不受影响。
+     */
+    @Volatile
+    private var lastClearAt = 0L
 
     /**
      * 反解 [LogEntry.format] 的单行格式：`HH:mm:ss.SSS LEVEL [tag] message`。
@@ -485,7 +503,11 @@ object AgentLogger {
         }.getOrDefault(emptyList())
 
         val now = System.currentTimeMillis()
-        if (now - lastDiskMissWarnAt >= DISK_MISS_WARN_INTERVAL_MS) {
+        // 刚删完的静默期：目录为空是用户自己按的，不该被记成故障，更不该因此重建文件。
+        // 静默期外的节流照旧（搜索按输入触发，不节流会刷屏）。
+        if (now - lastClearAt >= CLEAR_QUIET_MS &&
+            now - lastDiskMissWarnAt >= DISK_MISS_WARN_INTERVAL_MS
+        ) {
             lastDiskMissWarnAt = now
             val detail = if (entries.isEmpty()) "目录为空" else "实际条目：" + entries.joinToString("，")
             w(
@@ -541,6 +563,8 @@ object AgentLogger {
         synchronized(buffer) { buffer.clear() }
         return synchronized(writeLock) {
             generation++
+            // 静默期起点：随后的搜索即使发现「目录为空」，也不再写那条会自建文件的 WARN。
+            lastClearAt = System.currentTimeMillis()
             val dir = logDir ?: return@synchronized 0
             var deleted = 0
             logFilesIn(dir).forEach { f ->

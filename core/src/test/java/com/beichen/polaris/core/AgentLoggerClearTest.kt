@@ -117,4 +117,28 @@ class AgentLoggerClearTest {
         val text = logFiles().joinToString("") { it.readText() }
         assertFalse("清空后不应出现旧行：${text.take(200)}", text.contains("OLD-LINE-"))
     }
+
+    /**
+     * 清空之后的第一次搜索，「目录为空」不能把目录又填上。
+     *
+     * 2026-11-26 真机 10:29：用户删完立刻搜了一次，清单显示
+     * `日志文件 1 个：agent-20261126.log(181B)`——181B 就是那条
+     * 「目录下没有任何 agent-*.log」的 WARN 自己。用写文件证明「没有文件」，
+     * 用户看到的是「删了还剩一个」。
+     */
+    @Test
+    fun `清空后立刻搜索不会把文件再造出来`() {
+        File(dir, "agent-20261124.log").writeText("24 号\n")
+        AgentLogger.clear()
+
+        // 目录此刻真的空了：旧实现会写 WARN 并落盘，那条 WARN 自己就是新文件。
+        val result = AgentLogger.search(listOf("随便什么"))
+        Thread.sleep(300)
+
+        assertTrue(
+            "静默期内不该重建文件：${logFiles().map { it.name }}",
+            logFiles().isEmpty(),
+        )
+        assertTrue("目录为空仍要如实报告给界面", result.noDiskFiles)
+    }
 }
