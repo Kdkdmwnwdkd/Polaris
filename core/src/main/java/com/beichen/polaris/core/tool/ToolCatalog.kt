@@ -86,9 +86,9 @@ object ToolCatalog {
         CatalogGroup("skill", "加载与使用技能"),
         CatalogGroup("workflow", "工作流的增删改查与开关"),
         CatalogGroup("device", "设备状态与通知"),
-        CatalogGroup("media", "图片识别与语音播报"),
+        CatalogGroup("media", "媒体生成、图片识别与语音播报"),
         CatalogGroup("agent", "计划、待办、子代理"),
-        CatalogGroup("github", "GitHub 仓库操作（克隆、提交、日志）"),
+        CatalogGroup("github", "GitHub 仓库操作（克隆、提交、日志）与构建发版"),
         CatalogGroup("sys", "剪贴板、容器、通知等系统能力"),
         CatalogGroup("mcp", "外部 MCP 服务器提供的工具（每次调用都需确认）", dynamic = true),
         CatalogGroup(MISC, "未归类的其他工具", pinned = true),
@@ -176,6 +176,10 @@ object ToolCatalog {
         // 危险操作；每次弹窗只会训练用户闭眼点允许。归组键只服务于弹窗文案，
         // 不弹窗的工具填了就是死元数据（见 ApprovalGroupingVerification 的 C13）。
         CatalogTool("speak", "media", Capability.PRIVILEGED),
+        // 2026-11-26：生成能力原来只有「创作工坊」那张表单能调，Agent 碰不到。
+        // 归 media 组（识别 / 播报 / 生成都是媒体），PRIVILEGED：会把 prompt 发到第三方、
+        // 且按次计费。不给 approval——用户自己说的「画一张」，再问一遍就成障碍了。
+        CatalogTool("media_generate", "media", Capability.PRIVILEGED),
         // ── agent：计划、待办、子代理
         CatalogTool("plan_propose", "agent", Capability.SAFE),
         CatalogTool("spawn_agents", "agent", Capability.PRIVILEGED),
@@ -188,6 +192,11 @@ object ToolCatalog {
         CatalogTool("github_log", "github", Capability.SAFE),
         CatalogTool("github_diff", "github", Capability.SAFE),
         CatalogTool("github_clone", "github", Capability.PRIVILEGED),
+        // 2026-11-26：构建发版。它会用已保存的 PAT 推一个 commit 到仓库并触发 CI，
+        // 所以是 PRIVILEGED 而不是 SAFE。不给 approval：github_commit 需要审批是因为
+        // **改代码内容**，而这里推的是用户自己工作区里的文件、触发的是用户自己的流水线，
+        // 且 BuildEngine 自身有「已有构建在跑」的互斥——重复点不会出两个包。
+        CatalogTool("build_run", "github", Capability.PRIVILEGED),
         // ── sys：剪贴板、容器、通知等系统能力
         // 审计 F9：剪贴板里常有密码与验证码。`action=get` 把内容整个读进上下文，
         // 此后它随下一次模型请求离开本机——这一步必须过一次人（`action=set` 不问，见工具侧）。

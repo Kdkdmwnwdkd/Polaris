@@ -237,6 +237,21 @@ class ConfigStore(context: Context) {
     }
 
     /**
+     * GitHub 配置**缺哪几项**（2026-11-26，`build_run` 工具报错用）。
+     *
+     * [loadGithubConfig] 三缺一就返回 null，把「缺哪一项」这个信息吞掉了。界面上三个
+     * 输入框并排，用户自己能看到；但工具只能说一句话，说「未配置」等于让用户自己去猜。
+     * 这里逐项点名，模型就能直接说「缺 PAT」。
+     *
+     * 全齐时返回空列表——与 `loadGithubConfig() != null` 等价，两处判断不要分叉。
+     */
+    fun missingGithubFields(): List<String> = buildList {
+        if (sp.getString(KEY_GH_OWNER, "").isNullOrBlank()) add("owner")
+        if (sp.getString(KEY_GH_REPO, "").isNullOrBlank()) add("repo")
+        if (sp.getString(KEY_GH_PAT, "").isNullOrBlank()) add("PAT")
+    }
+
+    /**
      * 功能五（P1-4b）：读全部媒体 Provider Key（`media_key_<id>` 前缀扫盘）。
      * providerId 是开放集合（dashscope/openai/volc/minimax…），无法枚举，
      * 只能按前缀扫 [SharedPreferences.all]；只读不写，无净化需求（写入侧已 trim）。

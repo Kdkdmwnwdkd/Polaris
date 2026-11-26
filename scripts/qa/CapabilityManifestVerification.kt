@@ -97,7 +97,8 @@ fun main(args: Array<String>) {
     // W-RT6：knowledge_search 进清单，56 → 57。这个数字是**刻意写死**的——
     // 新增工具忘了登记清单，groupOf 会安静地把它归到 misc，模型看到的组说明就不对。
     // 2026-11-21：ui_batch 进 ui 组，57 → 58。
-    eq("清单收录全部静态工具", CapabilityManifest.toolNames.size, 58)
+    // 2026-11-26：media_generate 进 media、build_run 进 github，58 → 60。
+    eq("清单收录全部静态工具", CapabilityManifest.toolNames.size, 60)
     eq("mcp_demo_create_issue → mcp（前缀归组，不进 misc）",
         CapabilityManifest.groupOf("mcp_demo_create_issue"), "mcp")
     eq("weather 推不出来 → misc", CapabilityManifest.groupOf("weather"), "misc")

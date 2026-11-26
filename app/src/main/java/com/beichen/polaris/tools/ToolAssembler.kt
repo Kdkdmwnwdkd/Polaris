@@ -231,6 +231,21 @@ object ToolAssembler {
         register(ShellJobsTool(deps.jobStore, deps.jobRunner))
         // B 批：容器运行时管理——让 Agent 自己把容器变成能跑 node/python/java 的环境
         register(ContainerToolchainTool(deps.app))
+        // 2026-11-26：生成与发版回对话。
+        //
+        // 这两个能力原来各自只有一张表单当出口：想画图要打开「创作工坊」选 kind / 比例 /
+        // Provider 再点按钮；想发版要打开「构建」页点按钮。用户嘴里的说法本来就是
+        // 「画一张 16:9 的雨夜街景」「把改动构建一版」——一句话，被界面拆成了四次点击。
+        //
+        // 接上工具之后，那两页才可以退化成「浏览作品 / 看构建历史」；反过来先删界面就是删功能。
+        register(
+            MediaGenerateTool(
+                gateway = AndroidMediaGateway(deps.app),
+                // 缩略图注入而不是内置：工具本体保持零 Android 依赖，测试才能跑全部分支
+                thumbnail = { MediaThumbnails.dataUrl(it) }
+            )
+        )
+        register(BuildRunTool(AndroidBuildGateway(deps.app)))
         deps.startup.mark("registry") // 工具注册表整段（40+ 工具实例化）：最可能随工具数线性增长的段
     }
 
