@@ -877,6 +877,29 @@ gh api repos/$REPO/releases/latest --jq '.tag_name'               # 应输出 la
 **不要再手工建 `v0.XX` release**——它会把徽章抢走，而且不会自己回来。
 标 prerelease 不删包，老下载链接仍然可用。
 
+**正式发版走 workflow 的 `formal_tag` 输入，别在网页上点**（2026-11-26 起）。
+`Build Release APK` 用 `workflow_dispatch` 触发时多了一个 `formal_tag` 字段：
+填 `v1.894` 就在 latest 之外多建一个长期 Release，留空则只滚动更新 latest。
+
+```bash
+gh workflow run build.yml --ref main -f formal_tag=v1.894
+```
+
+这条路径的三点设计，都是为了不再重演上面那个坑：
+
+1. `gh release create --latest=false`——release 仍是 Full release（不像 v0.27–v0.34
+   那样挂 Pre-release 标签），但显式不抢 Latest 徽章；
+2. 发完自查徽章，万一跑偏就把 `latest` 自己的 `make_latest` 标回 true（只改这一个
+   字段，不碰刚发的正式版）；仍修不回来就**红掉这一步**，不静默放过；
+3. 禁止网页手建的另一半原因是可复现：`formal_tag` 只有走 CI 才能保证「tag 打在哪条
+   commit、资产是不是这一轮的包、QA gate 过没过」三者对齐。手工建的时候，tag 默认
+   打在默认分支 HEAD，资产靠上传，发出去之后无法证明它对应哪次构建。
+
+要弄清受影响的是谁：`UpdateChecker` 写死 `releases/tags/latest`，按 **tag 名**直取，
+不读徽章。所以徽章被抢**不会**让 App 的自更新失效——它毁的是「发给别人的那个链接」
+（`releases/latest/download/...`，以及按这个形式配置的镜像）。这两件事历史上被混为
+一谈，实际是两条独立的链路。
+
 还有一处容易配错：**插件必须与编译器同一种打包**。`kotlin-compiler.jar`（非 embeddable）
 配非 embeddable 的插件；`kotlin-compiler-embeddable.jar` 配 embeddable 插件。混用会得到
 `NoSuchMethodError: KtClassLikeInfo.getScopeAnchor()`，栈里全在序列化插件内部，与业务无关。
@@ -1724,6 +1747,7 @@ JSON 往返、渲染还原），`HistoryCompactorVerification` 新增 B4/B5 源�
 | 事项 | 状态 | 怎么办 |
 |---|---|---|
 | 版本号改三段式（`1.2.1` 那种） | **方案已定，等用户发话** | 现在 `versionName = "1.$versionCode"`（versionCode 就是 CI run 号），照着涨下去会到 `1.1000`，看着不像版本号。用户 2026-11-26 拍板：**等他喊「所有问题修完 + UI 重做完」之后再改**，届时要 `1.2.1` 这种形式，不要 `2.0.0`（他觉得 2.x 应当是真正的大版本更替）。做法：新增 `version.properties`（`semver=1.2` / `semverBaseRun=<当期 run>`），`versionName = "$semver.$patch"`，`patch = versionCode - semverBaseRun`。**`versionCode` 必须继续等于 `GITHUB_RUN_NUMBER`**——`UpdateChecker` 是从 Release 标题 `(run N)` 里抠数字再和本机 `versionCode` 比大小的，改了自动更新就断；而且 Android 要求它单调递增。显示上保留构建号可追溯：`1.2.1（build 912）`（诊断包本来就是 `versionName (versionCode)` 格式，自动带上） |
+| 正式发版（贴 tag 长期挂着的那个） | **机制已就绪，第一个版本等用户发话** | 现状：`latest` 是滚动标签，每次构建覆盖一次，适合自己装机，**不能被长期引用**（今天发给别人的链接，明天点开就是另一个包）。上一次真正的正式版是 **v0.34（2026-11-11）**，之后 15 天、几百次构建全在 latest 上打转；v0.27–v0.34 那批还挂着旧名字「AgentKit」。入口已加：`workflow_dispatch` 的 `formal_tag`，填 `v1.894` 即额外建一个长期 Release，`--latest=false` 不抢徽章，发完自查徽章并自愈，修不回来则红。命名跟着 `versionName` 走，所以第一个正式版建议 `v1.894`（与 App 里显示的 `1.894 (894)` 一一对应）；等版本号切成三段式以后再改用 `v1.2.1`。见 §5.4 |
 | CI 最后一次构建结果 | **已确认**：run 45001168847 → **1.848 全绿** | build=success / mutation-gate=success（22m29s / 11m46s）；包 50,807,690 字节，versionCode 848、versionName 1.848（aapt2 实读），签名证书 SHA-256 `09:7f9cb0…9439`；Release `latest` 标题已刷成「北辰 latest (run 848)」。**本地未归档**（沙箱出口 1.5~20 KB/s）。前一次 run 44999173354 红在 8 个 harness：其中 7 个是「jar 下载只判非空、把 HTML 错误页当依赖」（`zip END header not found`），已在 138a553 用 `curl -f` + `unzip -t` + 三镜像修掉；第 8 个是新 harness 写死了沙箱的协程 jar 路径，改为 Gradle 缓存优先 |
 | 「说完自己停」+ 自适应阈值（P31/P32） | **已出包，待真机** | 行为判据 18 条 + 变异 4 条全 CAUGHT，`core` 单测 22 条通过。但「0.8 秒收会不会显得急」「1.3 秒上限够不够」只有真机能判，见 §5.16 / §5.17 与手册 §4.10–4.11 |
 | silero VAD 端点（P33，2026-11-22） | **已出包 1.842（模型 v5），待真机** | 5.18 的「地铁里分不清人声与噪声」从根上绕开：频谱判据替换音量判据，RMS 保留为降级路径。模型从 v4 换到 v5 后，噪声下的帧命中率 44.9% → 79.9%（见 §5.20）。判据 19 条 + 变异 M1–M3 全 CAUGHT，CI 全绿。语音面板新增一行「端点判定：silero v5 / RMS 回落」，静默降级从此可见。**频谱那一半 JVM 给不了**——「电视开着还能不能停」「嘈杂环境不说话会不会乱出字」只有真机能判。见 §5.19、§5.20 与手册 §4.12 |

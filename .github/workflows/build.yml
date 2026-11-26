@@ -16,6 +16,10 @@ on:
         description: "要构建的 commit / 分支 / tag（留空 = 当前分支 HEAD）。回滚用：填旧 commit。"
         required: false
         default: ""
+      formal_tag:
+        description: "正式发版标签，如 v1.894。填了就在 latest 之外多建一个长期 Release（不抢 Latest 徽章）；留空 = 只更新 latest。要和 ref 一起用会被拒绝。"
+        required: false
+        default: ""
 
 # A 批：同一 ref 的构建串行，避免两个 run 的发布步骤交错。
 # 之前 304 的发布在 305 之后完成，把 latest 覆盖成旧包（latest=v1.304，HEAD=run 305）。
@@ -580,6 +584,79 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "$TITLE" \
             --notes "$NOTES"
+
+      # 正式发版（手动触发，留空则整段跳过）。
+      #
+      # 「latest」是滚动标签：每次构建都覆盖它，适合自己装机、适合回答「最新是什么」。
+      # 但它不能被长期引用——今天把链接发给别人，明天点开就是另一个包了。
+      # 正式发版是把某一刻的包钉在一个新 tag 上，从此不再变：
+      #   https://github.com/<repo>/releases/download/v1.894/app-release.apk
+      #
+      # 两条硬约束，都是踩过的坑：
+      #
+      # 1. 必须 `--latest=false`。GitHub 的 Latest 徽章挑的是「最新且非 prerelease
+      #    非 draft」的那个 release，**不看资产后来有没有被覆盖**。latest 这个
+      #    release 建于建仓当天（2026-10-11），永远比新 tag 老；2026-11-22 手工建
+      #    v0.35 就把徽章抢走了，README 上的下载链接点了 11 天前的包（HANDOFF §5.4）。
+      #    要分清楚受影响的是谁：App 的更新检查写死 `releases/tags/latest`，按 tag 名
+      #    直取、不读徽章，所以抢徽章**不会**让自更新失效——它毁的是「发给别人的
+      #    那个链接」，以及所有 `releases/latest/download/...` 形式的镜像配置。
+      #
+      # 2. 不许在网页或手机上手工建。手工建默认自动抢徽章，且 tag 打在哪条 commit、
+      #    资产从哪来全靠手点，事后无法复现。走这里：tag、commit、run 号一次对齐，
+      #    而且必须先把变异门禁、全量测试、QA gate 全过一遍。
+      - name: Publish formal release (optional)
+        if: github.ref == 'refs/heads/main' && inputs.formal_tag != '' && inputs.ref == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.formal_tag }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.run_number }}
+        run: |
+          set -e
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) echo "::error title=标签格式不对::要以 v + 数字开头，例如 v1.894（收到：$TAG）"; exit 1 ;;
+          esac
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "::error title=标签已存在::$TAG 已经发过。正式版发布后不改内容——换一个号，或先在网页上删掉它。"
+            exit 1
+          fi
+          # 软检查：v1.<run> 的号应与本次 run 一致，防「标签写 895、包其实是 894」。
+          # 只警告不拦——以后换成 1.2.1 那种三段式编号时，这条不该变成绊脚石。
+          NUM="${TAG#v1.}"
+          case "$NUM" in
+            *[!0-9]*) : ;;
+            *) if [ "$NUM" != "$RUN" ]; then
+                 echo "::warning title=标签号与构建号不一致::$TAG 里的 $NUM ≠ run $RUN，确认是不是填错"
+               fi ;;
+          esac
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "正式发版：$TAG ← $APK（run $RUN）"
+          gh release create "$TAG" "$APK" \
+            --repo "$REPO" \
+            --title "北辰 $TAG" \
+            --notes "构建 run $RUN · commit ${{ github.sha }}" \
+            --latest=false
+          # 发完自查徽章。`--latest=false` 理论上已经挡住，这条检查留着的理由是：
+          # 一旦 gh 的参数语义哪天变了，至少不会悄无声息地把别人手里的链接换掉。
+          # 跑偏就把 latest 自己标回 Latest——只改它一个 make_latest 字段，
+          # 不碰刚发的正式版（tag、资产、说明都不动）。
+          cur=$(gh api "repos/$REPO/releases/latest" --jq '.tag_name' 2>/dev/null || echo "?")
+          if [ "$cur" = "latest" ]; then
+            echo "Latest 徽章仍指向 latest"
+          else
+            echo "::warning title=Latest 徽章被抢走::当前指向 $cur，正在标回 latest"
+            lid=$(gh api "repos/$REPO/releases/tags/latest" --jq '.id')
+            gh api -X PATCH "repos/$REPO/releases/$lid" -F make_latest=true >/dev/null
+            cur2=$(gh api "repos/$REPO/releases/latest" --jq '.tag_name')
+            if [ "$cur2" = "latest" ]; then
+              echo "已标回 latest"
+            else
+              echo "::error title=徽章修不回来::仍指向 $cur2，需手工处理（HANDOFF §5.4）"
+              exit 1
+            fi
+          fi
 
       # Latest 徽章防复发（只告警，不失败）。
       #
