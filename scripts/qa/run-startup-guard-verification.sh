@@ -99,7 +99,10 @@ fi
 # markBooted 必须在「viewModel 创建之后」：ChatViewModel 的构造期读盘是最可能崩的地方，
 # 早于它就标记成功，等于把每次启动都判成「起来了」，自救永不触发。
 if grep -q 'StartupGuard.markBooted' "$MAIN"; then
-  v=$(grep -n 'viewModel<ChatViewModel>()' "$MAIN" | head -1 | cut -d: -f1)
+  # 只认「创建点」这个语义，不认参数形态：2026-11-27 给 viewModel 传了显式工厂
+  # （为了在构造失败时留下 cause 链），原来写死的 `viewModel<ChatViewModel>()`
+  # 匹配不到，G3 就红了一次——红得对，但判据本身太脆。
+  v=$(grep -nE 'viewModel<ChatViewModel>\(' "$MAIN" | head -1 | cut -d: -f1)
   m=$(grep -n 'StartupGuard.markBooted' "$MAIN" | head -1 | cut -d: -f1)
   if [ -n "$v" ] && [ -n "$m" ] && [ "$m" -gt "$v" ]; then
     g_good "G3 markBooted 在 viewModel 创建之后"
