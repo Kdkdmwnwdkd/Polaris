@@ -120,23 +120,6 @@ private val PrimaryGroup = listOf(
 )
 
 /**
- * 抽屉「功能」折叠组：低频但完整的页面（2026-11-26）。
- *
- * 起因是一条结构问题：抽屉曾因「拥挤」从 8 项砍到 4 项，砍掉的入口全部下沉进设置页，
- * 于是设置页长出了「工具」组——模型配置 / 容器 / 编辑器 / 提示词库 / 收藏 / MCP /
- * 创作工坊 / 构建，**没有一项是设置**，全是功能页。设置页于是在替导航打工，
- * 25 个页面里 20 个只能从它索引过去。
- *
- * 这里把功能页收回抽屉，但不回到拥挤：默认收起，只占一行分组标题；
- * 展开才铺开 7 项。模型配置不在其中——它就是 [PrimaryGroup] 里的「模型」，
- * 一个页面挂两个名字是纯冗余。
- */
-private val FeatureGroup = listOf(
-    AppDest.CONTAINER, AppDest.EDITOR, AppDest.PROMPTS, AppDest.BOOKMARKS,
-    AppDest.MCP, AppDest.MEDIA, AppDest.BUILD
-)
-
-/**
  * 抽屉底部位：只放设置（§6.5.2）。
  *
  * 「关于」同批搬进设置页（设置页本来就有它的入口）——用户反馈侧边栏拥挤，
@@ -817,8 +800,6 @@ private fun DrawerContent(
     var deleteConvId by remember { mutableStateOf<String?>(null) }
     // hotfix30：删除在途会话的 Toast 反馈（VM 静默拒绝，UI 补一句人话）
     val context = LocalContext.current
-    // 「功能」折叠组是否展开（每次拉开抽屉都重置为收起，理由见调用处注释）
-    var featuresOpen by remember { mutableStateOf(false) }
 
     // 设置入口固定在底部，不随「最近对话」条数下移。
     //
@@ -867,28 +848,8 @@ private fun DrawerContent(
                 )
             }
 
-            // 「功能」折叠组：收起时只占一行，展开才铺开（见 FeatureGroup 注释）。
-            //
-            // 状态不 rememberSaveable：抽屉关掉再打开应当回到收起态。
-            // 保留下来的话，用户展开过一次之后，每次拉开抽屉都要先看到 7 行功能页，
-            // 最近对话被顶到第三屏——那正是当初「拥挤」的形态。
-            Spacer(Modifier.height(AgentSpacing.space2))
-            DrawerSectionToggle(
-                text = "功能",
-                count = FeatureGroup.size,
-                expanded = featuresOpen,
-                onClick = { featuresOpen = !featuresOpen }
-            )
-            if (featuresOpen) {
-                FeatureGroup.forEach { item ->
-                    DrawerItem(
-                        dest = item,
-                        isSelected = dest == item,
-                        talkBack = item.label,
-                        onClick = { onSelect(item) }
-                    )
-                }
-            }
+            // 「功能」折叠组：收起一行、展开 7 项。状态管在组件自己内部（见 AppDrawerFeatures.kt）
+            DrawerFeatureSection(dest = dest, onSelect = onSelect)
 
             // 功能三：最近对话组（录屏反馈「人家都有聊天记录对话记录，你这都没有」）。
             //
@@ -1366,174 +1327,6 @@ private fun DrawerHeader(
             pendingGrants = pendingGrants,
             onClick = onReadyClick,
         )
-    }
-}
-
-/**
- * 抽屉分组标题：单行中文 13sp w500 on-surface-var，无英文微标签（§6.5.2）。
- *
- * 右侧可挂一个行内动作（目前只有「最近对话」的「全部 N」入口）。挂在标题行而不是
- * 列表尾部，是因为 720x1280 上抽屉可视高度只有 ~451dp：五个主导航项就吃掉 260dp，
- * 会话列表里最后那一行永远压在固定底栏底下——想进「全部对话」得先盲滚一段。
- */
-@Composable
-private fun DrawerGroupTitle(text: String, trailing: (@Composable () -> Unit)? = null) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = AgentSpacing.space5, end = AgentSpacing.space4, bottom = AgentSpacing.space1),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = text,
-            // v5：与页面里的分组标签同一个样式（11sp + 1.2sp 字距）——
-            // 抽屉是「目录」，目录的小标题和正文页的小标题不该长得不一样。
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontSize = 11.sp,
-                lineHeight = 16.sp,
-                letterSpacing = 1.2.sp,
-                fontWeight = FontWeight.Medium
-            ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
-            modifier = Modifier.weight(1f)
-        )
-        trailing?.invoke()
-    }
-}
-
-/**
- * 抽屉里可展开的分组标题（当前只有「功能」用它）。
- *
- * 字与 [DrawerGroupTitle] 同一套（11sp + 1.2sp 字距），所以它读起来仍是目录小标题；
- * 但整行可点，右侧多给「7 ›」——数字说明里面有几项，箭头说明能展开。
- * 两件事都得有：只写「功能」的话，收起态看起来就是一行没有下文的标题，
- * 用户不知道这里藏了东西。
- *
- * 触控高度按 48dp 兜底，与 [DrawerItem] 的 52dp 不同高——它是标题不是条目，
- * 但手指落点不能比条目小太多。
- */
-@Composable
-private fun DrawerSectionToggle(
-    text: String,
-    count: Int,
-    expanded: Boolean,
-    onClick: () -> Unit
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .padding(
-                start = AgentSpacing.space5,
-                end = AgentSpacing.space4,
-                top = AgentSpacing.space1,
-                bottom = AgentSpacing.space1
-            )
-            .semantics {
-                contentDescription = if (expanded) "$text，$count 项，已展开" else "$text，$count 项，已收起"
-            },
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontSize = 11.sp,
-                lineHeight = 16.sp,
-                letterSpacing = 1.2.sp,
-                fontWeight = FontWeight.Medium
-            ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            text = count.toString(),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-        )
-        Icon(
-            imageVector = if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            modifier = Modifier.size(18.dp)
-        )
-    }
-}
-
-/**
- * 抽屉菜单项：高 52dp · 左右边距 8dp · 无 chevron（§6.5.2）。
- *
- * v5 改选中态：原来是「primary@12% 底 + 图标文字 primary + 左缘 3dp 竖条」三件套，
- * 一块圆角色块横在抽屉里，正是模板感最重的地方。现在只留**颜色与字重**——
- * 选中项的图标和文字转 primary、字重加一档。目录里标出当前章节，靠的是排字，不是底色。
- *
- * 按压仍给 surface-2，但圆角收到 4dp：按下去是「这一行被划过」，不是弹出一个按钮。
- * 整行为触控目标，TalkBack 合并为单节点。
- */
-@Composable
-private fun DrawerItem(
-    dest: AppDest,
-    isSelected: Boolean,
-    talkBack: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val ak = LocalAkColors
-    Box(
-        modifier
-            .fillMaxWidth()
-            .padding(horizontal = AgentSpacing.space2)
-            .heightIn(min = AgentDimens.drawerItemHeight)
-    ) {
-        val interaction = remember { MutableInteractionSource() }
-        val pressed by interaction.collectIsPressedAsState()
-        val bg by animateColorAsState(
-            targetValue = if (pressed) ak.surface2 else Color.Transparent,
-            animationSpec = AkMotionFastColor
-        )
-        Row(
-            modifier = Modifier
-                // 原为 fillMaxSize()。本意「铺满这一行」，但在**有限高**的父（如抽屉底部固定栏）里
-                // 它会填满父给的最大高度；而本 Box 只靠 heightIn(min = 52dp) 兜底、没有确定高度内容，
-                // 于是一个菜单项就能把整条底栏顶成全屏高（实测 590x1039，与整块抽屉等高）。
-                // 在 verticalScroll（无限高）里看不出来：无限约束下 fillMaxSize 退回最小高度，恰好 52dp。
-                // matchParentSize 取 Box 的最终尺寸，两种父约束下都是 52dp。
-                .matchParentSize()
-                .clip(RoundedCornerShape(4.dp))
-                .background(bg)
-                .clickable(
-                    interactionSource = interaction,
-                    indication = null,
-                    onClick = onClick
-                )
-                // 合并为单节点：一次聚焦读全（图标/文字 decorative），selected 态读作「已选中」
-                .semantics(mergeDescendants = true) {
-                    contentDescription = talkBack
-                    selected = isSelected
-                },
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = dest.icon,
-                contentDescription = null,
-                tint = if (isSelected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                modifier = Modifier.size(21.dp)
-            )
-            Spacer(Modifier.width(AgentSpacing.space3))
-            Text(
-                text = dest.label,
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontSize = 15.sp,
-                    fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal
-                ),
-                color = if (isSelected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                modifier = Modifier.weight(1f)
-            )
-        }
     }
 }
 

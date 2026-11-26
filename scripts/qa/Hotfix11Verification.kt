@@ -815,7 +815,9 @@ private fun testPromptLibrary() {
     val chat = readSource("ui/ChatScreen.kt")
     val picker = readSource("ui/PromptLibraryScreen.kt")
     val scaffold = ROUTES
-    val settings = readSource("ui/SettingsScreen.kt")
+    // 2026-11-26：功能页入口从设置页「工具」组搬回抽屉「功能」折叠组。
+    // S8 的第三处（用户可达入口）随之改判到抽屉，见该条断言处的说明。
+    val drawerFeatures = readSource("ui/AppDrawerFeatures.kt")
 
     check("S1 数据契约 + 6 条内置（builtin 字段而非字符串前缀猜语义）") {
         assertContains("S1", models, "data class PromptItem(")
@@ -874,15 +876,18 @@ private fun testPromptLibrary() {
         assertContains("S7", picker, "onPick: (PromptItem) -> Unit")
         assertContains("S7", picker, "onManage: () -> Unit")
     }
-    check("S8 管理页 + 路由 + 设置页入口（三处齐活）") {
+    check("S8 管理页 + 路由 + 抽屉入口（三处齐活）") {
         assertContains("S8", picker, "fun PromptLibraryScreen(vm: PromptLibraryContract)")
         assertContains("S8", picker, "title = \"内置提示词\"")
         assertContains("S8", picker, "danger = true")
         assertContains("S8", scaffold, "PROMPTS(\"prompts\", \"提示词库\", \"提示词库\", Icons.Outlined.AutoAwesome)")
         assertContains("S8", scaffold, "AppDest.PROMPTS -> PromptLibraryScreen(vm)")
         assertContains("S8", scaffold, "onManagePrompts = { onNavigate(AppDest.PROMPTS) }")
-        assertContains("S8", settings, "title = \"提示词库\"")
-        assertContains("S8", settings, "onClick = { onNavigate(AppDest.PROMPTS) }")
+        // 第三处：用户可达入口。2026-11-26 起不在设置页「工具」组，而在抽屉「功能」折叠组。
+        // 判据仍是「列出来 + 点了会导航」，只是位置改了——不是放宽断言，是不再盯着旧位置。
+        assertContains("S8", drawerFeatures, "AppDest.CONTAINER, AppDest.EDITOR, AppDest.PROMPTS")
+        assertContains("S8", drawerFeatures, "FeatureGroup.forEach { item ->")
+        assertContains("S8", drawerFeatures, "onClick = { onSelect(item) }")
     }
 }
 
@@ -1329,11 +1334,24 @@ private fun testConversationSwitchWhileRunning() {
         assertContains("Y3", gen, "val buf = draftBuffer ?: StringBuilder().also { draftBuffer = it }")
         assertContains("Y3", gen, "val buf = reasoningBuffer ?: StringBuilder().also { reasoningBuffer = it }")
     }
-    check("Y4 显示态守卫：_messages 追加全部带 isOwnerActive()（后台只落盘不上屏）") {
-        // W-47 起追加统一走 appendUiItem()（读改写进 msgLock），守卫改在调用处：
-        // ToolStarted / append() / send 的 stopItem / send 的 errItem 四处。
-        assertTrue("Y4", vm.split("if (isOwnerActive()) appendUiItem(").size - 1 >= 3)
+    check("Y4 显示态守卫：追加只经 emitTo（owner 活跃才上屏，落盘无条件）") {
+        // W-47 起追加统一走 appendUiItem()（读改写进 msgLock），守卫放在调用处。
+        // 2026-11-26：那个三元组（守卫 + 上屏 + 落盘）在 send 里被手抄五遍、
+        // handleAgentEvent 里一遍，收敛成 emitTo()——守卫点从六处变一处。
+        // 判据随之从「数调用处有几个 if」改成「守卫在 emitTo 内 + 调用处不再有裸配对」。
+        assertContains("Y4", vm, "private fun emitTo(item: UiItem) {")
+        assertContains("Y4", vm, "if (isOwnerActive()) appendUiItem(item)")
         assertContains("Y4", vm, "private fun appendUiItem(item: UiItem)")
+        // 至少六个调用点：send 五处（空回复 / 停止残稿 / 停止提示 / 失败残稿 / 失败提示）
+        // + handleAgentEvent 的 ToolStarted
+        assertTrue("Y4", vm.split("emitTo(").size - 1 >= 6)
+        // 守卫只该有一处：全文件「带守卫的 appendUiItem」恰好 1 次，且落在 emitTo 体内。
+        // 多出来的一处就意味着有人绕过 emitTo 自己拼了半套（上屏了但没落盘，或反之）。
+        assertTrue("Y4", vm.split("if (isOwnerActive()) appendUiItem(").size - 1 == 1)
+        val emitFn = vm.substringAfter("private fun emitTo(item: UiItem) {")
+            .substringBefore("\n    }")
+        assertContains("Y4", emitFn, "if (isOwnerActive()) appendUiItem(item)")
+        assertContains("Y4", emitFn, "appendToStore(item)")
     }
     check("Y5 switchConversation：去掉 isRunning 硬守卫 + 切后同步草稿投影") {
         val sw = vm.substringAfter("fun switchConversation(id: String)")
