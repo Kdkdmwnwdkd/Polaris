@@ -15,7 +15,7 @@
 # 2026-11-26 抬 5 条（625 → 630）：功能页入口从设置页「工具」组搬回抽屉
 # 「功能」折叠组，S8 的「用户可达入口」那处判据随之落到新文件 AppDrawerFeatures.kt。
 # 那 7 项 AppDest 与折叠开关是纯 Compose 声明，没有行为可调，只能看源码。
-text scripts/qa/Hotfix11Verification.kt 630
+text scripts/qa/Hotfix11Verification.kt 632
 text scripts/qa/run-local-inference-perf-verification.sh 90
 text scripts/qa/PromptProtocolVerification.kt 47
 text scripts/qa/AppControlVerification.kt 40
@@ -110,4 +110,4 @@ text scripts/qa/run-knowledge-base-verification.sh 10
 text scripts/qa/run-cost-drilldown-verification.sh 10
 text scripts/qa/run-qr-verification.sh 9
 text scripts/qa/run-local-param-input-verification.sh 9
-text __TOTAL__ 1734
+text __TOTAL__ 1736

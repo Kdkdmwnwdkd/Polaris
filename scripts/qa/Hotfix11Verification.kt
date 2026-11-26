@@ -969,6 +969,9 @@ private fun testReasoningFold() {
     val store = readSource("core/ConversationStore.kt")
     val vm = readSource("ui/ChatViewModel.kt")
     val screen = readSource("ui/ChatScreen.kt")
+    // 2026-11-26：过程轨迹（工具组 / 思考行）搬出 ChatScreen 单独成文件，
+    // 因为 ChatScreen 卡在 3053 行冻结上限。
+    val traceUi = readSource("ui/ChatToolTrace.kt")
 
     check("U1 事件分流：ReasoningDelta 与 TextDelta 平级，思考不进正文打字机") {
         assertContains("U1", event, "data class ReasoningDelta(val text: String) : ChatStreamEvent")
@@ -1043,16 +1046,23 @@ private fun testReasoningFold() {
         // 4.3：缓冲改 StringBuilder 后投影要 toString；守的意图不变（切走清显示、切回恢复）
         assertContains("U9", gen, "_reasoning.value = if (isOwnerActive()) reasoningBuffer?.toString() else null")
     }
-    check("U10 UI：ReasoningBlock 流式展开/完成折叠，null 不渲染") {
-        assertContains("U10", screen, "reasoning: String? = null")
-        assertContains("U10", screen, "if (reasoning != null) {\n                            ReasoningBlock(reasoning = reasoning, expandedInitially = true)")
-        assertContains("U10", screen, "if (reasoning != null) {\n                            ReasoningBlock(reasoning = reasoning, expandedInitially = false)")
-        assertContains("U10", screen, "private fun ReasoningBlock(reasoning: String, expandedInitially: Boolean) {")
-        // 折叠头常驻可反复开合；展开图标随状态旋转
-        assertContains("U10", screen, "var expanded by remember { mutableStateOf(expandedInitially) }")
-        assertContains("U10", screen, ".clickable { expanded = !expanded }")
-        assertContains("U10", screen, ".rotate(if (expanded) 180f else 0f)")
+    check("U10 UI：思考行流式展开、完成自动折回，null 不渲染") {
+        // 2026-11-26：思考从「气泡内折叠块」改成「正文上方一行」，与工具组同一套视觉，
+        // 组件搬进 ChatToolTrace.kt。判据随之从 ReasoningBlock 改判到 ThinkingTraceRow，
+        // 并补上本次改动的核心行为——**跑完自动折回**（旧实现只手动开合，从不自己收）。
+        assertContains("U10", traceUi, "internal fun ThinkingTraceRow(reasoning: String, streaming: Boolean)")
+        assertContains("U10", screen, "if (!item.reasoning.isNullOrBlank())")
         assertContains("U10", screen, "reasoning = item.reasoning")
+        assertContains("U10", screen, "streaming = streaming")
+        // 折叠头常驻可反复开合；展开图标随状态旋转
+        assertContains("U10", traceUi, "var expanded by remember { mutableStateOf(streaming) }")
+        assertContains("U10", traceUi, "expanded = !expanded")
+        assertContains("U10", traceUi, "targetValue = if (expanded) 180f else 0f")
+        // 自动折回：流结束折思考，run 结束折工具组；用户手动开过就不折
+        assertContains("U10", traceUi, "if (!streaming && !touchedByUser) expanded = false")
+        assertContains("U10", traceUi, "if (!run.running && !touchedByUser)")
+        // null 不渲染：由调用处的 isNullOrBlank 判据保证，组件只接收非空
+        assertTrue("U10", !traceUi.contains("reasoning == null"))
     }
 }
 

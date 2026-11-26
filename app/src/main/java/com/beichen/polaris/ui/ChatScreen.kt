@@ -384,6 +384,17 @@ fun ChatScreen(
                 // F17 兜底：messageKeys 由 remember(messages) 算，key lambda 却在测量阶段调用，
                 // 此时 messages 可能已是下一帧的（刚插入工具卡）——直接索引会越界崩页（模拟器实测）。
                 itemsIndexed(messages, key = { index, _ -> messageKeys.getOrNull(index) ?: "fallback-$index" }) { index, item ->
+                    // 2026-11-26：工具调用收成一行「过程轨迹」。这里算两件事——
+                    // ① 本条的轨迹组（只有组首拿得到，组内其余返回 null）；
+                    // ② 本条是否已被别人接管（组内非首条 / 被工具组吸收的纯思考）。
+                    // 接管的只跳渲染，不删数据：落盘与模型上下文一个字都没动，
+                    // 所以历史会话、导出、续跑全都与改前一致。
+                    val trace = if (item is UiItem.Tool) traceRunAt(messages, index) else null
+                    if ((item is UiItem.Tool && trace == null) ||
+                        (item is UiItem.Assistant && thinkingAbsorbedBy(messages, index))
+                    ) {
+                        return@itemsIndexed
+                    }
                     val prev = messages.getOrNull(index - 1)
                     val gap = when {
                         prev == null -> 0.dp
@@ -394,7 +405,8 @@ fun ChatScreen(
                         MessageRow(
                             item,
                             // 流式光标只在「末尾且无草稿气泡」时显示；有草稿时草稿自己带光标
-                            streaming = running && index == messages.lastIndex && streamDraft == null
+                            streaming = running && index == messages.lastIndex && streamDraft == null,
+                            trace = trace
                         )
                         // W-30：翻译结果（按消息下标缓存；只显示、不写入会话内容）
                         translations[index]?.let { tr ->
@@ -431,9 +443,7 @@ fun ChatScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(
-                                        top = 2.dp,
-                                        start = if (item is UiItem.User) 0.dp else 36.dp,
-                                        end = if (item is UiItem.User) 36.dp else 0.dp
+                                        top = 2.dp
                                     )
                             )
                         }
@@ -2139,47 +2149,72 @@ private fun ChatSendButton(enabled: Boolean, interrupting: Boolean = false, onCl
 }
 
 /**
- * 单条消息分发。气泡宽度 clamp 的百分比基准是**消息列容器宽**（UX v1 §4.4：
- * Expanded 下 88vw 会溢出限宽内容区），故用 BoxWithConstraints 取容器宽计算。
+ * 单条消息分发。
+ *
+ * 2026-11-26：助手消息不再有头像与气泡。两者合计吃掉 36dp 横向空间（头像 28 + 间距 8），
+ * 再加上 84% 的限宽，一行正文从 21 字被压回 17 字——长回答成了窄柱。
+ * 身份不需要两个记号：用户靠右对齐 + 淡色底，助手靠「没有底色」。
  */
 @Composable
-private fun MessageRow(item: UiItem, streaming: Boolean) {
+private fun MessageRow(item: UiItem, streaming: Boolean, trace: TraceRun? = null) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         when (item) {
-            is UiItem.User -> MessageBubble(
-                text = item.text,
-                isUser = true,
-                streaming = false,
-                maxWidth = (maxWidth * 0.76f).coerceIn(240.dp, 400.dp),
-                // 发过的图与文件名：气泡里显示的是缩小后的副本（见 AttachmentViews.userBubbleItem）
-                images = item.images,
-                fileNames = item.fileNames
-            )
+            is UiItem.User -> Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                MessageBubble(
+                    text = item.text,
+                    isUser = true,
+                    streaming = false,
+                    maxWidth = (maxWidth * 0.76f).coerceIn(240.dp, 400.dp),
+                    // 发过的图与文件名：气泡里显示的是缩小后的副本（见 AttachmentViews.userBubbleItem）
+                    images = item.images,
+                    fileNames = item.fileNames
+                )
+            }
 
-            is UiItem.Assistant -> MessageBubble(
-                text = item.text,
-                isUser = false,
-                streaming = streaming,
-                maxWidth = (maxWidth * 0.84f).coerceIn(272.dp, 520.dp),
-                // 功能五（P1-5）：token 用量（null = 供应商没给，不显示）
-                usage = item.usage,
-                // 功能五（P1-9）：推理过程（null = 无思考，不渲染折叠块）
-                reasoning = item.reasoning,
-                // 2026-11-18：落盘截断时在气泡底部明确标注（0 = 完整，不渲染）
-                truncatedChars = item.truncatedChars
-            )
+            is UiItem.Assistant -> Column(Modifier.fillMaxWidth()) {
+                // 思考是一段过程，不是正文的一部分：外置成一行，与工具组同一套视觉。
+                // 旧实现把它塞在气泡里当折叠块，于是「思考和工具」被拆成两种长得不一样的
+                // 东西——用户得分别找两个地方点开。
+                if (!item.reasoning.isNullOrBlank()) {
+                    ThinkingTraceRow(reasoning = item.reasoning, streaming = streaming)
+                }
+                MessageBubble(
+                    text = item.text,
+                    isUser = false,
+                    streaming = streaming,
+                    maxWidth = maxWidth,
+                    // 功能五（P1-5）：token 用量（null = 供应商没给，不显示）
+                    usage = item.usage,
+                    // 2026-11-18：落盘截断时在正文底部明确标注（0 = 完整，不渲染）
+                    truncatedChars = item.truncatedChars
+                )
+            }
 
-            is UiItem.Tool -> ToolCard(item)
+            // 过程轨迹由 itemsIndexed 算好后传进来：这一条若不是组首，trace 为 null，
+            // 调用方已经跳过、不会走到这里。
+            is UiItem.Tool -> trace?.let { ToolTraceRow(it) }
         }
     }
 }
 
 /**
- * 消息气泡 + 角色头像（§6.2）。
+ * 消息气泡。
  *
- * 用户：右对齐，淡主题色渐变底（[userBubbleColors]）+ 0.5dp 玻璃描边，右上 4dp 尾角；
- *   28dp 头像 surface-1 + 人形图标。W-65 之前是 primary 实色块，一整屏翻下来像几块深色补丁。
- * AI：左对齐，白底 + on-surface 文字，左上 4dp 尾角；28dp 头像 primary-container + 星点图标。
+ * 用户：右对齐、主题容器色单色底、右下 4dp 尾角，一眼是「我说的话」。
+ * 助手：**没有气泡、没有头像**，就是正文。
+ *
+ * ## 为什么撤掉助手气泡（2026-11-26）
+ *
+ * 底色是 #F7F8FB 的浅灰，白卡是唯一的层次手段，于是每样东西都被迫长成一张卡——
+ * 助手的话一张、每次工具调用一张、思考再来一张。一屏翻下来全是卡片边界，
+ * 正文反而是最不显眼的东西。底色一分层，卡片就成了必需品；卡片一撤，正文才回到主角。
+ *
+ * 用户气泡改用 [ColorScheme.primaryContainer] 单色，不再用 9%→28% 的主题色渐变：
+ * 藏蓝（R=34）混白之后三个通道被拉平，渐变两端实际是 #EBEEF2 → #C1C9D6 的灰蓝，
+ * 中间调糊成一片脏色，看着既不「淡」也不「玻璃」。
  */
 @Composable
 private fun MessageBubble(
@@ -2189,8 +2224,6 @@ private fun MessageBubble(
     maxWidth: Dp,
     /** 功能五（P1-5）：助手气泡的 token 用量（null = 无数据不显示；用户气泡恒 null）。 */
     usage: TokenUsage? = null,
-    /** 功能五（P1-9）：推理过程原文（null = 模型没给思考，不渲染折叠块；用户气泡恒 null）。 */
-    reasoning: String? = null,
     /**
      * 落盘截断标记：正文被丢弃的字符数（0 = 完整）。
      *
@@ -2202,202 +2235,69 @@ private fun MessageBubble(
     images: List<String> = emptyList(),
     fileNames: List<String> = emptyList()
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
-        verticalAlignment = Alignment.Top
-    ) {
-        if (!isUser) {
-            RoleAvatar(
-                icon = Icons.Outlined.AutoAwesome,
-                background = MaterialTheme.colorScheme.primaryContainer,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Spacer(Modifier.width(AgentSpacing.space2))
-        }
-        val shape = if (isUser) {
-            RoundedCornerShape(topStart = 18.dp, topEnd = 4.dp, bottomEnd = 18.dp, bottomStart = 18.dp)
-        } else {
-            RoundedCornerShape(topStart = 4.dp, topEnd = 18.dp, bottomEnd = 18.dp, bottomStart = 18.dp)
-        }
-        // W-65：自己的话改成「淡主题色渐变 + 玻璃描边」——面状填充仍是 Surface 的 shape，
-        // 渐变和描边画在 Surface 之前，透明底不会盖住它们。
-        val meColors = userBubbleColors(MaterialTheme.colorScheme)
-        Surface(
-            color = if (isUser) Color.Transparent else MaterialTheme.colorScheme.surface,
-            shape = shape,
-            modifier = Modifier
+    if (isUser) {
+        Column(
+            Modifier
                 .widthIn(max = maxWidth)
-                .then(
-                    if (isUser) {
-                        Modifier
-                            .background(
-                                Brush.linearGradient(listOf(meColors.start, meColors.end)),
-                                shape
-                            )
-                            .border(0.5.dp, meColors.stroke, shape)
-                    } else {
-                        Modifier
-                    }
-                )
+                .clip(USER_BUBBLE_SHAPE)
+                .background(MaterialTheme.colorScheme.primaryContainer)
         ) {
             SelectionContainer {
-                when {
-                    // 用户气泡正文保持纯文本（用户输入不作 Markdown 解释）；
-                    // 附图与文件名铺在正文下方——发完看不见自己发了什么，等于功能只做了一半
-                    isUser -> Column {
-                        Text(
-                            text = text,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = meColors.text,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                        )
-                        BubbleAttachments(
-                            images = images,
-                            fileNames = fileNames,
-                            modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp)
-                        )
-                    }
-                    // 助手气泡：Markdown 渲染；流式时末尾带光标（流式全 App 唯一循环动画，§6.2）
-                    streaming -> Column {
-                        // 功能五（P1-9）：思考中默认展开——用户实时围观模型在推理什么
-                        if (reasoning != null) {
-                            ReasoningBlock(reasoning = reasoning, expandedInitially = true)
-                        }
-                        Row(
-                            modifier = Modifier.widthIn(max = maxWidth),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            MarkdownText(
-                                text = text,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier
-                                    .weight(1f, fill = false)
-                                    .padding(horizontal = 14.dp, vertical = 10.dp)
-                            )
-                            StreamCursor()
-                            Spacer(Modifier.width(14.dp))
-                        }
-                    }
-                    else -> Column {
-                        // 功能五（P1-9）：完成态默认折叠——想复盘推理时点开头看
-                        if (reasoning != null) {
-                            ReasoningBlock(reasoning = reasoning, expandedInitially = false)
-                        }
-                        MarkdownText(
-                            text = text,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                        )
-                        // 功能五（P1-5）：本条回答的 token 用量（↑ 输入 / ↓ 输出）。
-                        // 有数据才渲染——供应商没给 usage 时不摆占位
-                        if (usage != null && usage.totalTokens > 0) {
-                            Text(
-                                text = "↑ ${formatTokens(usage.promptTokens)} · " +
-                                    "↓ ${formatTokens(usage.completionTokens)} tokens",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp)
-                            )
-                        }
-                        // 2026-11-18：落盘截断必须说出来。修前是静默 take(4000)，
-                        // 重启后看到的半截回答与「模型真的只说了这么多」无法区分。
-                        if (truncatedChars > 0) {
-                            Text(
-                                text = "正文已截断：原文 ${text.length + truncatedChars} 字符，" +
-                                    "落盘只存前 ${text.length} 字符",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.padding(
-                                    start = 14.dp,
-                                    end = 14.dp,
-                                    bottom = 8.dp
-                                )
-                            )
-                        }
-                    }
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                )
+            }
+            BubbleAttachments(
+                images = images,
+                fileNames = fileNames,
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp)
+            )
+        }
+        return
+    }
+    Column(Modifier.fillMaxWidth()) {
+        SelectionContainer {
+            // 流式时末尾带光标（流式全 App 唯一循环动画，§6.2）
+            if (streaming) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MarkdownText(
+                        text = text,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    StreamCursor()
                 }
+            } else {
+                MarkdownText(text = text, color = MaterialTheme.colorScheme.onSurface)
             }
         }
-        if (isUser) {
-            Spacer(Modifier.width(AgentSpacing.space2))
-            RoleAvatar(
-                icon = Icons.Outlined.Person,
-                background = LocalAkColors.surface1,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+        // 功能五（P1-5）：本条回答的 token 用量（↑ 输入 / ↓ 输出）。有数据才渲染
+        if (usage != null && usage.totalTokens > 0) {
+            Text(
+                text = "↑ ${formatTokens(usage.promptTokens)} · " +
+                    "↓ ${formatTokens(usage.completionTokens)} tokens",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+        if (truncatedChars > 0) {
+            Text(
+                text = "正文已截断：原文 ${text.length + truncatedChars} 字符，" +
+                    "落盘只存前 ${text.length} 字符",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 4.dp)
             )
         }
     }
 }
 
-/**
- * 功能五（P1-9）：推理过程折叠块（净室实现，参照三家「思考过程」交互的自有形制）。
- *
- * 头部「思考过程 · N 字」+ 旋转箭头常驻可反复开合；正文小号字、surface-1 底与正文区分。
- * 展开初值由 [expandedInitially] 决定：流式中传 true（实时围观模型思考），完成态传 false（默认折叠、点开复盘）。
- * 空推理不渲染本块——由调用方以 null 判断，本函数只接收非空。
- */
-@Composable
-private fun ReasoningBlock(reasoning: String, expandedInitially: Boolean) {
-    var expanded by remember { mutableStateOf(expandedInitially) }
-    Column(
-        modifier = Modifier
-            .padding(horizontal = 10.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(LocalAkColors.surface1)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { expanded = !expanded }
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "思考过程 · ${reasoning.length} 字",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
-            )
-            Icon(
-                imageVector = Icons.Outlined.ExpandMore,
-                contentDescription = if (expanded) "收起思考过程" else "展开思考过程",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .size(18.dp)
-                    .rotate(if (expanded) 180f else 0f)
-            )
-        }
-        if (expanded) {
-            Text(
-                text = reasoning,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 10.dp, end = 10.dp, bottom = 8.dp)
-            )
-        }
-    }
-}
-
-/** 28dp 圆形角色头像：区分用户 / AI 两个发言者。 */
-@Composable
-private fun RoleAvatar(icon: ImageVector, background: Color, tint: Color) {
-    Surface(
-        shape = CircleShape,
-        color = background,
-        modifier = Modifier.size(28.dp)
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = tint,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-    }
-}
+/** 用户气泡：右下 4dp 是「尾巴」，其余三角 18dp。 */
+private val USER_BUBBLE_SHAPE = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp)
 
 /**
  * 流式光标：2×14dp primary 方块，800ms 闪烁——**全 App 唯一循环动画**（§6.2）。
@@ -2430,213 +2330,6 @@ private fun StreamCursor() {
             .background(MaterialTheme.colorScheme.primary)
     )
 }
-
-/** 工具调用五态（§6.3 状态文字双编码）。 */
-private enum class ToolStatus { RUNNING, DONE, FAILED, REJECTED, INTERRUPTED }
-
-/**
- * 工具调用五态（§6.3 状态文字双编码）。
- *
- * 「已拒绝」判据 = AgentLoop 在审批被拒时回填的结果文案（core/AgentLoop：「用户拒绝了该危险操作」）：
- * 拒绝是用户决策不是故障，用中性色（继承 v2.1 R3）。
- * Hotfix2 起 UiItem.Tool 有 RUNNING 实例（running=true）：AgentEvent.ToolStarted 已上报、
- * ToolFinished 未到——过程透明化，用户能看见 AI 正在调什么工具。
- * R-06 起有 INTERRUPTED：中断不是失败（工具可能已经生效），也不再转圈（没有人在等了）。
- */
-private fun UiItem.Tool.status(): ToolStatus = when {
-    running -> ToolStatus.RUNNING
-    interrupted -> ToolStatus.INTERRUPTED
-    isError && result.contains("用户拒绝了") -> ToolStatus.REJECTED
-    isError -> ToolStatus.FAILED
-    else -> ToolStatus.DONE
-}
-
-/**
- * 工具调用卡（§6.3 轻量卡）：白卡 radius 20dp，无状态描边、无色带、无扫描光带。
- *
- * Header 48dp = 8dp 状态点 + 工具名 machineText + 「—」+ 状态文字 12sp + chevron 20dp；
- * 展开区 animateContentSize 250ms，「入参」「结果」两个内嵌块（surface-1 / 13sp mono / maxHeight 140dp）。
- */
-@Composable
-private fun ToolCard(item: UiItem.Tool) {
-    var expanded by remember { mutableStateOf(false) }
-    val ak = LocalAkColors
-    val status = item.status()
-    // 颜色与文案一起算：它们是同一个事实的两个投影。分两个 when 写，新增状态时漏改一处
-    // 就会出现「灰点 + 已完成」；中性色的理由见 ToolStatus 的 KDoc（拒绝/中断都不是故障）。
-    val (statusColor, statusText) = when (status) {
-        ToolStatus.RUNNING -> MaterialTheme.colorScheme.primary to "执行中"
-        ToolStatus.DONE -> ak.success to "已完成"
-        ToolStatus.FAILED -> MaterialTheme.colorScheme.error to "已失败"
-        ToolStatus.REJECTED -> MaterialTheme.colorScheme.onSurfaceVariant to "已拒绝"
-        ToolStatus.INTERRUPTED -> MaterialTheme.colorScheme.onSurfaceVariant to "已中断"
-    }
-    val chevronRotation by animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
-        animationSpec = AkMotionBase,
-        label = "toolChevron"
-    )
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        // v4：20 → 14。工具卡常连排 5~10 张，20 的圆角会让整列看起来像一排药丸；
-        // 14 与列表行图标的 12 同族，一屏 8 张也不抢戏。
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            Modifier
-                .padding(horizontal = AgentSpacing.space4)
-                .padding(bottom = AgentSpacing.space2)
-                .animateContentSize(
-                    animationSpec = tween(durationMillis = 250, easing = AkMotionEasing)
-                )
-        ) {
-            // Header：整行可点展开，按压 scale 0.97（§7-M3）
-            AkPressSurface(
-                onClick = { expanded = !expanded },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = AgentDimens.touchTarget),
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = AgentSpacing.space1),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Hotfix2：执行中态把静态状态点换成 12dp 转圈，一眼可见「正在跑」
-                    if (status == ToolStatus.RUNNING) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(12.dp),
-                            strokeWidth = 1.5.dp,
-                            color = statusColor
-                        )
-                    } else {
-                        AkStatusDot(statusColor, 8.dp)
-                    }
-                    Spacer(Modifier.width(AgentSpacing.space2))
-                    Text(
-                        text = item.call.name,
-                        style = machineText,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    Text(
-                        text = " — ",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = statusColor
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Icon(
-                        imageVector = Icons.Outlined.ExpandMore,
-                        contentDescription = if (expanded) "收起" else "展开",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .size(20.dp)
-                            .rotate(chevronRotation)
-                    )
-                }
-            }
-            if (expanded) {
-                EmbedBlock(label = "入参", text = item.call.arguments.toString())
-                // 执行中态还没有结果，只展示入参（Hotfix2）
-                if (!item.running) {
-                    Spacer(Modifier.height(AgentSpacing.space2))
-                    EmbedBlock(
-                        label = "结果",
-                        text = item.result,
-                        error = item.isError
-                    )
-                }
-            }
-            // 工具返回的图片（如 ui_screenshot 截图）默认可见
-            if (item.images.isNotEmpty()) {
-                Spacer(Modifier.height(AgentSpacing.space3))
-                Column(
-                    Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(AgentSpacing.space2)
-                ) {
-                    item.images.forEach { DataImage(it) }
-                }
-            }
-        }
-    }
-}
-
-/**
- * 「入参 / 结果」内嵌块：surface-1 底 radius 14dp，machineText 13sp/20。
- *
- * ## 为什么要「折叠」而不只是「限高」
- * 原实现只给 140dp 限高 + 内部滚动。听起来够用，但真机实测 `shell_run` 跑
- * `seq 1 2000`（4000 字符、2000 行）时，内容区仍占了大半屏——限高在
- * `animateContentSize` 包裹的 Column 里没兜住，用户看到的是「一屏数字」，
- * 既不知道有多少内容、也不知道能滚，只会以为界面坏了。
- *
- * 现在改成**真的只渲染前 [COLLAPSE_LINES] 行**（不是靠限高裁剪）：
- * - 内容短 → 原样展示，没有多余按钮；
- * - 内容长 → 只显示前 20 行 + 「展开全部（共 N 行）」；
- * - 展开后 → 全文 + 仍保留 140dp 限高与内部滚动（双保险）。
- *
- * 这样即使将来布局约束再变，也不可能出现「一条工具结果淹掉整屏」。
- */
-@Composable
-private fun EmbedBlock(label: String, text: String, error: Boolean = false) {
-    val lines = remember(text) { text.lines() }
-    val collapsed = remember(text) {
-        lines.size > COLLAPSE_LINES || text.length > COLLAPSE_CHARS
-    }
-    // 短内容默认展开（不显示按钮）；长内容默认折叠
-    var expanded by remember(text) { mutableStateOf(!collapsed) }
-    val shown = remember(text, expanded) {
-        if (expanded) text else lines.take(COLLAPSE_LINES).joinToString("\n")
-    }
-    Column(Modifier.padding(top = AgentSpacing.space2)) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 6.dp)
-        )
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(max = if (expanded) 320.dp else 140.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(LocalAkColors.surface1)
-                .verticalScroll(rememberPersistentScrollState())
-                .padding(AgentSpacing.space3)
-        ) {
-            SelectionContainer {
-                Text(
-                    text = shown,
-                    style = machineText,
-                    color = if (error) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurface
-                )
-            }
-        }
-        if (collapsed) {
-            Spacer(Modifier.height(AgentSpacing.space1))
-            AkTextButton(
-                text = if (expanded) "收起"
-                else "展开全部（共 ${lines.size} 行 / ${text.length} 字）",
-                onClick = { expanded = !expanded }
-            )
-        }
-    }
-}
-
-/** 工具结果折叠阈值：超过任一即折叠。20 行 / 600 字 ≈ 一屏内可扫完的量。 */
-private const val COLLAPSE_LINES = 20
-private const val COLLAPSE_CHARS = 600
 
 /**
  * 审批等待秒数，由 [APPROVAL_TIMEOUT_MS] 派生（不单独写数字）。10s 实测不够——读命令、

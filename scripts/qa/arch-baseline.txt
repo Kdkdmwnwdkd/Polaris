@@ -219,7 +219,7 @@ lines app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt 3245
 # 不是「顺手拆文件」——是修死路：旧实现只查模型装没装，没权限时面板里只有一行红字，
 # 而本应用设置页里根本没有「麦克风」可点。拆出去后 ChatScreen 只留一行调用，
 # 闸门本身（模型 / 授权 / 永久拒绝三条出路）可独立判据。
-lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 3053
+lines app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt 2747
 lines app/src/main/java/com/beichen/polaris/ui/ModelConfigScreen.kt 2469
 # 2026-11-23 下调（RealAgentLoop 1409 → 1399）：系统提示的**分段决策**搬到
 # core/SystemPromptPlan.kt（78 行）。不是为了行数，是为了判据：
