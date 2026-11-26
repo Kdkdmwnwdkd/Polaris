@@ -22,18 +22,11 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Bolt
-import androidx.compose.material.icons.outlined.Bookmark
-import androidx.compose.material.icons.outlined.Build
-import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Palette
@@ -650,52 +643,6 @@ fun SettingsScreen(
                             Toast.LENGTH_LONG
                         ).show()
                     }
-                )
-            }
-
-            // —— 工具：从抽屉搬来的常用入口（用户反馈侧边栏拥挤，参照 RikkaHub 收纳）——
-            AkGroup(
-                title = "工具"
-            ) {
-                AkListItem(
-                    icon = Icons.Outlined.Cloud,
-                    title = "模型配置",
-                    onClick = { onNavigate(AppDest.MODEL) }
-                )
-                AkListItem(
-                    icon = Icons.Outlined.Apps,
-                    title = "容器",
-                    onClick = { onNavigate(AppDest.CONTAINER) }
-                )
-                AkListItem(
-                    icon = Icons.Outlined.Edit,
-                    title = "编辑器",
-                    onClick = { onNavigate(AppDest.EDITOR) }
-                )
-                AkListItem(
-                    icon = Icons.Outlined.AutoAwesome,
-                    title = "提示词库",
-                    onClick = { onNavigate(AppDest.PROMPTS) }
-                )
-                AkListItem(
-                    icon = Icons.Outlined.Bookmark,
-                    title = "收藏",
-                    onClick = { onNavigate(AppDest.BOOKMARKS) }
-                )
-                AkListItem(
-                    icon = Icons.Outlined.Extension,
-                    title = "MCP",
-                    onClick = { onNavigate(AppDest.MCP) }
-                )
-                AkListItem(
-                    icon = Icons.Outlined.Image,
-                    title = "创作工坊",
-                    onClick = { onNavigate(AppDest.MEDIA) }
-                )
-                AkListItem(
-                    icon = Icons.Outlined.Build,
-                    title = "构建",
-                    onClick = { onNavigate(AppDest.BUILD) }
                 )
             }
 

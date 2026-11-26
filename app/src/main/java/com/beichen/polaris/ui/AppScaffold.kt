@@ -48,6 +48,8 @@ import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Description
@@ -115,6 +117,23 @@ import java.util.Calendar
  */
 private val PrimaryGroup = listOf(
     AppDest.CHAT, AppDest.MODEL, AppDest.CONSOLE, AppDest.TERMINAL, AppDest.WORKFLOW
+)
+
+/**
+ * 抽屉「功能」折叠组：低频但完整的页面（2026-11-26）。
+ *
+ * 起因是一条结构问题：抽屉曾因「拥挤」从 8 项砍到 4 项，砍掉的入口全部下沉进设置页，
+ * 于是设置页长出了「工具」组——模型配置 / 容器 / 编辑器 / 提示词库 / 收藏 / MCP /
+ * 创作工坊 / 构建，**没有一项是设置**，全是功能页。设置页于是在替导航打工，
+ * 25 个页面里 20 个只能从它索引过去。
+ *
+ * 这里把功能页收回抽屉，但不回到拥挤：默认收起，只占一行分组标题；
+ * 展开才铺开 7 项。模型配置不在其中——它就是 [PrimaryGroup] 里的「模型」，
+ * 一个页面挂两个名字是纯冗余。
+ */
+private val FeatureGroup = listOf(
+    AppDest.CONTAINER, AppDest.EDITOR, AppDest.PROMPTS, AppDest.BOOKMARKS,
+    AppDest.MCP, AppDest.MEDIA, AppDest.BUILD
 )
 
 /**
@@ -798,6 +817,8 @@ private fun DrawerContent(
     var deleteConvId by remember { mutableStateOf<String?>(null) }
     // hotfix30：删除在途会话的 Toast 反馈（VM 静默拒绝，UI 补一句人话）
     val context = LocalContext.current
+    // 「功能」折叠组是否展开（每次拉开抽屉都重置为收起，理由见调用处注释）
+    var featuresOpen by remember { mutableStateOf(false) }
 
     // 设置入口固定在底部，不随「最近对话」条数下移。
     //
@@ -844,6 +865,29 @@ private fun DrawerContent(
                     modifier = if (item == PrimaryGroup.first() && firstItemFocus != null)
                         Modifier.focusRequester(firstItemFocus) else Modifier
                 )
+            }
+
+            // 「功能」折叠组：收起时只占一行，展开才铺开（见 FeatureGroup 注释）。
+            //
+            // 状态不 rememberSaveable：抽屉关掉再打开应当回到收起态。
+            // 保留下来的话，用户展开过一次之后，每次拉开抽屉都要先看到 7 行功能页，
+            // 最近对话被顶到第三屏——那正是当初「拥挤」的形态。
+            Spacer(Modifier.height(AgentSpacing.space2))
+            DrawerSectionToggle(
+                text = "功能",
+                count = FeatureGroup.size,
+                expanded = featuresOpen,
+                onClick = { featuresOpen = !featuresOpen }
+            )
+            if (featuresOpen) {
+                FeatureGroup.forEach { item ->
+                    DrawerItem(
+                        dest = item,
+                        isSelected = dest == item,
+                        talkBack = item.label,
+                        onClick = { onSelect(item) }
+                    )
+                }
             }
 
             // 功能三：最近对话组（录屏反馈「人家都有聊天记录对话记录，你这都没有」）。
@@ -1354,6 +1398,66 @@ private fun DrawerGroupTitle(text: String, trailing: (@Composable () -> Unit)? =
             modifier = Modifier.weight(1f)
         )
         trailing?.invoke()
+    }
+}
+
+/**
+ * 抽屉里可展开的分组标题（当前只有「功能」用它）。
+ *
+ * 字与 [DrawerGroupTitle] 同一套（11sp + 1.2sp 字距），所以它读起来仍是目录小标题；
+ * 但整行可点，右侧多给「7 ›」——数字说明里面有几项，箭头说明能展开。
+ * 两件事都得有：只写「功能」的话，收起态看起来就是一行没有下文的标题，
+ * 用户不知道这里藏了东西。
+ *
+ * 触控高度按 48dp 兜底，与 [DrawerItem] 的 52dp 不同高——它是标题不是条目，
+ * 但手指落点不能比条目小太多。
+ */
+@Composable
+private fun DrawerSectionToggle(
+    text: String,
+    count: Int,
+    expanded: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(
+                start = AgentSpacing.space5,
+                end = AgentSpacing.space4,
+                top = AgentSpacing.space1,
+                bottom = AgentSpacing.space1
+            )
+            .semantics {
+                contentDescription = if (expanded) "$text，$count 项，已展开" else "$text，$count 项，已收起"
+            },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                letterSpacing = 1.2.sp,
+                fontWeight = FontWeight.Medium
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = count.toString(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        )
+        Icon(
+            imageVector = if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            modifier = Modifier.size(18.dp)
+        )
     }
 }
 
