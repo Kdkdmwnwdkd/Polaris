@@ -3,8 +3,10 @@ package com.beichen.polaris.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -126,6 +128,10 @@ fun LogsScreen(vm: LogsContract) {
     // 未读崩溃文件名。单条粒度而不是整页一个布尔：用户可能只想看最新那次，
     // 一进页面就全标已读，会让更早的几条悄悄失去提示（下次崩溃时他以为只有一条）。
     var unseenCrashNames by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // 崩溃区块默认折叠（2026-11-27 真机：连续 10 次崩溃时，10 条记录把整屏占满，
+    // 「导出日志 / 诊断包 / 删除」被顶到第二屏，用户以为按钮没了——他正是来取证的）。
+    // 折叠后这一块只占标题 + 一行动作，「复制全部」就在那行上，不用先展开任何一条。
+    var crashBlockOpen by rememberSaveable { mutableStateOf(false) }
 
     /** 重新扫描崩溃目录，并把崩溃记录回放到 AgentLogger（此刻日志目录已就绪，可落盘）。 */
     fun reloadCrashes() {
@@ -228,6 +234,8 @@ fun LogsScreen(vm: LogsContract) {
                 unseen = unseenCrashNames,
                 dirPath = crashDirPath,
                 expandedName = crashExpanded,
+                blockOpen = crashBlockOpen,
+                onToggleBlock = { crashBlockOpen = !crashBlockOpen },
                 onToggle = { name ->
                     crashExpanded = if (crashExpanded == name) "" else name
                     // 展开即视为看过，且只标记这一条——这是 markSeen 与 markAllSeen 的分工：
@@ -560,6 +568,9 @@ private fun CrashSection(
     unseen: Set<String> = emptySet(),
     dirPath: String,
     expandedName: String,
+    /** 区块是否展开。默认折叠——崩溃一多，这一块会把「导出日志 / 诊断包」顶出屏幕。 */
+    blockOpen: Boolean = false,
+    onToggleBlock: () -> Unit = {},
     onToggle: (String) -> Unit,
     onClear: () -> Unit
 ) {
@@ -574,73 +585,129 @@ private fun CrashSection(
         },
         modifier = Modifier.padding(horizontal = AgentSpacing.space5)
     ) {
-        records.forEachIndexed { index, record ->
-            val expanded = expandedName == record.fileName
-            AkPressSurface(
-                onClick = { onToggle(record.fileName) },
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(Modifier.fillMaxWidth().padding(AgentSpacing.space3)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // 未读红点：崩溃是低频事件，列表可能只有两三条，光看时间分不出
-                        // 「哪条是我上次看过的」。点开即消，和阅读器的未读逻辑一致。
-                        if (record.fileName in unseen) {
-                            AkStatusDot(MaterialTheme.colorScheme.error, 6.dp)
-                            Spacer(Modifier.width(AgentSpacing.space2))
-                        }
-                        Text(
-                            text = formatCrashClock(record.timeMs),
-                            style = machineSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.width(AgentSpacing.space2))
-                        Text(
-                            text = record.exceptionType.substringAfterLast('.'),
-                            style = machineSmall.copy(fontWeight = FontWeight.SemiBold),
-                            color = MaterialTheme.colorScheme.error,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
+        if (records.isNotEmpty()) {
+            // 常驻动作行：折叠状态下也在第一屏。
+            // 2026-11-27 真机：连续 10 次崩溃把整屏占满，「导出日志 / 诊断包 / 删除」被顶到
+            // 第二屏，用户以为按钮没了——而他来这一页正是为了把证据拿出去。
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AkTextButton(
+                    text = "复制全部崩溃",
+                    icon = Icons.Outlined.ContentCopy,
+                    tint = MaterialTheme.colorScheme.error,
+                    onClick = {
+                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("北辰 崩溃报告", CrashLogger.digest(records)))
+                        Toast.makeText(ctx, "已复制 ${records.size} 次崩溃全文", Toast.LENGTH_SHORT).show()
                     }
-                    Spacer(Modifier.height(AgentSpacing.space1))
-                    Text(
-                        text = record.summary,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = if (expanded) Int.MAX_VALUE else 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (expanded) {
-                        Spacer(Modifier.height(AgentSpacing.space2))
-                        Text(
-                            text = record.text.ifBlank { "（报告为空）" },
-                            style = machineSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(AgentSpacing.space1))
-                        AkTextButton(
-                            text = "复制全文",
+                )
+                Spacer(Modifier.weight(1f))
+                AkTextButton(
+                    text = if (blockOpen) "收起" else "展开（${records.size}）",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    onClick = onToggleBlock
+                )
+            }
+        }
+        if (blockOpen) {
+            records.forEachIndexed { index, record ->
+                val expanded = expandedName == record.fileName
+                Column(Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.Top) {
+                        AkPressSurface(
+                            onClick = { onToggle(record.fileName) },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(Modifier.fillMaxWidth().padding(AgentSpacing.space3)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    // 未读红点：崩溃是低频事件，列表可能只有两三条，光看时间分不出
+                                    // 「哪条是我上次看过的」。点开即消，和阅读器的未读逻辑一致。
+                                    if (record.fileName in unseen) {
+                                        AkStatusDot(MaterialTheme.colorScheme.error, 6.dp)
+                                        Spacer(Modifier.width(AgentSpacing.space2))
+                                    }
+                                    Text(
+                                        text = formatCrashClock(record.timeMs),
+                                        style = machineSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.width(AgentSpacing.space2))
+                                    Text(
+                                        text = record.exceptionType.substringAfterLast('.'),
+                                        style = machineSmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = MaterialTheme.colorScheme.error,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                Spacer(Modifier.height(AgentSpacing.space1))
+                                Text(
+                                    text = record.summary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = if (expanded) Int.MAX_VALUE else 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        // 常驻复制：不依赖展开，也不在长文本下面。
+                        // 真机反馈「我要去复制，它都不给我复制，直接跳去那一堆报错」——
+                        // 原来只有一个「复制全文」，排在展开后上百行堆栈的最末尾，
+                        // 既点不到，点空白处又触发了折叠，看起来就像被弹回列表。
+                        AkCircleIconButton(
                             icon = Icons.Outlined.ContentCopy,
+                            description = "复制这条崩溃报告",
+                            tint = MaterialTheme.colorScheme.error,
+                            visualSize = 40.dp,
+                            iconSize = 18.dp,
                             onClick = {
                                 val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                cm.setPrimaryClip(ClipData.newPlainText("北辰 崩溃报告", record.text))
+                                cm.setPrimaryClip(
+                                    ClipData.newPlainText(
+                                        "北辰 崩溃报告",
+                                        record.text.ifBlank { record.summary }
+                                    )
+                                )
+                                Toast.makeText(ctx, "已复制这条崩溃全文", Toast.LENGTH_SHORT).show()
                             }
                         )
                     }
+                    if (expanded) {
+                        // 全文限高 + 自身滚动：堆栈动辄上百行，不限高会把「清空 / 下一条」
+                        // 推到几屏之外，展开一次就像整页跳走了。
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 220.dp)
+                                .verticalScroll(rememberScrollState())
+                                .padding(
+                                    start = AgentSpacing.space3,
+                                    end = AgentSpacing.space3,
+                                    bottom = AgentSpacing.space2
+                                )
+                        ) {
+                            Text(
+                                text = record.text.ifBlank { "（报告为空）" },
+                                style = machineSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    if (index != records.lastIndex) Spacer(Modifier.height(AgentSpacing.space1))
                 }
             }
-            if (index != records.lastIndex) Spacer(Modifier.height(AgentSpacing.space1))
+            Spacer(Modifier.height(AgentSpacing.space1))
+            AkTextButton(
+                text = "清空崩溃记录",
+                icon = Icons.Outlined.Delete,
+                tint = MaterialTheme.colorScheme.error,
+                onClick = onClear
+            )
         }
-        Spacer(Modifier.height(AgentSpacing.space1))
-        AkTextButton(
-            text = "清空崩溃记录",
-            icon = Icons.Outlined.Delete,
-            tint = MaterialTheme.colorScheme.error,
-            onClick = onClear
-        )
     }
 }
+
 
 /**
  * 关键词搜索行（2026-11-25）。

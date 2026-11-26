@@ -127,8 +127,7 @@ object CrashLogger {
     }
 
     /**
-     * 把已存在的崩溃文件回放到 [AgentLogger]（WARN 级，带摘要与首行堆栈）。
-     *
+     * 把已存在的崩溃文件回放到 [AgentLogger]（WARN 级，带摘要与首行堆栈）。     *
      * Application.onCreate 时日志目录尚未就绪（由 ViewModel 初始化），故本方法
      * **可重复调用**：日志页进入时再调一次，回放内容即可随当日日志落盘。
      *
@@ -254,6 +253,29 @@ object CrashLogger {
     /** 是否存在未查看崩溃（启动横幅判据）；读取失败 → false（静默降级，不打扰）。 */
     fun hasUnseen(context: Context): Boolean =
         runCatching { unseenCrashRecords(context).isNotEmpty() }.getOrDefault(false)
+
+    /**
+     * 把若干条崩溃记录拼成一段可直接粘贴的文本（**纯函数，无 IO**，可被 JVM harness 断言）。
+     *
+     * 为什么单点定义：横幅的「复制」和日志页的「复制全部崩溃」必须给出**一模一样**的内容，
+     * 否则用户从两处复制到的东西不同，排查时要在两份之间对时间戳。
+     *
+     * 分隔线带文件名、时间与异常类型：十份堆栈连成一片时，最先要看的
+     * 「第一次崩在哪」会被埋掉；有了分隔线，一眼能定位到最早那份。
+     */
+    fun digest(records: List<CrashRecord>): String = buildString {
+        appendLine("北辰崩溃报告 · 共 ${records.size} 条")
+        for (r in records) {
+            appendLine()
+            appendLine("===== ${r.fileName} · ${digestStamp(r.timeMs)} · ${r.exceptionType} =====")
+            appendLine(r.text.ifBlank { r.summary })
+        }
+    }
+
+    /** 崩溃时间戳（`MM-dd HH:mm:ss`）：与日志页的 [CrashRecord] 行保持同一口径。 */
+    private fun digestStamp(timeMs: Long): String = runCatching {
+        java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date(timeMs))
+    }.getOrDefault("-")
 
     /**
      * 把**当前仍存在**的全部崩溃文件标记为已读（横幅「查看」/「关闭」时调用）。
@@ -456,6 +478,41 @@ object CrashLogger {
      *
      * @return 崩溃报告是否成功写盘（false 时崩溃仍会照常交给原 handler）。
      */
+    /**
+     * 记录一条**已被上层捕获**的致命失败（2026-11-27：ViewModel 构造失败取证）。
+     *
+     * 为什么需要它：框架会把构造异常包成一层
+     * `RuntimeException: Cannot create an instance of class X`，而这份包装异常的
+     * `message` 不含原因——真正的原因只在 `cause` 链里。崩溃处理器打的是包装异常，
+     * 屏幕上「最近崩溃」也就只显示那一句，看起来像「什么都没说」。
+     *
+     * 本函数把调用方手里的异常**原样**（含 cause 链、`stackTraceToString` 会展开
+     * `Caused by:`）写成一份标准崩溃报告，因此：
+     *  - 它出现在日志页「最近崩溃」里，可被「复制全部崩溃」带走；
+     *  - 与 handler 写出的报告同一套格式、同一份保留策略（[MAX_KEEP]）。
+     *
+     * 写入失败返回 false，绝不抛——调用点通常正在处理一次失败，不能二次崩溃。
+     */
+    fun recordCaught(context: Context, tag: String, throwable: Throwable): Boolean {
+        val app = runCatching { context.applicationContext }.getOrDefault(context)
+        val dir = crashDir ?: File(app.filesDir, DIR_NAME).also { crashDir = it }
+        val report = runCatching {
+            formatReport(
+                timeMs = System.currentTimeMillis(),
+                threadName = "${Thread.currentThread().name} · $tag",
+                throwable = throwable,
+                info = deviceInfo
+            )
+        }.getOrNull() ?: return false
+        val ok = writeReportSync(dir, report)
+        if (ok) {
+            runCatching {
+                AgentLogger.e("CrashLogger", "$tag：${throwable.javaClass.simpleName}（已写入崩溃报告，含 cause 链）")
+            }
+        }
+        return ok
+    }
+
     internal fun dispatch(
         thread: Thread,
         throwable: Throwable,

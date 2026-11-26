@@ -1,6 +1,9 @@
 package com.beichen.polaris.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.widget.Toast
 import android.provider.Settings
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
@@ -1211,11 +1214,28 @@ internal fun AkCrashBanner(
                     color = ak.onWarningContainer
                 )
                 Text(
-                    text = "共 ${unseen.size} 次，点击「最近崩溃」查看",
+                    text = "共 ${unseen.size} 次",
                     style = MaterialTheme.typography.bodySmall,
                     color = ak.onWarningContainer
                 )
             }
+            // 「复制」必须在这里，不能只放在日志页里（2026-11-27 真机）：
+            // 用户当时的处境是「每条都崩、想复制却点不到」——横幅是他唯一确定能看见的东西，
+            // 一键把全文落下，才不用先跳页面、再展开、再在百行堆栈里找按钮。
+            AkTextButton(
+                text = "复制",
+                tint = ak.onWarningContainer,
+                onClick = {
+                    val text = runCatching { CrashLogger.digest(unseen) }.getOrNull()
+                    if (text.isNullOrBlank()) {
+                        Toast.makeText(ctx, "崩溃报告读取失败", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("北辰 崩溃报告", text))
+                        Toast.makeText(ctx, "已复制 ${unseen.size} 次崩溃全文", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            )
             AkTextButton(
                 text = "查看",
                 tint = ak.onWarningContainer,

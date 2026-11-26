@@ -477,7 +477,12 @@
 #   依据是 run 45319884795：PASS=167 SKIP=0 XFAIL=0 FAIL=0，GATE PASS。
 #   （任务书里写的 168 是手数 runner 文件得到的，与 gate 汇总的 PASS 口径差 1；
 #     这里以 gate 实际读到的那个数为准，否则门禁 5 会对不上。）
-167
+168
+# 2026-11-26：167 → 168（StartupGuard 启动自救）。
+#   新增 run-startup-guard-verification.sh（纯 JVM 跑判定与隔离，4 组变异全部靶向精确）。
+#   依据是 run 911（提交 0cb363b）：PASS=168 SKIP=0 XFAIL=0 FAIL=0，GATE PASS。
+#   同一轮 gate 就提示过「PASS 高于基线 167」，这里补上——基线低一格会让门禁 5
+#   每次都提示一句，提示多了就等于没有提示。
 # 143（2026-11-14 语音识别能力判定）：+ run-speech-capability-verification.sh
 #   [A] 29 条结构断言（判定表在 core 且零 Android 依赖、两条语音入口都调它、
 #   共用同一个探测实现、清单声明了识别服务可见性、两边都用 BCP-47 语言标签、

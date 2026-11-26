@@ -1,5 +1,6 @@
 package com.beichen.polaris
 
+import android.app.Application
 import android.content.Intent
 import android.os.Bundle
 import android.view.ViewTreeObserver
@@ -13,7 +14,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import com.beichen.polaris.core.CrashLogger
 import com.beichen.polaris.browser.BrowserHost
 import com.beichen.polaris.pet.PetState
 import com.beichen.polaris.startup.StartupGuard
@@ -24,6 +29,29 @@ import com.beichen.polaris.ui.ApprovalHost
 import com.beichen.polaris.ui.ChatViewModel
 import com.beichen.polaris.ui.ThemeMode
 import com.beichen.polaris.workflow.WorkflowNotifier
+
+/**
+ * ChatViewModel 的显式工厂（2026-11-27 真机取证）。
+ *
+ * 换掉默认工厂的理由只有一个：**让构造失败留下原因**。
+ * 默认工厂抛的是 `RuntimeException: Cannot create an instance of class ChatViewModel`，
+ * 真正的原因藏在 `cause` 链里；而崩溃处理器打的是这个包装异常，日志页也就只显示这一句。
+ * 用户把报告发过来，看到的仍然是「建不出来」——等于没证据。
+ *
+ * 这里把异常原样写成一份标准崩溃报告（`stackTraceToString` 会展开 `Caused by:`），
+ * 然后**重新抛出**：该崩还是崩，行为与默认工厂一致，只是这次崩得能查。
+ */
+private val chatVmFactory = viewModelFactory {
+    initializer {
+        val app = this[APPLICATION_KEY] as Application
+        try {
+            ChatViewModel(app)
+        } catch (t: Throwable) {
+            runCatching { CrashLogger.recordCaught(app, "ChatViewModel 构造失败", t) }
+            throw t
+        }
+    }
+}
 
 class MainActivity : ComponentActivity() {
 
@@ -144,7 +172,7 @@ private fun AgentKitApp(
     val themeMode = AppearanceState.themeMode
     val dynamicColor = AppearanceState.dynamicColor
     val accent = AppearanceState.accent
-    val vm = viewModel<ChatViewModel>()
+    val vm = viewModel<ChatViewModel>(factory = chatVmFactory)
     // 启动自救的第二个事实：**根组合成功**。LaunchedEffect 在整棵树组合并应用变更后
     // 才启动，所以子组件（ChatScreen）抛异常时它不会跑——正是「这次没起来」的语义。
     // 少了这一步，StartupGuard 只会看到「每次都开始了、永远没成功」，把正常使用也隔离掉。
