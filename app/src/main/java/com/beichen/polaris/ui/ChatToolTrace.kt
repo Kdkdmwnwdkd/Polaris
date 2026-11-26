@@ -96,6 +96,14 @@ internal data class TraceStep(
     val detail: String,
     val state: TraceState,
     val isThinking: Boolean,
+    /**
+     * 非故障终态的文字说明：「已中断」「已拒绝」。
+     *
+     * 这两态与「跑完了」共用中性色（见 [TraceState.NEUTRAL]），只靠颜色区分的话
+     * 用户看不出这一步是没跑完、还是被自己拒绝了——旧 `ToolStatus` 有文案，
+     * 收成一行时漏掉了，等于把「为什么没有结果」这个信息弄丢。
+     */
+    val note: String? = null,
     /** 工具返回的图片（data URL）。它是产物不是过程，收起时也照常显示。 */
     val images: List<String> = emptyList()
 )
@@ -110,6 +118,8 @@ internal data class TraceRun(
     val steps: List<TraceStep>,
     val toolCount: Int,
     val failedCount: Int,
+    /** 被中断的步数：它不是失败，但「没跑完」得让用户在收起态也看得见。 */
+    val interruptedCount: Int,
     val running: Boolean,
     val absorbedThinking: Int
 )
@@ -155,6 +165,7 @@ internal fun traceRunAt(messages: List<UiItem>, index: Int): TraceRun? {
         steps = steps,
         toolCount = tools.size,
         failedCount = tools.count { toolState(it) == TraceState.FAILED },
+        interruptedCount = tools.count { it.interrupted },
         running = tools.any { it.running },
         absorbedThinking = absorbed
     )
@@ -197,6 +208,12 @@ private fun toolStep(t: UiItem.Tool): TraceStep = TraceStep(
     },
     state = toolState(t),
     isThinking = false,
+    // 文案与状态同源：判据和 toolState() 用同一对条件，不各写一遍。
+    note = when {
+        t.interrupted -> "已中断"
+        t.isError && t.result.contains("用户拒绝了") -> "已拒绝"
+        else -> null
+    },
     images = t.images
 )
 
@@ -498,6 +515,16 @@ private fun StepRow(step: TraceStep, open: Boolean, onClick: () -> Unit) {
             } else {
                 Spacer(Modifier.weight(1f))
             }
+            // 「已中断」「已拒绝」：收起态也要说得清这一步为什么没有结果。
+            step.note?.let {
+                Spacer(Modifier.width(AgentSpacing.space2))
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
         }
         if (open && step.detail.isNotBlank()) {
             DetailBlock(
@@ -538,6 +565,8 @@ private fun DetailBlock(text: String, modifier: Modifier = Modifier) {
 private fun headline(run: TraceRun): String = when {
     run.running -> "正在执行"
     run.failedCount > 0 -> "${run.toolCount} 个工具 · ${run.failedCount} 个失败"
+    // 中断不是失败，但也不能显示成「跑完了」：收起态一行里就要能看出来。
+    run.interruptedCount > 0 -> "${run.toolCount} 个工具 · 已中断"
     else -> "${run.toolCount} 个工具"
 }
 

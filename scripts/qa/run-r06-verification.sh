@@ -106,6 +106,7 @@ echo ""
 echo "[G] 接线与文案单点"
 VM=app/src/main/java/com/beichen/polaris/ui/ChatViewModel.kt
 SCREEN=app/src/main/java/com/beichen/polaris/ui/ChatScreen.kt
+TRACE=app/src/main/java/com/beichen/polaris/ui/ChatToolTrace.kt
 UIITEM=core/src/main/java/com/beichen/polaris/core/UiItem.kt
 
 if grep -q 'onSettling = { owner -> projection.settleInterrupted(owner) },' "$VM"; then
@@ -114,16 +115,22 @@ else
   g_bad "G1 ChatViewModel 没接 onSettling —— 收口函数写好了但没人调用"
 fi
 
-if grep -q 'interrupted -> ToolStatus.INTERRUPTED' "$SCREEN"; then
-  g_good "G2 中断态在 status() 里单列（不混进「已失败」）"
+# 2026-11-26：工具卡收成一行「过程轨迹」，状态分发从 ChatScreen.ToolStatus 搬到
+# ChatToolTrace.toolState()。判的是**同一件事**——中断单列成中性态、不混进「已失败」，
+# 只是不再叫 ToolStatus。别的地方没松：下面 G5 仍然盯着落库那行。
+if grep -q 't.interrupted -> TraceState.NEUTRAL' "$TRACE"; then
+  g_good "G2 中断态在 toolState() 里单列（不混进「已失败」）"
 else
-  g_bad "G2 ChatScreen 缺 interrupted 分支 —— 中断卡会被渲染成已完成/已失败"
+  g_bad "G2 缺 interrupted 分支 —— 中断卡会被渲染成已完成/已失败"
 fi
 
-if grep -q 'ToolStatus.INTERRUPTED -> .*to "已中断"' "$SCREEN"; then
-  g_good "G3 状态文案「已中断」+ 中性色（颜色与文案同源）"
+# 这条不是「跟着实现改」，是补一次真丢的：搬到新文件时 NEUTRAL 只剩一个灰点，
+# 「已中断」「已拒绝」的文案没跟过来，用户看不出这步为什么没有结果。
+if grep -q 't.interrupted -> "已中断"' "$TRACE" &&
+   grep -q 'step.note?.let' "$TRACE"; then
+  g_good "G3 状态文案「已中断」有渲染出口（note 字段进 StepRow）"
 else
-  g_bad "G3 ChatScreen 缺「已中断」文案"
+  g_bad "G3 缺「已中断」文案或没有渲染出口"
 fi
 
 if grep -q 'val interrupted: Boolean = false' "$UIITEM"; then
