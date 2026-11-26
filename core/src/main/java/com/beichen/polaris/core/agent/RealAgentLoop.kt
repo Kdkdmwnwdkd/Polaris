@@ -321,7 +321,7 @@ class RealAgentLoop(
         images: List<String>,
         priorMessages: List<ChatMessage>
     ): List<ChatMessage> {
-        AgentLogger.i("AgentLoop", "开始运行，输入：${userInput.take(120)}（历史 ${priorMessages.size} 条）")
+        AgentLogger.i("AgentLoop", "开始运行，输入：${userInput.take(120)}（共 ${userInput.length} 字；历史 ${priorMessages.size} 条）") // 「共 N 字」= 截断的证据，否则日志里只剩「device_n」这种残词
         // W-8：熔断状态回合作用域化——上一回合的失败指纹（含 service_not_ready
         // 瞬时故障累加）绝不被本轮继承；回合内跨批次保留，防同参打转的本意不变。
         failureGuard.resetForTurn()

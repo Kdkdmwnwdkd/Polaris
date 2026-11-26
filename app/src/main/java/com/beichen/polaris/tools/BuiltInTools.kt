@@ -211,11 +211,16 @@ class HttpRequestTool(
                             is RedirectPolicy.Redirect.Stop -> return@withContext ToolResult.fail(
                                 code = "http_redirect_stopped",
                                 message = "⛔ ${d.reason}",
+                                // 这条 hint 是模型撞墙后唯一能读到的东西，所以必须给出**下一步**。
+                                // 2026-11-26 真机：模型想「搜一下」，手拼了搜索引擎地址打这个工具，
+                                // 跨域名跳转被拦下，hint 只说「对目标地址再发一次」——它就再发一次，
+                                // 又一次审批、又一次被拦。搜索该走 web_search（在 net 组，直接可见），
+                                // 读页面正文该走 web_open（web 组，需先 __use_tools）。
                                 hint = if (d.target != null) {
-                                    "若确实需要该地址，请对 ${d.target} 单独发起一次 http_request" +
-                                        "（会重新走审批）。"
+                                    "若确实需要该地址，请对 ${d.target} 单独发起一次 http_request（会重新走审批）。" +
+                                        "若目的是搜索，直接用 web_search；要读网页正文用 web_open（需先 __use_tools web）。"
                                 } else {
-                                    "改用最终地址直接请求，或检查服务端重定向配置。"
+                                    "改用最终地址直接请求，或检查服务端重定向配置。搜索用 web_search，读正文用 web_open。"
                                 }
                             )
                         }

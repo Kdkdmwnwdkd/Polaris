@@ -124,13 +124,21 @@ object ToolCatalog {
         // 一条零弹窗的取数 + 外发链。这里补审批归组，判定按**域名**粒度（见 ApprovalScope），
         // 同一个域名只问一次，不至于把正常联网查询拖成十几次弹窗。
         CatalogTool("http_request", "net", Capability.PRIVILEGED, Approval.NETWORK),
+        // 2026-11-26：`web_search` 从 web 组挪来。它一次 WebView 都不碰——走的是 OkHttp
+        // 拉 Bing/DDG 的 HTML 再自己解析（见 WebSearchTool 头注释），放在「浏览器前进后退、
+        // 点击、填表」那个组里是错位。
+        //
+        // 真机日志里这么现形的：默认只启用 file/net/app，模型想「搜一下」时手拼了一个
+        // 搜索引擎地址打 http_request，撞上跨域名跳转拦截（RedirectPolicy 只跟同 host），
+        // 于是搜索这件事在默认配置下根本走不通——组说明写着「网页抓取」，组里却没有一条
+        // 能抓网页的工具。挪到 net 后，说明与成员才对得上。
+        CatalogTool("web_search", "net", Capability.PRIVILEGED),
         // ── web：浏览器前进后退、点击、填表
         CatalogTool("web_open", "web", Capability.PRIVILEGED),
         CatalogTool("web_snapshot", "web", Capability.PRIVILEGED),
         CatalogTool("web_click", "web", Capability.DANGEROUS),
         CatalogTool("web_type", "web", Capability.DANGEROUS),
         CatalogTool("web_eval", "web", Capability.DANGEROUS),
-        CatalogTool("web_search", "web", Capability.PRIVILEGED),
         // ── app：安装卸载启停应用
         CatalogTool("app_install", "app", Capability.DANGEROUS, Approval.APP_MANAGE),
         CatalogTool("app_uninstall", "app", Capability.DANGEROUS, Approval.APP_MANAGE),

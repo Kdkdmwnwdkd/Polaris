@@ -106,7 +106,11 @@ object NotificationDigest {
         sb.append("- 最近通知：")
         sb.append(body.joinToString("、"))
         sb.append('\n')
-        sb.append("  （这里只有来源与条数，没有正文。需要内容请调用 device_notifications，")
+        // 2026-11-26：这句话此前点名 `device_notifications`，却没说它在哪。
+        // `device` 组默认不启用（默认只有 file/net/app），模型照着这句话去调，
+        // 拿到的是 unknown_tool —— 提示指了一个当前够不着的工具。补一句怎么够到它。
+        sb.append("  （这里只有来源与条数，没有正文。需要内容请调用 device_notifications")
+        sb.append("（工具表里没有它，就先 __use_tools 启用 device 组），")
         sb.append("并用 packages 指明是哪个应用——不指明就是读全部应用，会向用户申请授权。）")
         return sb.toString()
     }

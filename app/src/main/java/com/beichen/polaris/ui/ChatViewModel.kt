@@ -1610,6 +1610,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     override fun removeBackupKey(id: String) = keyPool.removeBackupKey(id)
 
+    private var lastClientSignature = "" // 「主客户端」去重键（provider|model|base）：同值不重复打
+
     /**
      * 主模型客户端（W-31 抽出，主循环与子代理共用）。
      *
@@ -1618,14 +1620,13 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
      */
     private fun buildMainClient(): LLMClient {
         val c = _config.value
-        // W-70：把「这一次到底走谁」写进日志。真机排查「明明切了本地却还在跑云端」时，
-        // 这是唯一能自证的一行——provider 是不是 local-llama、baseUrl 还残留着哪家。
-        AgentLogger.i(
-            "Chat",
-            "主客户端 provider=${c.providerId.ifBlank { "—" }} " +
-                "model=${c.model.ifBlank { "—" }} " +
-                "base=${c.baseUrl.ifBlank { "—" }}"
-        )
+        // W-70：把「这一次到底走谁」写进日志——排查「明明切了本地却还在跑云端」时唯一自证的一行。
+        // 2026-11-26：一回合会调本函数 5 次，同一行重复 5 遍占掉诊断包 19%，改成三元组变了才打。
+        val signature = "${c.providerId}|${c.model}|${c.baseUrl}"
+        if (signature != lastClientSignature) {
+            lastClientSignature = signature
+            AgentLogger.i("Chat", "主客户端 provider=${c.providerId.ifBlank { "—" }} model=${c.model.ifBlank { "—" }} base=${c.baseUrl.ifBlank { "—" }}")
+        }
         // W-21：每次取 client 前刷新备用 Key 池（增删/换档案即时生效）
         refreshKeyPool()
         return providerManager.create(

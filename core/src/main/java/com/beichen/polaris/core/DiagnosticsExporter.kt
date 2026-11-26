@@ -33,6 +33,9 @@ object DiagnosticsExporter {
     /** 单个崩溃现场的截断长度：现场文件只有几百字节，这个上限纯属防意外。 */
     private const val MAX_CRASH_CHARS = 4000
 
+    /** native 侧 dup2 接过来的 fd 2 落盘文件（整进程共用，不只推理库写）。 */
+    private const val STDERR_FILE = "native-stderr.txt"
+
     /** 回合日志目录名，与 `ChatViewModel.runJournal` 保持一致（两处硬编码必须同源）。 */
     private const val JOURNAL_DIR = "run-journal"
 
@@ -281,18 +284,37 @@ object DiagnosticsExporter {
         val candidates = listOf(
             NativeCrashMemory.archiveFile(context) to "上次崩溃（已归档）",
             File(dir, NativeCrashParser.FILE_NAME) to "待处理的崩溃现场",
-            File(dir, "native-stderr.txt") to "推理库 stderr（GGML_ASSERT 那行）",
+            File(dir, STDERR_FILE) to "进程 stderr",
         )
         val out = StringBuilder()
         for ((file, label) in candidates) {
             if (!file.isFile) continue
-            out.append("\u25b8 ").append(label).append("：").append(file.name)
-                .append("（").append(file.length()).append(" 字节）\n")
+            // 2026-11-26：标题先读内容再定。这份文件是**整个进程**的 fd 2（native 侧
+            // dup2 接过来的），不只推理库在写——WebView/Chromium 也往这里吐日志。
+            // 此前标题写死成「推理库 stderr（GGML_ASSERT 那行）」，真机包里贴出来的
+            // 却是 variations_seed_loader / net_helpers 两行 Chromium 日志，读的人
+            // 会以为本地模型断言崩过一次，而本地模型那段时间一次都没跑。
             val body = runCatching { file.readText() }.getOrDefault("")
+            val shown = if (file.name == STDERR_FILE) stderrLabel(body) else label
+            out.append("\u25b8 ").append(shown).append("：").append(file.name)
+                .append("（").append(file.length()).append(" 字节）\n")
             out.append(DiagnosticsRedaction.redact(body.take(MAX_CRASH_CHARS), secrets))
             if (!body.endsWith("\n")) out.append('\n')
         }
         return if (out.isEmpty()) "(无——本机还没发生过 native 崩溃，或已被「清空」删掉)" else out.toString()
+    }
+
+    /**
+     * stderr 那一节的标题：**按内容判**，不写死。
+     *
+     * 有 `GGML_ASSERT` 才是「推理库断言」；没有就如实说这里面不是它的输出。
+     * 一个诊断包的标题如果把「装包重启后的 WebView 噪音」说成「推理库崩溃」，
+     * 它比没有这一节更糟——排障会从错误的方向开始。
+     */
+    private fun stderrLabel(body: String): String = when {
+        body.contains("GGML_ASSERT") -> "推理库 stderr（含 GGML_ASSERT）"
+        body.isBlank() -> "进程 stderr（空）"
+        else -> "进程 stderr（未含 GGML_ASSERT —— 多为 WebView/Chromium 的输出）"
     }
 
     /** 调系统分享面板发送诊断文件。 */
