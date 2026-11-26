@@ -1807,9 +1807,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     running = true
                 )
                 // hotfix30：显示态只在 owner==active 时更新（切走期间只落盘）
-                if (isOwnerActive()) appendUiItem(item)
                 // 功能三：执行中态先落一条占位（终态到达后按 call.id 覆盖，见 ConversationStore.appendMessage）
-                appendToStore(item)
+                emitTo(item)
             }
 
             is AgentEvent.ToolFinished -> {
@@ -2426,8 +2425,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                             emptyReplyHint(hadTool),
                             timeMs = System.currentTimeMillis(), synthetic = true
                         )
-                        if (isOwnerActive()) appendUiItem(emptyItem)
-                        appendToStore(emptyItem)
+                        emitTo(emptyItem)
                         AgentLogger.w(
                             "Chat",
                             "本轮无任何文字回答（工具调用=${if (hadTool) "有" else "无"}），已补提示气泡"
@@ -2456,8 +2454,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                                 partial,
                                 timeMs = System.currentTimeMillis()
                             )
-                            if (isOwnerActive()) appendUiItem(partialItem)
-                            appendToStore(partialItem)
+                            emitTo(partialItem)
                             "⏹ 已停止。以上是停止前已生成的部分，可基于它继续提问。"
                         } else {
                             "⏹ 已停止。本次没有生成任何内容。"
@@ -2467,8 +2464,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                             timeMs = System.currentTimeMillis(), synthetic = true
                         )
                         // hotfix30：停止气泡只上屏当前显示的正是 owner 会话时（切走期间只落盘）
-                        if (isOwnerActive()) appendUiItem(stopItem)
-                        appendToStore(stopItem)
+                        emitTo(stopItem)
                         return@onFailure
                     }
                     AgentLogger.e("Chat", "运行失败", it)
@@ -2476,13 +2472,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     // 修前只有「用户点停止」这条路会抢救草稿，网络失败这条路直接连残稿一起丢。
                     partialDraft?.trim()?.takeIf { p -> p.isNotBlank() }?.let { p ->
                         val kept = UiItem.Assistant(p, timeMs = System.currentTimeMillis())
-                        if (isOwnerActive()) appendUiItem(kept)
-                        appendToStore(kept)
+                        emitTo(kept)
                     }
                     // 气泡面向用户：技术异常在此映射成可读文案（完整堆栈已在日志里落盘）
                     val errItem = UiItem.Assistant(friendlyMessage(it), timeMs = System.currentTimeMillis(), synthetic = true)
-                    if (isOwnerActive()) appendUiItem(errItem)
-                    appendToStore(errItem) // 功能三：失败气泡也进聊天记录
+                    emitTo(errItem) // 功能三：失败气泡也进聊天记录
                 }
                 // L9：把本轮对话沉淀成低权重 event 记忆，下次会话也能回忆起来
                 // （取消时 finalAnswer 为空，自然跳过）
@@ -2615,6 +2609,11 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
 
     /** 同步一条消息到会话存储（按 owner 落库，见 [ConversationProjection.appendToStore]）。 */
     private fun appendToStore(item: UiItem) = projection.appendToStore(item)
+
+    private fun emitTo(item: UiItem) { // owner 活跃才上屏；落盘无条件（hotfix30）
+        if (isOwnerActive()) appendUiItem(item)
+        appendToStore(item)
+    }
 
     /** 刷新会话摘要列表（每次增删改后调用；抽屉最近对话区与顶栏标题消费）。 */
     private fun refreshConversations() {
