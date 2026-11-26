@@ -131,7 +131,7 @@ echo "[C] 出站通道的覆盖面"
 # 而 read_file → web_open("…?d=" + 内容) 全程零弹窗（web_* 在 ToolCatalog 里免审批）。
 EGRESS_SET=$(awk '/val DEFAULT_EGRESS_TOOLS/,/^        \)$/' "$EGRESS")
 for t in web_search web_open web_eval web_click web_type; do
-  if grep -q "\" <<<"$EGRESS_SET"$t\""; then
+  if grep -q "\"$t\"" <<<"$EGRESS_SET"; then
     pass "C1 出站通道包含 $t"
   else
     fail "C1 出站通道漏了 $t —— 它免审，可以直接把刚读到的内容送出去"
