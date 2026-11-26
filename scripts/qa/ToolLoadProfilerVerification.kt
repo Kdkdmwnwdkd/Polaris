@@ -62,6 +62,9 @@ fun main() {
         val p = profiler(longArrayOf(0, 10, 30))
         p.mark("a"); p.mark("b"); p.mark("c")
         eq("首样本被跳过：3 次 mark 只留 2 条样本", p.snapshot().size, 2)
+        // 项数必须等于 mark 次数（= 注册数），不是样本数。真机上这两者差 1，
+        // 日志写「装配 59 项」而 registry 有 60，读包的人会以为有工具没装上。
+        eq("项数按 mark 次数报：3 次 mark = 3 项", p.markedCount(), 3)
         eq("样本名对应后一个工具", p.snapshot().map { it.name }, listOf("b", "c"))
         eq("间隔即构造耗时", p.snapshot().map { it.millis }, listOf(10L, 20L))
         eq("合计 = 各段之和", p.total(), 30L)
@@ -91,7 +94,7 @@ fun main() {
         p.mark("a"); p.mark("b"); p.mark("c"); p.mark("d")
         eq(
             "全部低于阈值时标注「分布均匀 → 类加载」",
-            p.report(), "工具装配 3 项，合计 40ms；无单项超过 100ms（分布均匀 → 类加载开销）"
+            p.report(), "工具装配 4 项，合计 40ms；无单项超过 100ms（分布均匀 → 类加载开销）"
         )
     }
     run {
@@ -99,7 +102,7 @@ fun main() {
         p.mark("a"); p.mark("b"); p.mark("c"); p.mark("d")
         eq(
             "超阈值项进「最慢」并带毫秒数",
-            p.report(), "工具装配 3 项，合计 40ms；最慢：c=30ms"
+            p.report(), "工具装配 4 项，合计 40ms；最慢：c=30ms"
         )
     }
 
@@ -111,7 +114,7 @@ fun main() {
         p.mark("a"); p.mark("b"); p.mark("c"); p.mark("d")
         eq(
             "正好等于阈值也算慢项",
-            p.report(), "工具装配 3 项，合计 40ms；最慢：c=30ms"
+            p.report(), "工具装配 4 项，合计 40ms；最慢：c=30ms"
         )
     }
 

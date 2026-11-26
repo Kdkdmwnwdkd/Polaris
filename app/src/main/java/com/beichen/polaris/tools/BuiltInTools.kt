@@ -19,6 +19,7 @@ import com.beichen.polaris.core.net.BoundedBody
 import com.beichen.polaris.core.net.BodySlice
 import com.beichen.polaris.core.net.HttpFailStreak
 import com.beichen.polaris.core.net.RedirectPolicy
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -197,7 +198,9 @@ class HttpRequestTool(
                     builder.method(method, null).build()
                 }
 
-                val resp = client.newCall(request).execute()
+                // 不走 execute()：阻塞调用吞掉协程取消，用户点停止要等它自己读到超时
+                // （真机上 14 秒）。awaitResponse 在取消时真正 cancel 这条调用。
+                val resp = client.newCall(request).awaitResponse()
                 try {
                     if (resp.isRedirect) {
                         when (val d = RedirectPolicy.decide(currentUrl, resp.header("Location"), hop, resp.code, method)) {
@@ -292,6 +295,10 @@ class HttpRequestTool(
             // 循环的每个出口都已经 return；这一行只为让 lambda 的类型是 ToolResult 而不是 Unit。
             error("unreachable: 请求循环必然以 return 结束")
         }.getOrElse {
+            // 取消不是「请求失败」。getOrElse 走的是 runCatching，它会连
+            // CancellationException 一起吞掉；不放行的话，用户点停止会被渲染成
+            // 一次「HTTP 请求异常」，而且取消信号断在这里，上层以为工具是正常结束的。
+            if (it is CancellationException) throw it
             // 参数形状错误（URL 写错、方法名不认识）不该算「这个地址不通」：
             // 那个地址可能一次都没被请求过，计入撞墙会劝模型换掉一个其实正常的源。
             val paramError = it is IllegalArgumentException

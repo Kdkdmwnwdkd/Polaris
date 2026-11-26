@@ -23,6 +23,8 @@ package com.beichen.polaris.core
  * 打一个点就够了，调用点一行都不用动。
  *
  * 副作用：第一个工具没有「上一次」，因此不计入样本（它同时承担基准点角色）。
+ * 所以 [report] 里的「项数」取 **mark 次数**（[marked]），不是样本数——两者恒差 1。
+ * 用样本数当项数会让日志比 registry 少报一个，读日志的人会以为有工具没装上。
  *
  * ## 可测性
  *
@@ -44,6 +46,15 @@ class ToolLoadProfiler(
     private var last = -1L
 
     /**
+     * 打过点的次数 = 实际注册的工具数。
+     *
+     * 与 `samples.size` 恒差 1（首个样本承担基准点）。报告里的「N 项」必须用它：
+     * 2026-11-26 真机诊断包里「装配 59 项」与 registry 的 60 对不上，据此怀疑过
+     * 「有工具在装配之后才进 registry」——实际就是这个口径差，白查了一轮。
+     */
+    private var marked = 0
+
+    /**
      * 记录一次 `register` 进入时刻。
      *
      * 第一个样本被跳过：它没有前驱，无法把耗时归给谁；它的时刻只用作基准。
@@ -57,9 +68,14 @@ class ToolLoadProfiler(
     @Synchronized
     fun mark(name: String) {
         val now = clock()
+        marked++
         if (last >= 0L) samples += Sample(name, if (now >= last) now - last else 0L)
         last = now
     }
+
+    /** 打过点的次数（= 注册的工具数）。见 [marked] 与样本数差 1 的原因。 */
+    @Synchronized
+    fun markedCount(): Int = marked
 
     /** 全部样本（快照，按装配顺序）。 */
     @Synchronized
@@ -88,7 +104,9 @@ class ToolLoadProfiler(
         val all = snapshot()
         if (all.isEmpty()) return "工具装配：无样本（可能未接入 profiler）"
         val slow = slowest(limit).filter { it.millis >= slowMillis }
-        val head = "工具装配 ${all.size} 项，合计 ${total()}ms"
+        // 项数用 marked 而不是 all.size：后者少报一个（首样本只作基准），
+        // 与 registry 的实际注册数对不上，会被误读成「有工具没装上」。
+        val head = "工具装配 $marked 项，合计 ${total()}ms"
         if (slow.isEmpty()) return "$head；无单项超过 ${slowMillis}ms（分布均匀 → 类加载开销）"
         return head + "；最慢：" + slow.joinToString(", ") { "${it.name}=${it.millis}ms" }
     }
