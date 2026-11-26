@@ -1,6 +1,7 @@
 package com.beichen.polaris.core.media.providers
 
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.llm.runCancellable
 import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.llm.objOrNull
 import com.beichen.polaris.core.media.MediaException
@@ -59,7 +60,7 @@ class MiniMaxMediaProvider(private val apiKey: String) : MediaProvider {
             .header("Authorization", "Bearer $apiKey")
             .post(json.encodeToString(JsonObject.serializer(), body).toRequestBody(JSON))
             .build()
-        http.newCall(request_).execute().use { resp ->
+        return@withContext http.runCancellable(request_) { resp ->
             // 审计 F42：返回体可能是 b64_json（整图 base64），`body?.string()` 无上限。
             // 8MB 够装两三张 1024² PNG；连这个都超说明服务端在返回别的东西，明确失败。
             val slice = resp.body?.byteStream()
@@ -79,7 +80,7 @@ class MiniMaxMediaProvider(private val apiKey: String) : MediaProvider {
             }
             val taskId = root["task_id"]?.primOrNull()?.contentOrNull
                 ?: throw MediaException("提交响应缺 task_id")
-            return@withContext MediaTaskHandle(taskId, MediaTaskState.Running(null))
+            MediaTaskHandle(taskId, MediaTaskState.Running(null))
         }
     }
 
@@ -90,7 +91,7 @@ class MiniMaxMediaProvider(private val apiKey: String) : MediaProvider {
             .header("Authorization", "Bearer $apiKey")
             .get()
             .build()
-        http.newCall(request).execute().use { resp ->
+        return@withContext http.runCancellable(request) { resp ->
             // 审计 F42：返回体可能是 b64_json（整图 base64），`body?.string()` 无上限。
             // 8MB 够装两三张 1024² PNG；连这个都超说明服务端在返回别的东西，明确失败。
             val slice = resp.body?.byteStream()
@@ -102,7 +103,7 @@ class MiniMaxMediaProvider(private val apiKey: String) : MediaProvider {
                 throw MediaException("响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析")
             }
             val root = json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
-            return@withContext when (root["status"]?.primOrNull()?.contentOrNull) {
+            when (root["status"]?.primOrNull()?.contentOrNull) {
                 "Success" -> {
                     val url = root["video_url"]?.primOrNull()?.contentOrNull
                         ?: throw MediaException("任务成功但响应无 video_url")

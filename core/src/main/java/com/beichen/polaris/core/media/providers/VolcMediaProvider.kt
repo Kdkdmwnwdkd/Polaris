@@ -1,6 +1,7 @@
 package com.beichen.polaris.core.media.providers
 
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.llm.runCancellable
 import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.llm.arrOrNull
 import com.beichen.polaris.core.llm.objOrNull
@@ -84,7 +85,7 @@ class VolcMediaProvider(private val apiKey: String) : MediaProvider {
         }
     }
 
-    private fun submitImage(request: MediaRequest): MediaTaskHandle {
+    private suspend fun submitImage(request: MediaRequest): MediaTaskHandle {
         val body = buildJsonObject {
             put("model", request.extra["model"] ?: "doubao-seedream-4-0-250828")
             put("prompt", request.prompt)
@@ -99,7 +100,7 @@ class VolcMediaProvider(private val apiKey: String) : MediaProvider {
         return MediaTaskHandle(null, MediaTaskState.Succeeded(urls))
     }
 
-    private fun submitVideo(request: MediaRequest): MediaTaskHandle {
+    private suspend fun submitVideo(request: MediaRequest): MediaTaskHandle {
         val model = request.extra["model"]
             ?: throw MediaException("火山视频需在「高级参数」填写 model（接入点 id）")
         val body = buildJsonObject {
@@ -121,13 +122,14 @@ class VolcMediaProvider(private val apiKey: String) : MediaProvider {
         if (apiKey.isBlank()) throw MediaException("未配置火山方舟 API Key")
     }
 
-    private fun post(endpoint: String, body: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject {
+    private suspend fun post(endpoint: String, body: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject {
         val request = Request.Builder()
             .url(endpoint)
             .header("Authorization", "Bearer $apiKey")
             .post(json.encodeToString(JsonObject.serializer(), body).toRequestBody(JSON))
             .build()
-        http.newCall(request).execute().use { resp ->
+        // runCancellable：视频生成要轮询几十秒，退出页面时不该继续占着连接
+        return http.runCancellable(request) { resp ->
             // 审计 F42：返回体可能是 b64_json（整图 base64），`body?.string()` 无上限。
             // 8MB 够装两三张 1024² PNG；连这个都超说明服务端在返回别的东西，明确失败。
             val slice = resp.body?.byteStream()
@@ -138,17 +140,17 @@ class VolcMediaProvider(private val apiKey: String) : MediaProvider {
             if (slice.truncated) {
                 throw MediaException("响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析")
             }
-            return json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
+            json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
         }
     }
 
-    private fun get(url: String): kotlinx.serialization.json.JsonObject {
+    private suspend fun get(url: String): kotlinx.serialization.json.JsonObject {
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $apiKey")
             .get()
             .build()
-        http.newCall(request).execute().use { resp ->
+        return http.runCancellable(request) { resp ->
             // 审计 F42：返回体可能是 b64_json（整图 base64），`body?.string()` 无上限。
             // 8MB 够装两三张 1024² PNG；连这个都超说明服务端在返回别的东西，明确失败。
             val slice = resp.body?.byteStream()
@@ -159,7 +161,7 @@ class VolcMediaProvider(private val apiKey: String) : MediaProvider {
             if (slice.truncated) {
                 throw MediaException("响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析")
             }
-            return json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
+            json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
         }
     }
 

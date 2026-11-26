@@ -106,18 +106,14 @@ echo "[D] 阻塞调用收口"
 # 为什么守这条：`newCall(x).execute()` 在协程被取消时**不会停**——线程照旧卡在 socket
 # 读上，要等对端发完或 readTimeout（llm 档 180s）。用户点「停止」只停了界面，请求还在跑、
 # 还在计费。2026-11-26 真机实测：点停止到收尾隔了 14 秒。
-# 正确做法只有一处：LlmHttp.runCancellable（把 Call 挂到协程完成回调，取消时 cancel()）。
+# 正确做法只有一处：LlmHttp.runCancellable（把 Call 挂到协程取消的那一刻，同步 cancel()）。
 #
-# 批二还没做：媒体供应商 9 处 + ModelDownloader 2 处。全部改完后**删掉这个白名单**，
-# 让 D1 覆盖全仓。
-PENDING="core/media/providers/|polaris/model/ModelDownloader\.kt"
-
+# 2026-11-26 批二已收口：媒体四家 9 处 + ModelDownloader 2 处。白名单已删除，D1 覆盖全仓。
 stray_exec=$(grep -rn "\.execute()" --include=*.kt "$SRC" "$SRC_CORE" \
   | grep -v "core/llm/LlmHttp.kt" \
-  | grep -vE "$PENDING" \
   | grep -vE ":[0-9]+:[[:space:]]*(//|\*)" || true)
 if [ -z "$stray_exec" ]; then
-  good "D1 除 runCancellable 内部与批二白名单外，无裸 execute()"
+  good "D1 除 runCancellable 内部外，全仓无裸 execute()"
 else
   bad "D1 出现裸 execute()（点停止会等它自己读到超时）："
   echo "$stray_exec" | sed 's/^/         /'
@@ -140,6 +136,24 @@ if grep -q "suspend fun <T> OkHttpClient.runCancellable" "$HUB"; then
 else
   bad "D3 runCancellable 被删或改了签名"
 fi
+
+# 媒体与下载是「用户正在盯着进度条」的两条路，单独钉一遍：
+# D1 只保证没有裸 execute()，理论上还能有人绕开（比如新加一个文件直接用别的客户端）。
+# 这四家 provider 各要至少一处 runCancellable，ModelDownloader 要两处（清单 + 整包）。
+media_ok=0
+for f in "$SRC_CORE/core/media/providers/"*MediaProvider.kt; do
+  [ -f "$f" ] || continue
+  if ! grep -q "runCancellable(" "$f"; then
+    bad "D4 ${f##*/} 没有走 runCancellable：退出页面后请求仍会跑完"
+    media_ok=1
+  fi
+done
+dl=$(grep -c "runCancellable(" "$SRC_CORE/model/ModelDownloader.kt" 2>/dev/null || echo 0)
+if [ "$dl" -lt 2 ]; then
+  bad "D4 ModelDownloader 只有 $dl 处 runCancellable（清单 + 整包都要）"
+  media_ok=1
+fi
+[ "$media_ok" -eq 0 ] && good "D4 媒体 4 家与模型下载全部可取消"
 
 echo ""
 echo "=== $npass 通过 / $fail 失败 ==="

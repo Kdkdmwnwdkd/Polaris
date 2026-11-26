@@ -1,6 +1,7 @@
 package com.beichen.polaris.core.media.providers
 
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.llm.runCancellable
 import com.beichen.polaris.core.llm.objOrNull
 import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.llm.arrOrNull
@@ -66,7 +67,7 @@ class OpenAIMediaProvider(
     override suspend fun poll(taskId: String): MediaTaskState =
         throw MediaException("OpenAI 图片为同步接口，提交即终态，无需轮询")
 
-    private fun generateImage(request: MediaRequest): MediaTaskHandle {
+    private suspend fun generateImage(request: MediaRequest): MediaTaskHandle {
         val body = buildJsonObject {
             put("model", request.extra["model"] ?: "gpt-image-1")
             put("prompt", request.prompt)
@@ -85,7 +86,7 @@ class OpenAIMediaProvider(
         return MediaTaskHandle(null, MediaTaskState.Succeeded(urls))
     }
 
-    private fun editImage(request: MediaRequest): MediaTaskHandle {
+    private suspend fun editImage(request: MediaRequest): MediaTaskHandle {
         val ref = request.refImageUris.firstOrNull()
             ?: throw MediaException("图生图需要至少一张参考图")
         val imageBody = ref.toImageRequestBody()
@@ -102,7 +103,7 @@ class OpenAIMediaProvider(
             .header("Authorization", "Bearer $apiKey")
             .post(form)
             .build()
-        http.newCall(httpReq).execute().use { resp ->
+        return http.runCancellable(httpReq) { resp ->
             // 审计 F42：返回体可能是 b64_json（整图 base64），`body?.string()` 无上限。
             // 8MB 够装两三张 1024² PNG；连这个都超说明服务端在返回别的东西，明确失败。
             val slice = resp.body?.byteStream()
@@ -121,12 +122,12 @@ class OpenAIMediaProvider(
                     ?: o["b64_json"]?.primOrNull()?.contentOrNull?.let { "data:image/png;base64,$it" }
             }
             if (urls.isEmpty()) throw MediaException("images/edits 未返回图片")
-            return MediaTaskHandle(null, MediaTaskState.Succeeded(urls))
+            MediaTaskHandle(null, MediaTaskState.Succeeded(urls))
         }
     }
 
     /** 参考图 → multipart 字节体（data URI 解码 base64；http URL 先下载）。 */
-    private fun String.toImageRequestBody(): okhttp3.RequestBody? {
+    private suspend fun String.toImageRequestBody(): okhttp3.RequestBody? {
         if (startsWith("data:")) {
             val comma = indexOf(',')
             if (comma < 0) return null
@@ -135,27 +136,27 @@ class OpenAIMediaProvider(
         }
         if (startsWith("http")) {
             val req = Request.Builder().url(this).get().build()
-            http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return null
+            // 用户填的参考图链接可能指向一个不响应的服务器，图生图会一直挂着
+            return http.runCancellable(req) { resp ->
+                if (!resp.isSuccessful) return@runCancellable null
                 // 审计 F43：参考图是用户填的链接，`body?.bytes()` 无上限，
                 // 指向一个大文件就是 OOM（后面还要 base64 翻倍）。
                 val ctype = resp.body?.contentType() ?: "image/png".toMediaType()
-                val raw = resp.body?.byteStream()
+                resp.body?.byteStream()
                     ?.let { BoundedBody.readBytes(it, BoundedBody.MAX_READ_BYTES) }
-                    ?: return null
-                return raw.toRequestBody(ctype)
+                    ?.toRequestBody(ctype)
             }
         }
         return null
     }
 
-    private fun post(endpoint: String, body: JsonObject): JsonObject {
+    private suspend fun post(endpoint: String, body: JsonObject): JsonObject {
         val request = Request.Builder()
             .url(endpoint)
             .header("Authorization", "Bearer $apiKey")
             .post(json.encodeToString(JsonObject.serializer(), body).toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
-        http.newCall(request).execute().use { resp ->
+        return http.runCancellable(request) { resp ->
             // 审计 F42：返回体可能是 b64_json（整图 base64），`body?.string()` 无上限。
             // 8MB 够装两三张 1024² PNG；连这个都超说明服务端在返回别的东西，明确失败。
             val slice = resp.body?.byteStream()
@@ -166,7 +167,7 @@ class OpenAIMediaProvider(
             if (slice.truncated) {
                 throw MediaException("响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析")
             }
-            return json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
+            json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
         }
     }
 

@@ -1,6 +1,7 @@
 package com.beichen.polaris.core.media.providers
 
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.llm.runCancellable
 import com.beichen.polaris.core.llm.primOrNull
 import com.beichen.polaris.core.llm.arrOrNull
 import com.beichen.polaris.core.llm.objOrNull
@@ -97,14 +98,15 @@ class DashScopeMediaProvider(private val apiKey: String) : MediaProvider {
         if (apiKey.isBlank()) throw MediaException("未配置 DashScope API Key")
     }
 
-    private fun postAsync(endpoint: String, body: JsonObject): String {
+    private suspend fun postAsync(endpoint: String, body: JsonObject): String {
         val request = Request.Builder()
             .url(endpoint)
             .post(json.encodeToString(JsonObject.serializer(), body).toRequestBody(JSON))
             .header("Authorization", "Bearer $apiKey")
             .header("X-DashScope-Async", "true")
             .build()
-        http.newCall(request).execute().use { resp ->
+        // runCancellable：文生视频的提交/轮询都可能挂在服务端不响应上，退出页面要能立刻停
+        return http.runCancellable(request) { resp ->
             // 审计 F42：返回体可能是 b64_json（整图 base64），`body?.string()` 无上限。
             // 8MB 够装两三张 1024² PNG；连这个都超说明服务端在返回别的东西，明确失败。
             val slice = resp.body?.byteStream()
@@ -116,18 +118,18 @@ class DashScopeMediaProvider(private val apiKey: String) : MediaProvider {
                 throw MediaException("响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析")
             }
             val root = json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
-            return root["output"]?.objOrNull()?.get("task_id")?.primOrNull()?.contentOrNull
+            root["output"]?.objOrNull()?.get("task_id")?.primOrNull()?.contentOrNull
                 ?: throw MediaException("提交响应缺 task_id：${text.take(300)}")
         }
     }
 
-    private fun get(url: String): JsonObject {
+    private suspend fun get(url: String): JsonObject {
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $apiKey")
             .get()
             .build()
-        http.newCall(request).execute().use { resp ->
+        return http.runCancellable(request) { resp ->
             // 审计 F42：返回体可能是 b64_json（整图 base64），`body?.string()` 无上限。
             // 8MB 够装两三张 1024² PNG；连这个都超说明服务端在返回别的东西，明确失败。
             val slice = resp.body?.byteStream()
@@ -138,7 +140,7 @@ class DashScopeMediaProvider(private val apiKey: String) : MediaProvider {
             if (slice.truncated) {
                 throw MediaException("响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析")
             }
-            return json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
+            json.parseToJsonElement(text).objOrNull() ?: JsonObject(emptyMap())
         }
     }
 

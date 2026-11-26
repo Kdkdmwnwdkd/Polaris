@@ -3,8 +3,10 @@ package com.beichen.polaris.model
 import android.content.Context
 import com.beichen.polaris.core.AgentLogger
 import com.beichen.polaris.core.llm.LlmHttp
+import com.beichen.polaris.core.llm.runCancellable
 import com.beichen.polaris.core.net.BoundedBody
 import com.beichen.polaris.core.net.GitHubMirror
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
@@ -112,12 +114,14 @@ class ModelDownloader(
      * 逐源尝试，失败原因汇总：用户看到的不能只是「下载失败」——
      * 要能分清「服务端没传」和「这台机器到不了 github」。
      */
-    private fun fetchManifest(): Entry {
+    private suspend fun fetchManifest(): Entry {
         val failures = ArrayList<String>()
         for (src in GitHubMirror.sources("$baseUrl/model-manifest.txt")) {
             val body = try {
                 fetchText(src.url)
             } catch (t: Throwable) {
+                // 取消不是「这个源失败」，别把用户点的停止记成镜像故障再换源重试
+                if (t is CancellationException) throw t
                 failures += "${src.label}：${t.message}"
                 AgentLogger.w(tag, "清单下载失败（${src.label}）：${t.message}")
                 continue
@@ -137,9 +141,10 @@ class ModelDownloader(
         throw IllegalStateException("模型清单取不到——${failures.joinToString("；")}")
     }
 
-    private fun fetchText(url: String): String {
+    private suspend fun fetchText(url: String): String {
         val req = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
-        return LlmHttp.short.newCall(req).execute().use { resp ->
+        // runCancellable：清单只有几百字节，但镜像站挂住时同样是无限等
+        return LlmHttp.short.runCancellable(req) { resp ->
             if (!resp.isSuccessful) {
                 val why = if (resp.code == 404) "服务端还没上传模型" else "网络问题"
                 throw IllegalStateException("HTTP ${resp.code}：$why")
@@ -167,7 +172,7 @@ class ModelDownloader(
      * 三道关缺一不可：传输完整（字节数对得上）、内容没被替换（sha256）、
      * 落盘用 `.part` 改名（避免下次把半截包当成品去解压）。
      */
-    private fun downloadTo(entry: Entry, part: File, onProgress: (Long, Long, String) -> Unit) {
+    private suspend fun downloadTo(entry: Entry, part: File, onProgress: (Long, Long, String) -> Unit) {
         val failures = ArrayList<String>()
         for (src in GitHubMirror.sources("$baseUrl/${entry.name}")) {
             part.delete()
@@ -178,6 +183,7 @@ class ModelDownloader(
                     onProgress(written, entry.size, spec.label)
                 }
             }
+            got.exceptionOrNull()?.let { if (it is CancellationException) throw it }
             if (got.isFailure) {
                 failures += "${src.label}：${got.exceptionOrNull()?.message}"
                 AgentLogger.w(tag, "${entry.name} 下载失败（${src.label}）：${got.exceptionOrNull()?.message}")
@@ -194,9 +200,11 @@ class ModelDownloader(
         throw IllegalStateException("${spec.label}下载失败——${failures.joinToString("；")}")
     }
 
-    private fun fetchTo(url: String, part: File, onBytes: (Long) -> Unit) {
+    private suspend fun fetchTo(url: String, part: File, onBytes: (Long) -> Unit) {
         val req = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
-        LlmHttp.download.newCall(req).execute().use { resp ->
+        // runCancellable：这是唯一一条「一直在动」的长时间请求，
+        // 而它的进度条旁边就有取消按钮——停不下来最刺眼。
+        LlmHttp.download.runCancellable(req) { resp ->
             if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
             val body = resp.body ?: throw IllegalStateException("响应为空")
             part.outputStream().use { out ->
