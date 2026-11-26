@@ -114,10 +114,17 @@ fun main() {
     }
 
     check("R4-9 兜底气泡既要上屏也要落库（只上屏的话切会话就消失）") {
+        // 2026-11-26：六处「守卫 + 上屏 + 落盘」收敛成了 emitTo()（f0b2a0b），
+        // 兜底分支不再直接出现 appendToStore——它调 emitTo，由那一个函数保证两件事都做。
+        // 判据因此拆成两半，比原来更严：调用点必须走 emitTo，且 emitTo 体内两件事都在。
         val at = vm.indexOf("if (lastAnswer == null)")
         val window = vm.substring(at, minOf(at + 900, vm.length))
-        assertContains("兜底分支", window, "appendUiItem")
-        assertContains("兜底分支", window, "appendToStore")
+        assertContains("兜底分支", window, "emitTo(")
+        val emitAt = vm.indexOf("private fun emitTo(")
+        assertTrue("ChatViewModel 找不到 emitTo 定义——守卫点又散回调用处了", emitAt >= 0)
+        val emitBody = vm.substring(emitAt, minOf(emitAt + 400, vm.length))
+        assertContains("emitTo", emitBody, "appendUiItem")
+        assertContains("emitTo", emitBody, "appendToStore")
     }
 
     check("R4-10 兜底要留日志（否则线上只知道「没回复」，查不到是空回还是被截断）") {
