@@ -262,7 +262,9 @@ private fun buildRun(messages: List<UiItem>, seg: IntRange, liveIndex: Int): Tra
                 // 局部变量：reasoning 是跨模块属性，Kotlin 不给它做 smart cast（实测 e: 263:43）
                 val think = m.reasoning
                 if (!think.isNullOrBlank()) {
-                    steps += thinkingStep(think, running = i == liveIndex)
+                    // 正文已经往外走了，这条思考就是想完的那一步。再染成「跑」，
+                    // 屏幕上会出现「思考中」转圈、下面的字却在涨——用户分不清是在想还是在说。
+                    steps += thinkingStep(think, running = i == liveIndex && m.text.isBlank())
                 }
                 if (m.text.isNotBlank()) {
                     // 只有最后那条有正文的是回答，其余都是「途中说明」：

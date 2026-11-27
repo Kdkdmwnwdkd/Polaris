@@ -581,7 +581,9 @@ fun main() {
     check("H10 流式正文留在原地；没有草稿时行为一点不变") {
         val live = withLiveDraft(listOf(hUser, hThink1, hTool1), text = "结论是 42", reasoning = "算完了")
         eq(traceOwnership(live, 3), TraceOwnership.TAIL, "有正文的草稿只渲染正文")
-        eq(traceRunAt(live, 1, 3)!!.steps.last().state, TraceState.RUNNING, "思考那步仍在跑")
+        // 2026-11-27 真机：正文已经涨了两行，「思考中」还在转——看起来像同时在想和说。
+        // 正文一开流，这条思考就是想完的那一步，必须落成对勾。
+        eq(traceRunAt(live, 1, 3)!!.steps.last().state, TraceState.DONE, "正文已开流，思考不能再转圈")
         // 没草稿：不能凭空多一条，也不能把完成态的 running 改掉
         val none = withLiveDraft(listOf(hUser, hThink1, hTool1), text = null, reasoning = null)
         eq(none.size, 3, "没有草稿就不能多一条")
