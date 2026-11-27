@@ -168,10 +168,10 @@ private fun segmentAt(messages: List<UiItem>, index: Int): IntRange? {
  *
  * 只有段首拿得到流，段内其余下标返回 null——同一个区间只画一次。
  */
-internal fun traceRunAt(messages: List<UiItem>, index: Int): TraceRun? {
+internal fun traceRunAt(messages: List<UiItem>, index: Int, liveIndex: Int = -1): TraceRun? {
     val seg = segmentAt(messages, index) ?: return null
     if (seg.first != index) return null
-    return buildRun(messages, seg)
+    return buildRun(messages, seg, liveIndex)
 }
 
 /**
@@ -198,8 +198,29 @@ internal fun traceOwnership(messages: List<UiItem>, index: Int): TraceOwnership 
 }
 
 /** 一次算完「画不画流」与「正文归谁」，调用方不会只拿到一半。 */
-internal fun traceAt(messages: List<UiItem>, index: Int): TraceSlot =
-    TraceSlot(run = traceRunAt(messages, index), ownership = traceOwnership(messages, index))
+internal fun traceAt(messages: List<UiItem>, index: Int, liveIndex: Int = -1): TraceSlot =
+    TraceSlot(run = traceRunAt(messages, index, liveIndex), ownership = traceOwnership(messages, index))
+
+/**
+ * 把「还没落库的流式草稿」接在列表末尾，让段算法看得见它。
+ *
+ * **这是运行中「思考与工具分两层」的唯一成因。**（2026-11-27）
+ *
+ * 流式期间正文/推理只活在 `streamDraft` / `reasoningDraft` 里，不在这份 `List<UiItem>` 中；
+ * 渲染侧于是只能把它当尾巴另起一块。结果就是：上面的流走完了工具，正在想的那一步
+ * 却挂在下面、样式与流里其他步骤都不一样——用户的原话是「跑的时候是两层，
+ * 跑完了才合到一起」。
+ *
+ * 解法不是另写一套运行中渲染，而是**让运行中和完成态用同一份输入**：
+ * 草稿作为虚拟末项参与段计算，它自己那一步就自然接在流尾，
+ * 落库后只是把虚拟项换成真实项，位置、顺序都不用重排。
+ *
+ * @param text 流式正文（null = 还没有正文）
+ * @param reasoning 流式推理（null/空白 = 还没开始想）
+ */
+internal fun withLiveDraft(messages: List<UiItem>, text: String?, reasoning: String?): List<UiItem> =
+    if (text == null && reasoning.isNullOrBlank()) messages
+    else messages + UiItem.Assistant(text.orEmpty(), reasoning = reasoning)
 
 /**
  * 把区间内的条目按发生顺序展开成步骤。
@@ -208,7 +229,7 @@ internal fun traceAt(messages: List<UiItem>, index: Int): TraceSlot =
  * 段内每条助手消息固定「先思考、后正文」，所以同一下标里思考必然在正文之前，
  * 与模型先想后说的顺序一致。
  */
-private fun buildRun(messages: List<UiItem>, seg: IntRange): TraceRun {
+private fun buildRun(messages: List<UiItem>, seg: IntRange, liveIndex: Int): TraceRun {
     val steps = ArrayList<TraceStep>(seg.count())
     val tools = ArrayList<UiItem.Tool>(seg.count())
     var body = -1
@@ -219,7 +240,9 @@ private fun buildRun(messages: List<UiItem>, seg: IntRange): TraceRun {
                 tools += m
             }
             is UiItem.Assistant -> {
-                steps += thinkingStep(m.reasoning.orEmpty())
+                // liveIndex 是末尾那条还没落库的草稿：它这一步还在长，必须染成「跑」，
+                // 否则用户看到的是「思考」打着已完成的对勾、正文却还在往外蹦。
+                steps += thinkingStep(m.reasoning.orEmpty(), running = i == liveIndex)
                 if (m.text.isNotBlank()) body = i
             }
             else -> {}
@@ -231,17 +254,18 @@ private fun buildRun(messages: List<UiItem>, seg: IntRange): TraceRun {
         toolCount = tools.size,
         failedCount = tools.count { toolState(it) == TraceState.FAILED },
         interruptedCount = tools.count { it.interrupted },
-        running = tools.any { it.running },
+        // 段内在长 = 有工具在跑，或最后一步还是流式思考
+        running = tools.any { it.running } || liveIndex in seg,
         bodyIndex = body
     )
 }
 
 /** 一段思考做成一步：标题固定「思考」，摘要取首句，全文进详情。 */
-private fun thinkingStep(reasoning: String): TraceStep = TraceStep(
-    title = "思考",
+private fun thinkingStep(reasoning: String, running: Boolean = false): TraceStep = TraceStep(
+    title = if (running) "思考中" else "思考",
     summary = thinkingSummary(reasoning),
     detail = reasoning,
-    state = TraceState.DONE,
+    state = if (running) TraceState.RUNNING else TraceState.DONE,
     isThinking = true
 )
 

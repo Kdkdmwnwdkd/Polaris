@@ -32,9 +32,11 @@ import com.beichen.polaris.core.toMsgRecord
 import com.beichen.polaris.ui.ConversationProjection
 import com.beichen.polaris.ui.GenerationRunController
 import com.beichen.polaris.ui.TraceOwnership
+import com.beichen.polaris.ui.TraceState
 import com.beichen.polaris.ui.traceAt
 import com.beichen.polaris.ui.traceOwnership
 import com.beichen.polaris.ui.traceRunAt
+import com.beichen.polaris.ui.withLiveDraft
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -539,6 +541,44 @@ fun main() {
         // 段中那条带正文的：思考已进流，正文必须留给自己渲染
         eq(traceOwnership(msgs, 3), TraceOwnership.TAIL, "段中带正文也要自己渲染正文")
         eq(traceOwnership(msgs, 5), TraceOwnership.TAIL, "段尾带正文同样自己渲染")
+    }
+
+    // H9/H10（2026-11-27 真机反馈）：跑的时候又是两层——上面一条工具流，下面单挂「思考中」，
+    // 只有跑完落库才合成一条。根因是流式草稿不在 messages 里，段算法看不见它。
+    // 修法是让草稿以虚拟末项参与段计算（withLiveDraft），这里把三条结论钉死。
+    check("H9 流式草稿并进同一条流：思考不再另起一块挂在工具下面") {
+        val done = listOf(hUser, hThink1, hTool1)
+        val live = withLiveDraft(done, text = null, reasoning = "正在算第二步")
+        eq(live.size, 4, "草稿要接到列表末尾")
+        val flow = traceRunAt(live, 1, liveIndex = 3)
+        expect(flow != null, "段首仍拿得到流")
+        eq(
+            flow!!.steps.map { it.title },
+            listOf("思考", "run_shell", "思考中"),
+            "「思考中」必须排在流尾，不能另起一块"
+        )
+        eq(flow.steps.last().state, TraceState.RUNNING, "还在长的思考不能打对勾")
+        expect(flow.running, "段内有流式思考 = 段还在跑，不能提前折起")
+        eq(flow.range, 1..3, "草稿要落在同一段区间里")
+        eq(traceOwnership(live, 3), TraceOwnership.ABSORBED, "纯思考草稿已被流吸收，不能画两遍")
+        // 落库只是「虚拟项换成真实项」：位置、步数都不该变（只有文案从「思考中」变「思考」）
+        val settled = traceRunAt(done + UiItem.Assistant(text = "", reasoning = "正在算第二步"), 1)!!
+        eq(settled.steps.size, flow.steps.size, "落库后步数不能变")
+        eq(
+            settled.steps.map { it.isThinking },
+            flow.steps.map { it.isThinking },
+            "落库后每一步的位置不能变，否则跑完会跳一下"
+        )
+    }
+
+    check("H10 流式正文留在原地；没有草稿时行为一点不变") {
+        val live = withLiveDraft(listOf(hUser, hThink1, hTool1), text = "结论是 42", reasoning = "算完了")
+        eq(traceOwnership(live, 3), TraceOwnership.TAIL, "有正文的草稿只渲染正文")
+        eq(traceRunAt(live, 1, 3)!!.steps.last().state, TraceState.RUNNING, "思考那步仍在跑")
+        // 没草稿：不能凭空多一条，也不能把完成态的 running 改掉
+        val none = withLiveDraft(listOf(hUser, hThink1, hTool1), text = null, reasoning = null)
+        eq(none.size, 3, "没有草稿就不能多一条")
+        eq(traceRunAt(none, 1)!!.running, false, "没草稿的段不能被判成在跑")
     }
 
     check("H5 中断的步骤带文字说明") {

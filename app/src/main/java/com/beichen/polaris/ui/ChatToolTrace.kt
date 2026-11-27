@@ -93,6 +93,13 @@ internal fun ToolTraceRow(run: TraceRun, live: Boolean = false) {
     var touchedByUser by remember { mutableStateOf(false) }
     var openStep by remember { mutableStateOf(-1) }
 
+    // 正在想的那一步默认摊开：它是整条流里唯一还在变的文字。
+    // 折起来用户只能盯着「思考中」三个字，等于把实时推理藏了。
+    val liveStep = run.steps.indexOfLast { it.isThinking && it.state == TraceState.RUNNING }
+    LaunchedEffect(liveStep) {
+        if (liveStep >= 0 && !touchedByUser) openStep = liveStep
+    }
+
     // 运行结束 -> 没被用户干预过就折回。用 LaunchedEffect 而不是 remember(active)：
     // 后者会在每次状态变化时重建 state，运行中每来一步就把用户的展开态冲掉。
     LaunchedEffect(active) {

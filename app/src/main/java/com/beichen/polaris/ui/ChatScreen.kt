@@ -237,9 +237,12 @@ fun ChatScreen(
         onboardingPrefs().edit().putBoolean(ONBOARDING_KEY, true).apply()
     }
 
-    // 贴底跟随规则（上翻即停、回底恢复、流式长高也跟）都在 ChatAutoScroll.kt，那段修过三轮。
     val followTail = remember { FollowTail() }
-    FollowTailEffect(listState, messages.size, streamDraft, followTail)
+    // 流式草稿（正文/推理）也是段尾的一步：不并进来，它就只能另起一块挂在流下面。
+    val traceSource = remember(messages, streamDraft, reasoningDraft) { withLiveDraft(messages, streamDraft, reasoningDraft) }
+    val hasDraft = traceSource.size > messages.size
+    val liveIndex = if (hasDraft) traceSource.lastIndex else -1
+    FollowTailEffect(listState, messages.size, streamDraft ?: if (hasDraft) "" else null, followTail)
 
     // 「从中间轮重新发问」待编辑的用户气泡（长按/点击「重新发问」入口置位，确认后截断+重问）
     var reaskTarget by remember { mutableStateOf<UiItem.User?>(null) }
@@ -384,11 +387,8 @@ fun ChatScreen(
                 // F17 兜底：messageKeys 由 remember(messages) 算，key lambda 却在测量阶段调用，
                 // 此时 messages 可能已是下一帧的（刚插入工具卡）——直接索引会越界崩页（模拟器实测）。
                 itemsIndexed(messages, key = { index, _ -> messageKeys.getOrNull(index) ?: "fallback-$index" }) { index, item ->
-                    // 2026-11-26：工具与思考收成一条「过程流」。一次问全：本条的流
-                    //（只有段首拿得到）+ 正文归属（整条跳过 / 只留正文 / 自己全渲染）。
-                    // 分成两个函数问过，后果是段首的思考被两边都判成「别人负责」，整段消失。
-                    // 跳过的只是不渲染，数据一条没删：落盘与模型上下文都与改前一致。
-                    val slot = traceAt(messages, index)
+                    // 2026-11-26：工具与思考收成一条「过程流」，run 与 ownership 必须一次问全。
+                    val slot = traceAt(traceSource, index, liveIndex)
                     if ((item is UiItem.Tool && slot.run == null) || slot.ownership == TraceOwnership.ABSORBED) {
                         return@itemsIndexed
                     }
@@ -401,12 +401,12 @@ fun ChatScreen(
                     Column(Modifier.padding(top = gap)) {
                         MessageRow(
                             item,
-                            // 流式光标只在「末尾且无草稿气泡」时显示；有草稿时草稿自己带光标
-                            streaming = running && index == messages.lastIndex && streamDraft == null,
+                            // 流式光标只在「末尾且无草稿」时显示；有草稿时草稿自己带光标
+                            streaming = running && index == messages.lastIndex && !hasDraft,
                             trace = slot.run,
                             // 思考已进上方过程流：段首自己画流，段尾只画正文；段末还在长时保持展开
                             thinkingInFlow = slot.run != null || slot.ownership == TraceOwnership.TAIL,
-                            traceLive = running && slot.run != null && slot.run.lastIndex == messages.lastIndex
+                            traceLive = running && slot.run != null && slot.run.lastIndex == traceSource.lastIndex
                         )
                         // W-30：翻译结果（按消息下标缓存；只显示、不写入会话内容）
                         translations[index]?.let { tr ->
@@ -423,10 +423,8 @@ fun ChatScreen(
                             else -> 0L
                         }
                         val timeLabel = ChatTime.format(ts, System.currentTimeMillis())
-                        // v4：时间戳按**间隔**显示——距上一条不足 5 分钟就不画。
-                        // 原来每条消息都带一个「16:11」，一段 20 条的对话就有 20 个时间，
-                        // 读起来像运行日志而不是对话；时间只在「隔了一会儿再说」时才有信息量。
-                        // 首条必显示（prevTs 为 0），保证每屏开头都有时间锚点。
+                        // v4：时间戳按**间隔**显示（≥5 分钟才画，首条必显示），否则一段对话
+                        // 里全是「16:11」，读起来像运行日志而不是对话。
                         val prevTs = when (prev) {
                             is UiItem.User -> prev.timeMs
                             is UiItem.Assistant -> prev.timeMs
@@ -517,24 +515,27 @@ fun ChatScreen(
                         }
                     }
                 }
-                // 流式草稿气泡（重新生成/发送时 T01 增量实时填入，尚未落库）
-                if (streamDraft != null) {
+                // 流式草稿：思考已并进上方那条流（withLiveDraft），这里只负责正文。
+                if (hasDraft) {
                     item(key = "stream-draft") {
-                        // W-96：草稿这一条原来是**零间距**——它不走上面的 itemsIndexed，
-                        // 自然也没拿到 gap，于是「正在生成的回答」直接压在提问的下边沿上。
-                        // 落库后又按 20dp 排，气泡会往下跳一格。两头都难看，所以这里
-                        // 用与落库完全同口径的 gap：生成时什么样，定稿就是什么样。
-                        val prev = messages.lastOrNull()
-                        val draftGap = when {
-                            prev == null -> 0.dp
-                            prev is UiItem.Assistant -> AgentSpacing.space2
-                            else -> TURN_GAP
-                        }
-                        Column(Modifier.padding(top = draftGap)) {
-                            MessageRow(
-                                UiItem.Assistant(streamDraft.orEmpty(), reasoning = reasoningDraft),
-                                streaming = true
-                            )
+                        val live = traceSource.last()
+                        val liveSlot = traceAt(traceSource, traceSource.lastIndex, liveIndex)
+                        // 没正文 = 整条已在流里（段尾那步「思考中」），别再摆一块空的
+                        if (liveSlot.ownership != TraceOwnership.ABSORBED) {
+                            // W-96：草稿不走 itemsIndexed，拿不到 gap，用同口径补上
+                            val prev = messages.lastOrNull()
+                            val draftGap = when {
+                                prev == null -> 0.dp
+                                prev is UiItem.Assistant -> AgentSpacing.space2
+                                else -> TURN_GAP
+                            }
+                            Column(Modifier.padding(top = draftGap)) {
+                                MessageRow(
+                                    live,
+                                    streaming = true,
+                                    thinkingInFlow = liveSlot.ownership == TraceOwnership.TAIL
+                                )
+                            }
                         }
                     }
                 }
