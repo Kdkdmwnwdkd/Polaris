@@ -674,8 +674,16 @@ class ConversationStore(file: File) {
                 val i = out.lastIndex
                 if (i >= 0) {
                     val t = out[i]
-                    val variants = t.variants + rec
-                    out[i] = t.copy(variants = variants, selectedIndex = variants.lastIndex)
+                    // 只想没答的中间步（content 空、只有 reasoning）是**过程**，不是回答。
+                    // 当变体收录的话：一轮会堆出 N 个变体，界面上只剩最后一条，
+                    // 前面每一步的思考都看不见——「思考链断了」就是这个。
+                    if (rec.content.isBlank()) {
+                        // 连思考都没有的空步没有可看的：不进 trace（旧行为就是不落）
+                        if (rec.reasoning.isNotBlank()) out[i] = t.copy(trace = t.trace + rec)
+                    } else {
+                        val variants = t.variants + rec
+                        out[i] = t.copy(variants = variants, selectedIndex = variants.lastIndex)
+                    }
                 }
             }
             ROLE_TOOL -> {

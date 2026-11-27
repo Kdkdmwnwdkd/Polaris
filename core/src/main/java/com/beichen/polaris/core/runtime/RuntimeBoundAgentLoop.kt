@@ -65,8 +65,9 @@ class TurnEventGate internal constructor(
 
     private fun isCloseout(event: AgentEvent): Boolean = when (event) {
         is AgentEvent.ToolFinished, AgentEvent.RetryFinished -> true
+        // AssistantStep 是「这一步想了什么」的过程事件，旧回合的不该再上屏
         is AgentEvent.ToolStarted, is AgentEvent.RetryStarted,
-        is AgentEvent.OutputTruncated -> false
+        is AgentEvent.OutputTruncated, is AgentEvent.AssistantStep -> false
     }
 }
 

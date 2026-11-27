@@ -563,11 +563,10 @@ class RealAgentLoop(
                 ok = true,
                 calls = resp.toolCalls.size,
             )
-            AgentLogger.i(
-                "AgentLoop",
-                "LLM 返回：${System.currentTimeMillis() - stepStart}ms，toolCalls=${resp.toolCalls.size}"
-            )
+            AgentLogger.i("AgentLoop", "LLM 返回：${System.currentTimeMillis() - stepStart}ms，toolCalls=${resp.toolCalls.size}")
             messages.add(resp)
+            // 只想没答的步：思考必须在派发工具**之前**落库，顺序反了链就断（见 AssistantStep）
+            if (resp.content.isBlank() && !resp.reasoning.isNullOrBlank()) onEvent?.invoke(AgentEvent.AssistantStep(resp))
             // 厂商明说「撞到长度上限」：这条回答就是不完整的，界面上却与「说完了」一模一样。
             // 只上报事实，不代模型续写——续不续由用户决定。
             if (FinishReason.isTruncated(resp.finishReason) && !truncatedNotified) {

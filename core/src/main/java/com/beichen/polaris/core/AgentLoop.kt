@@ -63,6 +63,25 @@ sealed interface AgentEvent {
     data class ToolFinished(val message: ToolMessage) : AgentEvent
 
     /**
+     * 一步「只想没答」的助手消息已定稿：模型思考完，但这一步的正文是空的（它决定去调工具）。
+     *
+     * ## 为什么必须单独发
+     *
+     * 旧实现里中间轮只在回合结束时随 history 一起遍历，而遍历处写着
+     * `if (msg.content.isNotBlank())`——纯思考的中间轮 content 恰好是空的，
+     * 于是**整条被丢掉**，连 reasoning 一起。界面上就是：工具一个接一个，
+     * 思考只剩最后一条，而且永远在工具下面（用户看到的「分成两层」）。
+     *
+     * 更要紧的是**顺序**：工具是实时落的（ToolStarted/ToolFinished），
+     * 助手消息要是等回合结束才补，就只能追加在工具之后——不管内容多全，链都是断的。
+     * 所以这一步必须在**派发工具之前**发出去，落库顺序才和发生顺序一致。
+     *
+     * 只发 content 为空的步：有正文的那条是「回答」，走变体（variants），
+     * 混进来会变成一轮多个变体。
+     */
+    data class AssistantStep(val message: AssistantMessage) : AgentEvent
+
+    /**
      * 一次 LLM 调用遭遇**可重试**错误、即将发起第 [attempt] 次重试（共 [max] 次）。
      *
      * @param attempt 1-based 重试序号（第 1 次重试 = 上一次调用失败后的下一次尝试）。

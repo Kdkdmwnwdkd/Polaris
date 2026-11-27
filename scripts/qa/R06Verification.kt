@@ -581,6 +581,64 @@ fun main() {
         eq(traceRunAt(none, 1)!!.running, false, "没草稿的段不能被判成在跑")
     }
 
+    // ── [I] 思考链：中间步的思考不能当变体 ─────────────────────────
+    //
+    // 真机反馈「思考只有一条、而且永远在最下面」，根因在存储层：一轮里 assistant 一律
+    // 被收成 variants（变体），而中间步 content 恰好是空的——于是要么被 UI 判空丢掉，
+    // 要么变成「一轮 N 个变体」。两种都让前面的思考从界面上消失。
+    // 正确的去处是 trace：它就是「最终回答之前的过程，保序」。
+    println("\n[I] 思考链：中间步思考进 trace，回答才进变体")
+
+    check("I1 只想没答的中间步进 trace：思考与工具按发生顺序交替") {
+        val store = freshStore()
+        val conv = store.create()
+        store.appendMessage(conv, MsgRecord("u1", ROLE_USER, "查一下 GitHub"))
+        store.appendMessage(conv, MsgRecord("s1", ROLE_ASSISTANT, "", reasoning = "先看配置"))
+        store.appendMessage(conv, toolItem("t1", "ok", running = false).toMsgRecord())
+        store.appendMessage(conv, MsgRecord("s2", ROLE_ASSISTANT, "", reasoning = "再确认一次"))
+        store.appendMessage(conv, toolItem("t2", "ok", running = false).toMsgRecord())
+        store.appendMessage(conv, MsgRecord("a1", ROLE_ASSISTANT, "好了"))
+
+        val rec = store.load(conv)!!
+        eq(
+            rec.messages.map { it.role },
+            listOf(ROLE_USER, ROLE_ASSISTANT, ROLE_TOOL, ROLE_ASSISTANT, ROLE_TOOL, ROLE_ASSISTANT),
+            "顺序必须是 思考/工具 交替，且回答在最后"
+        )
+        val turn = rec.turns.last()
+        eq(turn.variants.size, 1, "只有最终回答算变体，中间思考不能成为变体")
+        eq(turn.variants[0].content, "好了", "变体是那条有正文的回答")
+        eq(turn.trace.count { it.role == ROLE_ASSISTANT }, 2, "两步思考都在 trace 里")
+        eq(
+            turn.trace.map { it.reasoning },
+            listOf("先看配置", "", "再确认一次", ""),
+            "trace 内部也必须交替：思考 / 工具 / 思考 / 工具"
+        )
+    }
+
+    check("I2 有正文的回答仍然进变体（重新生成语义不变）") {
+        val store = freshStore()
+        val conv = store.create()
+        store.appendMessage(conv, MsgRecord("u1", ROLE_USER, "你好"))
+        store.appendMessage(conv, MsgRecord("a1", ROLE_ASSISTANT, "第一条回答"))
+        store.appendMessage(conv, MsgRecord("a2", ROLE_ASSISTANT, "第二条回答"))
+        val turn = store.load(conv)!!.turns.last()
+        eq(turn.variants.size, 2, "两条回答 = 两个变体")
+        eq(turn.selectedIndex, 1, "游标指向最新变体")
+        eq(turn.trace.size, 0, "回答不进 trace")
+    }
+
+    check("I3 空正文且无思考的步照旧丢弃（不凭空多一条）") {
+        val store = freshStore()
+        val conv = store.create()
+        store.appendMessage(conv, MsgRecord("u1", ROLE_USER, "你好"))
+        store.appendMessage(conv, MsgRecord("x1", ROLE_ASSISTANT, ""))
+        store.appendMessage(conv, MsgRecord("a1", ROLE_ASSISTANT, "回答"))
+        val turn = store.load(conv)!!.turns.last()
+        eq(turn.trace.size, 0, "没有可看的空步不进 trace")
+        eq(turn.variants.size, 1, "也不成为变体")
+    }
+
     check("H5 中断的步骤带文字说明") {
         val dead = toolItem("t9", "", running = false).copy(interrupted = true)
         val flow = traceRunAt(listOf(hUser, dead), 1)

@@ -1820,23 +1820,19 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                     images = ev.message.images,
                     running = false
                 )
-                // R-06：显示态命中才替换；落库**无条件**（store 按 call.id upsert）。
-                // 旧写法把两件事绑在一个 if 上：切走后终态既不替换也不落库，占位永久留在文件里。
+                // R-06：显示态命中才替换；落库无条件（旧写法把两件事绑在一个 if 上，
+                // 切走后终态既不替换也不落库，占位永久留在文件里）
                 projection.finishTool(ev.message.id, done)
                 appendToStore(done)
-                // C2：推进运行态——记下「进行到第几步 + 做过哪些工具」。
-                // B 批只把 stepIndex 初始化成 0 就再没动过 → 中断提示永远「第 0 步」、doneTools 永远空。
-                advanceRunState(ev.message.name)
+                advanceRunState(ev.message.name) // C2：推进「第几步 + 做过哪些工具」
                 // finishTool 返回 false（用户切走了）= 只落库不上屏；切回时从 store 重建
             }
 
             // Phase 2 DoD③：准备重试 → 置位「正在恢复」横幅（U 显示 n/N + 原因）
             is AgentEvent.RetryStarted -> {
                 _retryState.value = RetryState(ev.attempt, ev.max, ev.reason)
-                // W-49：重试是**整次重新请求**（见 RealAgentLoop.callWithRetry 的重试粒度），
-                // 上一次已经通过 onTextDelta 推上屏的增量，重试后会从头发一遍。不清缓冲就会
-                // 出现「前半段 → 重试后整段再来一次」的重复观感；而 429 退避是 10/30/60 秒，
-                // 用户这时早就把前半段读完了，重复比丢内容更刺眼。
+                // W-49：重试是**整次重新请求**，上一轮已推上屏的增量会从头再来一遍；
+                // 429 退避要等 10/30/60 秒，重复比丢内容更刺眼，所以先清缓冲。
                 // 锁序：msgLock → 草稿锁（反向不存在，handleTextDelta 不取 msgLock）。
                 generation.clearDrafts()
             }
@@ -1845,6 +1841,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
             is AgentEvent.RetryFinished -> {
                 _retryState.value = null
             }
+
+            // 中间步思考：无正文不成变体，实时落库才能与工具交替成链
+            is AgentEvent.AssistantStep -> emitTo(UiItem.Assistant("", reasoning = ev.message.reasoning))
 
             // 输出撞到长度上限：界面上「说到一半」与「说完了」长得一模一样，得明说一句
             is AgentEvent.OutputTruncated ->
