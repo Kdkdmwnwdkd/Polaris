@@ -64,12 +64,12 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <div class="wrap">
 <span class="badge">决策总表</span>
 <h1>北辰 · 产品决策总表</h1>
-<p class="sub">活文档 / 每次讨论完只改这一份 / 最后更新 2026-11-27 23:55</p>
+<p class="sub">活文档 / 每次讨论完只改这一份 / 最后更新 2026-11-28 00:10</p>
 
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-27 23:55</strong><br />
+<p>最后更新：<strong>2026-11-28 00:10</strong><br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -124,7 +124,12 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <td>做之前先读</td>
 </tr>
 <tr>
-<td>§9 变更记录</td>
+<td>§9 四份一手材料</td>
+<td>dsh / Claude SDK / Qwen / UI-TARS 实拆，三条要补两条不学</td>
+<td>动手前核对</td>
+</tr>
+<tr>
+<td>§10 变更记录</td>
 <td>每次追加一行</td>
 <td>只看最新一行</td>
 </tr>
@@ -1264,6 +1269,22 @@ else   -&gt; 组级危险(group)      -&gt; 问
 <td>Trae / Claude Code / Cursor 的四层折叠；WorkBuddy 的"过程实时、结果整段"</td>
 </tr>
 <tr>
+<td><strong>一手开源（2026-11 实读）</strong></td>
+<td>DeepSeek Harness <code>deepseek-ai/deepseek-harness</code>：MIT、24 万星、34 个包、Capability Seam 三角色定义、Step/Turn「closes once nothing is owed」、事件三域含 <code>continuation</code>、<code>guard</code>/<code>interaction</code>/<code>self-modification</code></td>
+</tr>
+<tr>
+<td><strong>大厂 SDK 文档</strong></td>
+<td>Claude Agent SDK：<code>ResultMessage.subtype</code>（success / error_max_turns / error_max_budget_usd）、五种消息、Hooks 的 <code>AllowWithModification</code>、<code>PreCompact</code>、「先别急着上向量」</td>
+</tr>
+<tr>
+<td><strong>国产大厂方案</strong></td>
+<td>阿里 Qwen Intelligence（云栖 2026-09）：Planner / Use / Creative 三层、「能走接口就走接口，没接口再退回看屏幕」、敏感三分、MobileWorld-Safety、CARE（token −34.2% / 步数 −21.6%）</td>
+</tr>
+<tr>
+<td><strong>国产手机 agent 实现</strong></td>
+<td>UI-TARS 系 / 豆包手机：<code>READ_FRAME_BUFFER</code> + <code>INJECT_EVENTS</code>、每次 200–400KB、0–999 归一化、<strong>触屏抖动规避微信风控</strong>、4bit 3.2GB &lt;50ms</td>
+</tr>
+<tr>
 <td>论文</td>
 <td>GTA（EG/RG 分类）、AgentHazard（28.8% 误导率）、MobiBench（模块级 94.7%）、UI-Nexus、MobileWorld（最强组合 51.7%）</td>
 </tr>
@@ -1275,7 +1296,443 @@ else   -&gt; 组级危险(group)      -&gt; 问
 <p><strong>十二条对齐，五条长出自己。</strong><br />
 对齐的部分照抄结论（数字、阈值、结构），长出来的部分只抄思路（为什么这么做），形态自己定。</p>
 </blockquote>
-<h2>九、变更记录</h2>
+<h2>九、四份一手材料实拆：DeepSeek / Anthropic / 阿里 / 字节</h2>
+<blockquote>
+<p>前面八章大多是"二手总结"（博客、论文摘要）。这一章是四份<strong>能直接读源码或官方文档</strong>的材料，<br />
+每一份都拆到"他为什么必须这么做"，再看北辰该长成什么样。</p>
+</blockquote>
+<h3>9.1 DeepSeek Harness（dsh）：24 万星，MIT，一切皆插件</h3>
+<p>DeepSeek 把自家用了很久的 agent 运行外壳开源了：<code>github.com/deepseek-ai/deepseek-harness</code>，<br />
+TypeScript + Cordis 框架，MIT 协议，24 万+ star，<code>npx @deepseek-ai/dsh web</code> 一行跑起来。<br />
+10 月发桌面端（Electron），社区已经卷出四个客户端（DSH Desktop / DshCockpit / macos 原生版 / Pilot Harness）。</p>
+<p><strong>34 个包，按职责分层</strong>，<code>core</code> 七件套：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>包</th>
+<th>管什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>core/session</code></td>
+<td>append-only 的 <code>SessionEvent</code> 日志</td>
+</tr>
+<tr>
+<td><code>core/system-prompt</code></td>
+<td>提示词分段与工具 schema 装配</td>
+</tr>
+<tr>
+<td><code>core/tools</code></td>
+<td>工具注册表 + <strong>带守卫的执行管线</strong></td>
+</tr>
+<tr>
+<td><code>core/agent</code></td>
+<td>Agent 接口与 <code>agent/*</code> 事件</td>
+</tr>
+<tr>
+<td><code>core/agent-loop</code></td>
+<td>默认驱动</td>
+</tr>
+<tr>
+<td><code>core/scope</code></td>
+<td>按 agent 作用域的注册原语</td>
+</tr>
+<tr>
+<td><code>llm/llm</code></td>
+<td>消息与流式词汇 + <strong>适配器接缝</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>往外一圈是能力层（llm / shell / fs / web / lsp / terminal / subagent / workflow / compaction），<br />
+再外一圈是治理层：<strong><code>guard</code>（循环卫生与工具超时）、<code>interaction</code>（审批与权限）、<code>settings</code>、<code>credentials</code>、<code>identity</code></strong>。</p>
+<h4>最重要的一条：Capability Seam 的正式定义</h4>
+<p>原文：</p>
+<blockquote>
+<p>A <strong>seam</strong> is a swappable capability with three roles: a <strong>Service Definition</strong> declaring the interface,<br />
+a <strong>Service Provider</strong> implementing it, and a <strong>Consumer</strong> using it, commonly a model-facing tool.<br />
+A package may combine roles, but one role alone is not a seam; adding a capability means designing all three.</p>
+<p>Seams are why one provider swap changes the whole product. <strong>Filesystem and subprocess providers share one<br />
+execution world</strong>, so pointing them at a remote sandbox moves Bash, PTY, and LSP with them, with no provider forks.</p>
+</blockquote>
+<p>这直接印证了我在 §1 说的"把手收成一套接口"，但<strong>它比我说的更严</strong>：</p>
+<ol>
+<li>光有接口不算 seam，必须<strong>三个角色齐全</strong>（定义 / 实现 / 消费者）。</li>
+<li>seam 要按<strong>执行世界</strong>成组，不是按单个工具。他们把"文件系统 + 子进程"当成一个世界，<br />
+   所以换远端沙箱时 Bash、PTY、LSP 一起搬走。</li>
+</ol>
+<p><strong>北辰对照</strong>：<code>ui_tree / ui_tap / ui_click / ui_input / ui_key / ui_swipe</code> 现在<strong>直接绑在 <code>AccessibilityService</code> 上</strong>，<br />
+<code>ShellChannel</code> 只抽象了 shell 一条。将来官方 AppFunctions 口子开了，界面操作这一组没有 seam 可换，<br />
+只能改 <code>UiAutomationTools</code> + 循环里的工具注册——正是"现在不做、将来十倍代价"的那件事。<br />
+<strong>而且按 dsh 的粒度，这一组要当成一个 execution world 整体抽象</strong>（a11y / shell / appfunction 三种实现，一套定义）。</p>
+<h4>Step 与 Turn 的定义，比我说的准</h4>
+<blockquote>
+<p>A <strong>step</strong> is one model request plus the tools it calls.<br />
+A <strong>turn</strong> is zero or more steps: it opens before its first input is claimed and <strong>closes once nothing is owed</strong>.</p>
+</blockquote>
+<p>"closes once nothing is owed"——不是"模型不说话就结束"，是"<strong>没有欠着的东西</strong>"。这比我们现在的<br />
+"<code>tool_calls</code> 为空即结束"精确：模型沉默但任务没完（欠着一个未完成的子目标），在 dsh 的语义里 turn 不该关。</p>
+<h4>事件分三域</h4>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>域</th>
+<th>性质</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Session events</td>
+<td>落盘的持久事实</td>
+<td>重载后仍存在</td>
+</tr>
+<tr>
+<td>Agent events</td>
+<td><strong>运行时</strong>（inbox / step / status / request / validation / <strong>continuation</strong>）</td>
+<td>观察或拦截在飞的工作</td>
+</tr>
+<tr>
+<td>Capability events</td>
+<td>策略与适配器（<code>fs/*</code>、<code>tools/*</code>、<code>telemetry/*</code>）</td>
+<td>挂策略而不引入循环</td>
+</tr>
+</tbody>
+</table></div>
+<p>注意 <code>continuation</code> 是<strong>一等事件</strong>——"续写"在 dsh 里不是补丁，是循环的一个正式阶段。我们这块还是空的。</p>
+<h4>还有两件我们没有的</h4>
+<ul>
+<li><strong><code>self-modification</code></strong>：agent 能检查并挂载自己的插件，仓库里的 <code>demo:cordis</code> 演示的就是"agent 改自己的运行时"。</li>
+<li><strong>Profile / Bundle</strong>：一套插件树可以打包成可分发单元，换 Profile 等于换产品形态（web / headless / sdk / acp 五种）。</li>
+</ul>
+<h3>9.2 Claude Agent SDK：终止原因是枚举，不是布尔</h3>
+<p>官方文档里最值得抄的一个东西，是 <code>ResultMessage.subtype</code>——<strong>循环结束时必须说明是怎么停的</strong>：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>subtype</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>success</code></td>
+<td>正常完成</td>
+</tr>
+<tr>
+<td><code>error_max_turns</code></td>
+<td>打到轮次上限</td>
+</tr>
+<tr>
+<td><code>error_max_budget_usd</code></td>
+<td>超出预算</td>
+</tr>
+</tbody>
+</table></div>
+<p>加上它 yield 的五种消息：<code>SystemMessage</code>（含<strong>压缩边界标记</strong>） / <code>AssistantMessage</code> / <code>UserMessage</code> /<br />
+<code>StreamEvent</code> / <code>ResultMessage</code>。</p>
+<p><strong>北辰对照</strong>：我们的循环只有"结束"一个状态，UI 上分不清"做完了"和"步数用光了"。这是 §8.9 说的<br />
+PTR/OTR 无法度量的直接原因——<strong>终止原因不是一等公民，就永远测不了"该停时停没停"</strong>。</p>
+<p>另外三条：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>机制</th>
+<th>原文要点</th>
+<th>我们的形态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hooks 三返回值</td>
+<td><code>Allow</code> / <code>Deny</code> / <strong><code>AllowWithModification</code></strong>（允许但改输入：脱敏、限流）</td>
+<td>只有"允许/拒绝"。<strong>改输入</strong>这一档我们没有</td>
+</tr>
+<tr>
+<td><code>PreCompact</code> hook</td>
+<td>压缩<strong>前</strong>触发，给机会把完整历史存到外部——"压缩之后那些被摘要掉的细节就永远消失了"</td>
+<td>有压缩，不确定有没有压缩前存档（待验）</td>
+</tr>
+<tr>
+<td>子 Agent</td>
+<td>独立上下文，只把摘要回传；官方理由是"并行"和"<strong>上下文隔离</strong>"，后者才是关键</td>
+<td>无子 agent</td>
+</tr>
+</tbody>
+</table></div>
+<p>还有一条反直觉的官方态度：<strong>"先别急着上向量检索"</strong>。语义检索更快但更不准、更难维护、更不透明，<br />
+建议先用 agentic search（grep / 文件系统当语料库），确实需要更快或更大召回再上向量。<br />
+我们的工作区 + <code>read_file</code> + <code>grep</code> 正是 agentic search 路线，<strong>方向本来就对，不用改</strong>。</p>
+<h3>9.3 Qwen Intelligence（阿里，云栖 2026-09）：和我们最像，也最该对照</h3>
+<p>阿里把手机 agent 拆成三层交付，不做全能助手：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>层</th>
+<th>名字</th>
+<th>干什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>规划</td>
+<td>Mobile Planner Agent</td>
+<td>一句话拆成可执行步骤，编排工具，中途改计划。<strong>"模型 × Harness 闭环"</strong>，Harness 管状态、记忆、技能</td>
+</tr>
+<tr>
+<td>执行</td>
+<td>Mobile-Use Agent</td>
+<td>操作界面</td>
+</tr>
+<tr>
+<td>创作</td>
+<td>Mobile Creative Agent</td>
+<td>出图出文</td>
+</tr>
+</tbody>
+</table></div>
+<h4>一条我们现在就该留口子的设计</h4>
+<blockquote>
+<p><strong>能走接口就走接口：MCP、API、DeepLink、CLI；没有接口再退回看屏幕、点界面。</strong></p>
+</blockquote>
+<p>这句话直接回答了用户前几轮反复说的"官方迟早会给口子"。阿里的做法不是等口子，是<strong>现在就按"接口优先、UI 兜底"排序</strong>：<br />
+有 API 用 API，有 DeepLink 用 DeepLink，实在没有才截图点界面。</p>
+<p><strong>北辰对照</strong>：<code>grep</code> 全库，<code>deepLink</code> / <code>intent://</code> / "接口优先" <strong>零命中</strong>。我们所有界面操作都只有一条路——无障碍。</p>
+<p>这不是"要不要做"的问题，是<strong>排序问题</strong>。哪怕现在只有无障碍一个实现，工具描述里也该写上<br />
+"若目标 App 有 DeepLink 或 API，优先用它"，否则模型永远只会点屏幕，将来口子开了也不会用。</p>
+<h4>敏感动作三分，比我们的二分细</h4>
+<blockquote>
+<p>高风险请求<strong>拒绝</strong>；付款和删除交<strong>给用户确认</strong>；发评论一类动作<strong>交还用户</strong>。</p>
+</blockquote>
+<p>我们只有"问 / 不问"。阿里把"交还用户"单列一档——正是 §3.5 说的<strong>草稿态</strong>，只是他们连"发评论"这种低危也交给用户。</p>
+<h4>四套基准，每一套量一件不同的事</h4>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>基准</th>
+<th>量什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MobilePA-Bench</td>
+<td>有状态的工具规划（工具调用、记忆、技能、子 Agent 协作）</td>
+</tr>
+<tr>
+<td>MobileWorld</td>
+<td>云端环境的长程、跨应用执行，含<strong>向用户澄清</strong>和 MCP 工具</td>
+</tr>
+<tr>
+<td>MobileWorld-Real</td>
+<td><strong>真机、真实账号、真实网络</strong>下的日常任务</td>
+</tr>
+<tr>
+<td>MobileWorld-Safety</td>
+<td><strong>风险场景下会不会做出不安全动作</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>最后一套是我们完全没有的：它量的不是"能不能做成"，是"会不会做错"。<strong>R06 目前一条这类断言都没有。</strong></p>
+<h4>两个硬数字</h4>
+<p>CARE 强化学习（对冗余点击与重复滑屏施加软约束）：<strong>长程任务思考 token −34.2%，平均操作步数 −21.6%</strong>。</p>
+<p>这条印证 §8.3：冗余步骤是手机 agent 的主要成本来源，业界已经在训练层面压它。<br />
+我们压不了模型，只能在<strong>运行时</strong>压（界面指纹、差分、<code>ui_complete</code> 早停）。</p>
+<h4>失败处理的一段原话</h4>
+<blockquote>
+<p>建立<strong>行动-反馈-验证契约</strong>，遇到未知界面报错时，自动<strong>持久化失败轨迹</strong>并动态调度技能库或拉起轻量子 Agent 进行<strong>局部修正</strong>。</p>
+</blockquote>
+<p>三个词：契约、持久化失败轨迹、局部修正。对照 §8.10（只修最小前置条件）——方向一致，<br />
+但"持久化失败轨迹"我们是有的（trace 保序落盘），"局部修正"没有。</p>
+<h3>9.4 UI-TARS / 豆包手机：纯视觉路线的真实代价</h3>
+<p>字节走的是另一条路：<strong>不给树，只给图</strong>。</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>项</th>
+<th>做法</th>
+<th>代价</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>看屏幕</td>
+<td>申请 <code>READ_FRAME_BUFFER</code>，直接读 GPU 帧缓冲</td>
+<td>系统级权限，普通 App 拿不到</td>
+</tr>
+<tr>
+<td>动手</td>
+<td><code>INJECT_EVENTS</code> 事件注入</td>
+<td>同上</td>
+</tr>
+<tr>
+<td>上行</td>
+<td>每次 200–400KB 截图</td>
+<td>断网干不了，弱网体验差</td>
+</tr>
+<tr>
+<td>坐标</td>
+<td><strong>归一化到 0–999</strong></td>
+<td>换分辨率不用改 prompt</td>
+</tr>
+<tr>
+<td>端侧</td>
+<td>4bit 量化到 3.2GB，&lt;50ms</td>
+<td>需要旗舰 NPU</td>
+</tr>
+<tr>
+<td><strong>防检测</strong></td>
+<td><strong>触屏抖动模拟</strong>：点击滑动时加微小坐标偏移，"模拟人类操作特性，规避微信等 APP 的风控检测"</td>
+<td>—</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>最后一行是我们从来没想过的问题。</strong> 微信这类 App 有机器人行为检测，机器式的精确点击+匀速滑动会被识别。<br />
+豆包专门加了坐标抖动来绕开。北辰现在的 <code>dispatchGesture</code> 是精确落点、固定时长——<strong>如果用户让 agent 操作微信，<br />
+被风控拦掉是完全可能的</strong>，而且失败原因看起来会像"点了没反应"，很难归因。</p>
+<p>这条不用现在做，但要记下来：<strong>它是"操作像人"这个特性的一半理由</strong>（另一半是稳定判定）。</p>
+<p><strong>坐标那条要诚实</strong>：我们 <code>ui_tap</code> 用绝对像素，<code>bounds</code> 也是像素。这在我们这条链路里<strong>不是落后</strong>——<br />
+模型读的是 <code>ui_tree</code> 的 bounds，绝对值本来就自洽。归一化是给"VLM 直接看图输出坐标"的场景用的。<br />
+但<strong>如果将来接纯视觉通道（截图直接给 VLM）</strong>，必须换成 0–999，否则换台手机全废。这是一个"将来会踩的坑"，不是"现在的错"。</p>
+<h3>9.5 十三个开源 GUI agent，一张表看完</h3>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>方案</th>
+<th>出身</th>
+<th>核心优势</th>
+<th>明显短板</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UI-TARS / 1.5 / 2</td>
+<td>字节</td>
+<td>单模型端到端，性能高</td>
+<td>依赖自建数据集，复现难</td>
+</tr>
+<tr>
+<td>AutoGLM / Open-AutoGLM</td>
+<td>智谱</td>
+<td>模块化，MIT</td>
+<td>性能非最优</td>
+</tr>
+<tr>
+<td>Qwen-UI-Agent / GUI-Owl</td>
+<td>阿里</td>
+<td>视觉语言模型强</td>
+<td>依赖 Mobile-Agent-v3 框架</td>
+</tr>
+<tr>
+<td>MAI-UI</td>
+<td>阿里</td>
+<td>全尺寸端云协同、自进化数据管线</td>
+<td>架构复杂</td>
+</tr>
+<tr>
+<td>AgentCPM-GUI</td>
+<td>清华 + 面壁</td>
+<td><strong>中文应用适配好</strong></td>
+<td>依赖特定数据集</td>
+</tr>
+<tr>
+<td>GELab-Zero</td>
+<td>阶跃</td>
+<td>零样本、隐私保护</td>
+<td>性能依赖基座</td>
+</tr>
+<tr>
+<td>Step-GUIEdge</td>
+<td>阶跃</td>
+<td>端侧轻量</td>
+<td>性能受限</td>
+</tr>
+<tr>
+<td>MobiAgent</td>
+<td>上交 IPADS</td>
+<td>AgentRR 加速、可定制</td>
+<td>组件多</td>
+</tr>
+<tr>
+<td>Droidrun</td>
+<td>社区</td>
+<td>模块化、支持 iOS</td>
+<td>依赖外部 LLM</td>
+</tr>
+<tr>
+<td>mobile-use</td>
+<td>Minitap</td>
+<td>多智能体、跨平台</td>
+<td>架构较重</td>
+</tr>
+<tr>
+<td>AppAgent</td>
+<td>腾讯</td>
+<td>自主探索、知识积累</td>
+<td>单智能体</td>
+</tr>
+<tr>
+<td>GUI-R1</td>
+<td>研究</td>
+<td>极高数据效率（3K 数据）</td>
+<td>仍在研究阶段</td>
+</tr>
+<tr>
+<td><strong>北辰</strong></td>
+<td>我们</td>
+<td><strong>全在本机、无 ADB、无云端、全程可审计</strong></td>
+<td>只有安卓，模型靠外部</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>看完这张表，我们的位置其实很清楚</strong>：上面十二个全是"模型侧的选手"——他们在比谁的 VLM 更会看图。<br />
+北辰不比这个（比不过，也不该比）。北辰比的是<strong>运行环境</strong>：agent 住在手机里，不经过电脑、不经过云端、不要系统级权限。</p>
+<p>这不是自我安慰。UI-TARS 要 <code>READ_FRAME_BUFFER</code>，豆包要 <code>INJECT_EVENTS</code>，AutoGLM 要 ADB——<br />
+<strong>三个都要么要系统签名，要么要一台电脑</strong>。我们只需要用户手动开一次无障碍。这是唯一能装进普通用户手机的那条路。</p>
+<h3>9.6 净结论：三条要补、两条不学、一条新发现</h3>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>结论</th>
+<th>依据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>界面操作收成一个 seam</strong>（定义/实现/消费者三角齐全，按 execution world 整体抽象）</td>
+<td>dsh 的 Capability Seam，三条角色缺一不可</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>终止原因升级为枚举</strong>（<code>success</code> / <code>max_steps</code> / <code>max_time</code> / <code>max_budget</code> / <code>aborted</code> / <code>error</code>）</td>
+<td>Claude SDK 的 <code>ResultMessage.subtype</code>；也是 PTR/OTR 可测的前提</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>工具描述里写"接口优先、UI 兜底"</strong></td>
+<td>阿里的排序；我们 <code>deepLink</code> 零命中</td>
+</tr>
+<tr>
+<td>—</td>
+<td><strong>不学纯视觉路线</strong>（不要 <code>READ_FRAME_BUFFER</code>）</td>
+<td>要系统级权限，普通 App 装不上</td>
+</tr>
+<tr>
+<td>—</td>
+<td><strong>不学"agent 改自己运行时"</strong>（dsh 的 <code>self-modification</code>）</td>
+<td>手机端风险不对称，出问题没有回滚</td>
+</tr>
+<tr>
+<td>★</td>
+<td><strong>操作要像人</strong>：坐标抖动 + 节奏扰动，规避 App 风控</td>
+<td>豆包实测被微信风控，专门加了抖动。<strong>公开资料里只有这一处提到，我们完全没考虑</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>最后一条是这一轮唯一的"新发现"，而且它不是来自论文，是来自一个产品的实现细节——<br />
+<strong>只有真的在手机上跑过、被微信拦过的人，才会想到加抖动。</strong></p>
+<h2>十、变更记录</h2>
 <div class="tblwrap"><table>
 <thead>
 <tr>
@@ -1303,6 +1760,14 @@ else   -&gt; 组级危险(group)      -&gt; 问
 <tr>
 <td>2026-11-27 23:52</td>
 <td>§8 补第二批材料：Letta 三层记忆、SPA-Bench 的 PTR/OTR、FoneClaw 三层失败与最小恢复、HITL 五层接管与 10–15% 中断率、幂等与禁止双重门控；新增 §8.13 来源索引（十一类，按部位对应）</td>
+</tr>
+<tr>
+<td>2026-11-27 23:55</td>
+<td>§3.2 补重要修正：第二档的「智能判断」不能靠模型自报置信度（70–75% vs 实际 20–35%），必须落在确定性触发器上；加「禁止双重门控」纪律</td>
+</tr>
+<tr>
+<td>2026-11-28 00:10</td>
+<td>新增 §9「四份一手材料实拆」。DeepSeek Harness（24 万星 MIT，Capability Seam 三角色、Step/Turn 定义、continuation 一等事件）、Claude Agent SDK（终止原因枚举、AllowWithModification、PreCompact）、Qwen Intelligence（接口优先/UI 兜底、敏感三分、MobileWorld-Safety）、UI-TARS/豆包（纯视觉代价、0-999 归一化、<strong>触屏抖动防风控</strong>）。净结论三条要补、两条不学、一条新发现</td>
 </tr>
 </tbody>
 </table></div>
