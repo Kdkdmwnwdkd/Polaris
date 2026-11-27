@@ -36,6 +36,12 @@ object DiagnosticsExporter {
     /** native 侧 dup2 接过来的 fd 2 落盘文件（整进程共用，不只推理库写）。 */
     private const val STDERR_FILE = "native-stderr.txt"
 
+    /** 诊断包带几份 Java 崩溃全文。三份足够认出「同一个错反复 N 次」。 */
+    private const val MAX_JAVA_CRASH = 3
+
+    /** 单份 Java 崩溃的字符上限（完整堆栈通常 2~4KB，这个值纯属防意外）。 */
+    private const val MAX_JAVA_CRASH_CHARS = 6000
+
     /** 回合日志目录名，与 `ChatViewModel.runJournal` 保持一致（两处硬编码必须同源）。 */
     private const val JOURNAL_DIR = "run-journal"
 
@@ -108,6 +114,9 @@ object DiagnosticsExporter {
             appendLine()
             appendLine("—— 原生崩溃现场 ——")
             appendLine(crashSnapshot(context, secrets))
+            appendLine()
+            appendLine("—— 最近崩溃报告（Java）——")
+            appendLine(javaCrashSection(context, secrets))
             appendLine()
             appendLine("—— 最近 $MAX_LOG_LINES 行日志 ——")
             appendLine(tail.ifBlank { "(无日志)" })
@@ -262,6 +271,50 @@ object DiagnosticsExporter {
         // 前两者回答「发生了什么」，第三者回答「有多慢、写了多少」。
         listOfNotNull(summary, ndjsonOf(context), traceOf(context))
     }.getOrDefault(emptyList())
+
+    /**
+     * 最近几份 **Java** 崩溃报告的全文。
+     *
+     * 2026-11-27 真机现场：用户按提示导出了诊断包，包里只有「原生崩溃现场」，
+     * 而他那一小时里的十次崩溃全是 Java 层（`Cannot create an instance of ChatViewModel`）。
+     * 也就是说，诊断包对「最常发生的那一类崩溃」一个字都没有——
+     * 号称「点一下就能定位」，实际还得让用户手抄，而手抄正是他抱怨「不给复制」的那件事。
+     *
+     * 只取最近 [MAX_JAVA_CRASH] 份：同一个异常刷十遍，第三份之后没有新信息，
+     * 只会把后面的日志挤出包外。每份都限量，超长就截断并注明原长度
+     * （截断要说出来，不然读的人会以为堆栈本来就到这儿就结束了）。
+     *
+     * @param secrets 必须再脱一次：`formatReport` 已在写盘时脱敏，但这里是**第二条出口**，
+     *   而 `Caused by:` 里的内层异常消息常带 URL / Key（`IOException: ...?key=sk-...`）。
+     *   只依赖写盘那一次，等于给未来任何一处改格式留了个漏口。
+     */
+    private fun javaCrashSection(context: Context, secrets: List<String>): String {
+        val records = runCatching { CrashLogger.listCrashFiles(context) }.getOrDefault(emptyList())
+        if (records.isEmpty()) return "(无——本机还没发生过 Java 崩溃)"
+        val take = records.take(MAX_JAVA_CRASH)
+        val sb = StringBuilder()
+        sb.appendLine(
+            "共 ${records.size} 份，下列为最近 ${take.size} 份全文" +
+                "（完整文件在 files/crash/，日志页「最近崩溃」可逐条复制）"
+        )
+        take.forEachIndexed { i, r ->
+            sb.appendLine()
+            sb.append("\u25b8 [").append(i + 1).append("] ").append(r.fileName)
+            sb.append("  ").append(formatCrashTime(r.timeMs)).append('\n')
+            val body = r.text.ifBlank { "(报告为空)" }
+            if (body.length > MAX_JAVA_CRASH_CHARS) {
+                sb.append(body.take(MAX_JAVA_CRASH_CHARS))
+                sb.append("\n…（已截断，原文 ").append(body.length).append(" 字符）\n")
+            } else {
+                sb.append(body)
+                if (!body.endsWith("\n")) sb.append('\n')
+            }
+        }
+        return DiagnosticsRedaction.redact(sb.toString(), secrets)
+    }
+
+    private fun formatCrashTime(ms: Long): String =
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(ms))
 
     /**
      * 把原生崩溃现场拼成一段文字。

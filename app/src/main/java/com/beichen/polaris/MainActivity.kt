@@ -14,42 +14,81 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.beichen.polaris.core.CrashLogger
 import com.beichen.polaris.browser.BrowserHost
 import com.beichen.polaris.pet.PetState
 import com.beichen.polaris.startup.StartupGuard
+import com.beichen.polaris.startup.StartupQuarantine
 import com.beichen.polaris.ui.AgentKitTheme
 import com.beichen.polaris.ui.AppearanceState
 import com.beichen.polaris.ui.AppScaffold
 import com.beichen.polaris.ui.ApprovalHost
 import com.beichen.polaris.ui.ChatViewModel
+import com.beichen.polaris.ui.StartupRescueScreen
 import com.beichen.polaris.ui.ThemeMode
 import com.beichen.polaris.workflow.WorkflowNotifier
 
 /**
- * ChatViewModel 的显式工厂（2026-11-27 真机取证）。
+ * ChatViewModel 的显式工厂（2026-11-27 真机）。
  *
- * 换掉默认工厂的理由只有一个：**让构造失败留下原因**。
- * 默认工厂抛的是 `RuntimeException: Cannot create an instance of class ChatViewModel`，
- * 真正的原因藏在 `cause` 链里；而崩溃处理器打的是这个包装异常，日志页也就只显示这一句。
- * 用户把报告发过来，看到的仍然是「建不出来」——等于没证据。
+ * 换掉默认工厂的理由有两个，都是被真机逼出来的：
  *
- * 这里把异常原样写成一份标准崩溃报告（`stackTraceToString` 会展开 `Caused by:`），
- * 然后**重新抛出**：该崩还是崩，行为与默认工厂一致，只是这次崩得能查。
+ * ① **让失败留下原因**。默认工厂抛的是 `RuntimeException: Cannot create an instance of
+ *    class ChatViewModel`，真正的原因在 `cause` 链里；崩溃处理器记录的就是这层包装，
+ *    用户发过来的报告通篇一句「建不出来」——等于没证据。
+ * ② **别让一次脏状态判死刑**。真机上十次崩溃全是同一个错，而中间有两次启动是成功的
+ *    （00:29:05、09:31:36 都正常进到了对话页）——说明它不是「数据坏了就必崩」的确定性
+ *    故障，而是构造路径上某一步在特定状态下会抛。这种前提下直接崩掉整个应用是最差的选择。
+ *
+ * 所以这里做一次**无损重试**：第一次失败后只清「上次跑到哪一步」这类可再生状态
+ * （运行态快照 / 回合日志 / 任务队列 / 草稿），会话正文一个字不动，然后再建一次。
+ * 仍失败才上抛——那时交给救援页，由用户决定要不要动业务状态。
  */
 private val chatVmFactory = viewModelFactory {
     initializer {
         val app = this[APPLICATION_KEY] as Application
-        try {
-            ChatViewModel(app)
-        } catch (t: Throwable) {
-            runCatching { CrashLogger.recordCaught(app, "ChatViewModel 构造失败", t) }
-            throw t
-        }
+        buildChatViewModel(app)
+    }
+}
+
+/** 两次尝试：原样 → 清运行态。两次都失败才抛，异常带上两次的 cause 链。 */
+private fun buildChatViewModel(app: Application): ChatViewModel {
+    val first = runCatching { ChatViewModel(app) }
+    first.getOrNull()?.let { return it }
+    val firstError = first.exceptionOrNull() ?: IllegalStateException("ChatViewModel 构造失败且无异常")
+    runCatching { CrashLogger.recordCaught(app, "ChatViewModel 构造失败（第 1 次·原样）", firstError) }
+
+    // 只清可再生状态：这几项丢了最多让上次的活儿重跑一遍，不会少一条会话。
+    clearVolatileState(app)
+    val second = runCatching { ChatViewModel(app) }
+    second.getOrNull()?.let { return it }
+    val secondError = second.exceptionOrNull() ?: IllegalStateException("ChatViewModel 构造失败且无异常")
+    runCatching { CrashLogger.recordCaught(app, "ChatViewModel 构造失败（第 2 次·清运行态后）", secondError) }
+
+    // 第 2 次才是「当前状态」的真实原因；第 1 次多半是被同一份状态连累的。
+    // 把第 1 次挂到 suppressed 上，两段堆栈都在，读的人不用猜哪次更能代表问题。
+    if (secondError !== firstError) runCatching { secondError.addSuppressed(firstError) }
+    throw secondError
+}
+
+/**
+ * 清掉「下次进来还得重新算、但不含用户内容」的状态。
+ *
+ * 白名单而不是黑名单：这里每加一项都是一次潜在的数据损失，
+ * 所以只允许「丢了最多让上次的活儿重跑一遍」的东西进来。
+ * 会话（conversations.json / conversations.d）与记忆、提示词**不在**此列。
+ */
+private fun clearVolatileState(app: Application) {
+    val files = app.filesDir ?: return
+    listOf("agent_run_state.json", "drafts.json").forEach { name ->
+        runCatching { java.io.File(files, name).delete() }
+    }
+    listOf("run-journal", "jobs").forEach { name ->
+        runCatching { java.io.File(files, name).deleteRecursively() }
     }
 }
 
@@ -76,13 +115,40 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         pendingWorkflowId.value = intent?.getStringExtra(WorkflowNotifier.EXTRA_WORKFLOW_ID)
         pendingDest.value = intent?.getStringExtra(EXTRA_DEST)
+        // ViewModel 在这里建，不在 `AgentKitApp` 里用 `viewModel()`。
+        //
+        // 差别只有一处，但这一处决定了「失败之后还有没有路」：`viewModel()` 是 composable，
+        // 构造抛异常发生在**组合期**，只能一路冒到 `setContent` 之外——也就是崩溃、白屏、
+        // 回桌面。挪到组合之前，异常就落在一个能接住的 `Result` 里，界面还能画出来。
+        // 真机上用户要的正是这个：不是「永远不崩」，而是崩了能看见原因、能复制、能自救。
+        val vmAttempt = runCatching {
+            ViewModelProvider(this, chatVmFactory)[ChatViewModel::class.java]
+        }
         setContent {
-            AgentKitApp(
-                pendingWorkflowId = pendingWorkflowId.value,
-                onWorkflowConsumed = { pendingWorkflowId.value = null },
-                pendingDest = pendingDest.value,
-                onDestConsumed = { pendingDest.value = null },
-            )
+            val vm = vmAttempt.getOrNull()
+            if (vm != null) {
+                AgentKitApp(
+                    vm = vm,
+                    pendingWorkflowId = pendingWorkflowId.value,
+                    onWorkflowConsumed = { pendingWorkflowId.value = null },
+                    pendingDest = pendingDest.value,
+                    onDestConsumed = { pendingDest.value = null },
+                )
+            } else {
+                RescueApp(
+                    cause = vmAttempt.exceptionOrNull(),
+                    onRetry = {
+                        clearVolatileState(application)
+                        recreate()
+                    },
+                    onResetBusinessState = {
+                        // 重手段：只搬不删，目录里有 README 说怎么搬回来。
+                        // 日志与崩溃报告不在搬移清单里（StartupQuarantine.MOVABLE 有断言钉着）。
+                        runCatching { StartupQuarantine.move(filesDir, System.currentTimeMillis()) }
+                        recreate()
+                    },
+                )
+            }
         }
         // W-15 的后台 WebView：**首帧画完之后**再建，别挡在首帧前面。
         //
@@ -149,6 +215,33 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
+ * 救援页主题壳。
+ *
+ * 复用 [AgentKitTheme] 是为了「崩了」这件事看起来不像另一个 App——用户的判断依据
+ * 往往就是「还是不是那个界面」。但外观偏好的读取要单独兜住：救援页本身绝不能再崩。
+ */
+@Composable
+private fun RescueApp(
+    cause: Throwable?,
+    onRetry: () -> Unit,
+    onResetBusinessState: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    remember { runCatching { AppearanceState.load(ctx.applicationContext) }; true }
+    AgentKitTheme(
+        themeMode = AppearanceState.themeMode,
+        dynamicColor = AppearanceState.dynamicColor,
+        accent = AppearanceState.accent,
+    ) {
+        StartupRescueScreen(
+            cause = cause,
+            onRetry = onRetry,
+            onResetBusinessState = onResetBusinessState,
+        )
+    }
+}
+
+/**
  * 应用根：品牌主题 + 抽屉导航宿主 [AppScaffold]。
  *
  * 主题模式用 rememberSaveable 持有在** Activity 作用域**（而非各页内），
@@ -160,6 +253,7 @@ class MainActivity : ComponentActivity() {
  */
 @Composable
 private fun AgentKitApp(
+    vm: ChatViewModel,
     pendingWorkflowId: String? = null,
     onWorkflowConsumed: () -> Unit = {},
     pendingDest: String? = null,
@@ -172,7 +266,6 @@ private fun AgentKitApp(
     val themeMode = AppearanceState.themeMode
     val dynamicColor = AppearanceState.dynamicColor
     val accent = AppearanceState.accent
-    val vm = viewModel<ChatViewModel>(factory = chatVmFactory)
     // 启动自救的第二个事实：**根组合成功**。LaunchedEffect 在整棵树组合并应用变更后
     // 才启动，所以子组件（ChatScreen）抛异常时它不会跑——正是「这次没起来」的语义。
     // 少了这一步，StartupGuard 只会看到「每次都开始了、永远没成功」，把正常使用也隔离掉。
