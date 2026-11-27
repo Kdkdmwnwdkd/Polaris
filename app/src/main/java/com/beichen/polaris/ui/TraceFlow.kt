@@ -97,70 +97,79 @@ internal data class TraceRun(
  * 与思考要不要在这里出现。分开问过一次，后果是段首的思考被两边都判成「别人负责」，
  * 于是那一整段过程在界面上凭空消失。
  */
-internal data class TraceSlot(val run: TraceRun?, val ownership: TraceOwnership)
+internal data class TraceSlot(
+    val run: TraceRun?,
+    val ownership: TraceOwnership,
+    /**
+     * 这一条的**正文**要不要画。
+     *
+     * 新形态：段首也可能只是一句途中说明（模型先说一句、再调工具）。这时流由它来画，
+     * 正文已经作为「说明」进了流——再画一遍，同一句话就在屏幕上出现两次。
+     * `ownership` 管不了这件事：段首必须是 NONE（否则整条流没人画）。
+     */
+    val drawBody: Boolean
+)
 
 /** 一条助手消息的归属：整条跳过 / 只渲染正文 / 自己全渲染。 */
 internal enum class TraceOwnership { NONE, ABSORBED, TAIL }
 
-/** 过程条目：工具调用，或带思考的助手消息（有没有正文都算）。 */
-private fun isProcessEntry(item: UiItem?): Boolean = when (item) {
+/**
+ * 一轮的边界：**用户消息是墙**。
+ *
+ * 同一轮 = 用户消息之后、下一条用户消息之前的所有助手 / 工具条目。
+ * 两轮之间必然隔着一条用户消息，所以「墙」不需要第二个判据——拿正文当墙会误伤
+ * 「我先查一下」+ tool_call 这种同一条消息里的真实形态。
+ */
+private fun isTurnItem(item: UiItem?): Boolean = when (item) {
     is UiItem.Tool -> true
-    is UiItem.Assistant -> !item.reasoning.isNullOrBlank()
+    is UiItem.Assistant -> true
     else -> false
 }
 
-/**
- * 这一条后面还能不能接着长流。
- *
- * **墙是用户消息，不是正文。**（2026-11-27 修正）
- *
- * 上一版把「交出正文的助手消息」当墙，理由是「别把两轮缝成一件」。方向对，判据错：
- * 两轮之间必然隔着一条用户消息，`isProcessEntry(User) == false` 已经天然断开，
- * 不需要再拿正文当第二道墙。而拿正文当墙会误伤一种真实形态——同一个 assistant
- * 消息里既有 content 又说要调工具（「我先查一下」+ tool_call）：
- *
- *   [User] [Assistant(r=有, t=有)] [Tool]
- *
- * 正文成了墙 → 段从 Tool 重新开始 → 思考留在正文上方单独一行、工具另起一条流，
- * 用户看到的就是「思考和工具还是分开的」。而这本来是同一轮、同一件事。
- */
-private fun canContinueFlow(item: UiItem?): Boolean = when (item) {
-    is UiItem.Tool -> true
-    is UiItem.Assistant -> !item.reasoning.isNullOrBlank()
-    else -> false
-}
-
-/**
- * [index] 所属那一段的区间；null 表示「这一条不成段」。
- *
- * **段的唯一定义就在这里。** 前后的判据都用同一把尺 [canContinueFlow]：
- * 往前退到不能续流为止，往后走到非过程条目或「交出正文的助手消息」为止。
- *
- * 两种不成段：
- * 1. 段内一个工具都没有——那是普通问答，思考仍按「正文上方一行」渲染，
- *    不能为了统一把一次没有工具的回答也折进「过程」里；
- * 2. 段首不是过程条目（用户消息 / 无思考的助手消息），它压根不属于任何一段。
- *
- * 段首**可以**是一条带正文的助手消息：正文自己在原地渲染（流在它上方），
- * 不会被吞掉——见 [traceOwnership] 的 TAIL。
- *
- * 参数不是过程条目时返回 null（由调用方先判 [isProcessEntry]）。
- */
-private fun segmentAt(messages: List<UiItem>, index: Int): IntRange? {
-    if (!isProcessEntry(messages.getOrNull(index))) return null
-
+/** [index] 所属那一轮的区间（含两端）；不是轮内条目则返回 null。 */
+private fun turnRange(messages: List<UiItem>, index: Int): IntRange? {
+    if (!isTurnItem(messages.getOrNull(index))) return null
     var start = index
-    while (canContinueFlow(messages.getOrNull(start - 1))) start--
-
-    var end = start
-    while (true) {
-        val next = messages.getOrNull(end + 1) ?: break
-        if (!isProcessEntry(next)) break
-        end++
-    }
-
-    if ((start..end).none { messages[it] is UiItem.Tool }) return null
+    while (start > 0 && isTurnItem(messages[start - 1])) start--
+    var end = index
+    while (end < messages.lastIndex && isTurnItem(messages[end + 1])) end++
     return start..end
+}
+
+/**
+ * 本轮「最终回答」的下标：最后一条**有正文**的助手消息；`-1` = 本轮没交出正文。
+ *
+ * 这是全文件第二把尺，也是「回答」二字唯一的定义。之前拿「有没有正文」当判据，
+ * 于是**途中说的那句话**（「我先看一下配置」「再查一次」）被当成回答：
+ * 它成了独立气泡、带自己的复制/朗读，思考被夹在两个气泡中间——
+ * 真机上看到的就是「正文 → 思考 → 正文」，而参考实现是「一块过程 + 一段回答」。
+ */
+private fun answerAt(messages: List<UiItem>, turn: IntRange): Int {
+    for (i in turn.last downTo turn.first) {
+        val m = messages[i] as? UiItem.Assistant ?: continue
+        if (m.text.isNotBlank()) return i
+    }
+    return -1
+}
+
+/**
+ * [index] 所属那一轮的区间；null 表示「这一轮不折成流」。
+ *
+ * **段的唯一定义就在这里**，其余全是它的派生。
+ *
+ * 不折流的只有一种：一轮里只有一条助手消息、且没有工具调用——普通问答。
+ * 那种情况思考仍按「回答上方一行」渲染（与 ChatGPT 的 collapsed Thought 同形），
+ * 硬折成过程卡只会让一次简单问答多一层要点的东西。
+ */
+private fun segmentAt(messages: List<UiItem>, index: Int, liveIndex: Int = -1): IntRange? {
+    val turn = turnRange(messages, index) ?: return null
+    val hasTool = (turn.first..turn.last).any { messages[it] is UiItem.Tool }
+    // 草稿不算「多出来的一步」：它落库后会并进同一条助手消息，若把它计入，
+    // 单步问答在流式中会先长出一张一步的过程卡、落库后又缩回「思考一行」——一次白跳。
+    val assistants = (turn.first..turn.last)
+        .count { it != liveIndex && messages[it] is UiItem.Assistant }
+    if (!hasTool && assistants < 2) return null
+    return turn
 }
 
 /**
@@ -169,7 +178,7 @@ private fun segmentAt(messages: List<UiItem>, index: Int): IntRange? {
  * 只有段首拿得到流，段内其余下标返回 null——同一个区间只画一次。
  */
 internal fun traceRunAt(messages: List<UiItem>, index: Int, liveIndex: Int = -1): TraceRun? {
-    val seg = segmentAt(messages, index) ?: return null
+    val seg = segmentAt(messages, index, liveIndex) ?: return null
     if (seg.first != index) return null
     return buildRun(messages, seg, liveIndex)
 }
@@ -177,29 +186,36 @@ internal fun traceRunAt(messages: List<UiItem>, index: Int, liveIndex: Int = -1)
 /**
  * [index] 处那条助手消息的归属。
  *
- * 三段判据全部从区间现算，没有第二份状态：
- *  - 区间起点自己画流 → NONE（正文在流下方照常渲染，思考已进流）；
- *  - 无正文 → 整条已进流 → ABSORBED（原地不用再画一次）；
- *  - 有正文 → TAIL（思考进流，正文留在原地）。
+ * 判据只有一条：**它是不是本轮最后一条有正文的消息**。
+ *  - 段首自己画流 → NONE（正文在流下方照常渲染，思考已进流）；
+ *  - 是最终回答 → TAIL（思考进流，正文留在原地，动作行只属于它一条）；
+ *  - 其余（途中说明 / 纯思考）→ ABSORBED（整条进流：思考一步、说明一步）。
  *
- * 注意 TAIL 不再要求「必须是段尾」。同一个 assistant 消息既有正文又要调工具时，
- * 它的正文就落在段中间；这时它仍然要自己渲染正文——否则那句「我先查一下」会消失。
- * 段内出现多条 TAIL 是允许的，它们按各自的位置依次渲染，流在上面。
+ * 途中说明被吸收是**有意的**，不是丢内容：它变成流里的一步，展开就能读全文。
+ * 真正不能吞的只有最终回答——那是用户要的东西，也是下一轮模型的上下文。
  */
-internal fun traceOwnership(messages: List<UiItem>, index: Int): TraceOwnership {
+internal fun traceOwnership(messages: List<UiItem>, index: Int, liveIndex: Int = -1): TraceOwnership {
     val item = messages.getOrNull(index) as? UiItem.Assistant ?: return TraceOwnership.NONE
-    if (item.reasoning.isNullOrBlank()) return TraceOwnership.NONE
-    val seg = segmentAt(messages, index) ?: return TraceOwnership.NONE
-    return when {
-        seg.first == index -> TraceOwnership.NONE
-        item.text.isBlank() -> TraceOwnership.ABSORBED
-        else -> TraceOwnership.TAIL
-    }
+    val seg = segmentAt(messages, index, liveIndex) ?: return TraceOwnership.NONE
+    if (seg.first == index) return TraceOwnership.NONE
+    return if (index == answerAt(messages, seg)) TraceOwnership.TAIL else TraceOwnership.ABSORBED
 }
 
 /** 一次算完「画不画流」与「正文归谁」，调用方不会只拿到一半。 */
-internal fun traceAt(messages: List<UiItem>, index: Int, liveIndex: Int = -1): TraceSlot =
-    TraceSlot(run = traceRunAt(messages, index, liveIndex), ownership = traceOwnership(messages, index))
+internal fun traceAt(messages: List<UiItem>, index: Int, liveIndex: Int = -1): TraceSlot {
+    val run = traceRunAt(messages, index, liveIndex)
+    val own = traceOwnership(messages, index, liveIndex)
+    val item = messages.getOrNull(index)
+    val drawBody = when {
+        item !is UiItem.Assistant || item.text.isBlank() -> false
+        run == null -> true // 不折流（普通问答）：正文照常渲染
+        own == TraceOwnership.TAIL -> true // 本轮答案
+        // 段首：正文只在本段最后一句（= 本轮答案）时画，否则它已经是流里的一步
+        run.range.first == index -> run.bodyIndex == index
+        else -> false
+    }
+    return TraceSlot(run, own, drawBody)
+}
 
 /**
  * 把「还没落库的流式草稿」接在列表末尾，让段算法看得见它。
@@ -232,6 +248,7 @@ internal fun withLiveDraft(messages: List<UiItem>, text: String?, reasoning: Str
 private fun buildRun(messages: List<UiItem>, seg: IntRange, liveIndex: Int): TraceRun {
     val steps = ArrayList<TraceStep>(seg.count())
     val tools = ArrayList<UiItem.Tool>(seg.count())
+    val answer = answerAt(messages, seg)
     var body = -1
     for (i in seg) {
         when (val m = messages[i]) {
@@ -242,8 +259,14 @@ private fun buildRun(messages: List<UiItem>, seg: IntRange, liveIndex: Int): Tra
             is UiItem.Assistant -> {
                 // liveIndex 是末尾那条还没落库的草稿：它这一步还在长，必须染成「跑」，
                 // 否则用户看到的是「思考」打着已完成的对勾、正文却还在往外蹦。
-                steps += thinkingStep(m.reasoning.orEmpty(), running = i == liveIndex)
-                if (m.text.isNotBlank()) body = i
+                if (!m.reasoning.isNullOrBlank()) {
+                    steps += thinkingStep(m.reasoning, running = i == liveIndex)
+                }
+                if (m.text.isNotBlank()) {
+                    // 只有最后那条有正文的是回答，其余都是「途中说明」：
+                    // 说给用户听、但还没答完的一句，属于过程，不是一条独立回复。
+                    if (i == answer) body = i else steps += textStep(m.text)
+                }
             }
             else -> {}
         }
@@ -257,6 +280,23 @@ private fun buildRun(messages: List<UiItem>, seg: IntRange, liveIndex: Int): Tra
         // 段内在长 = 有工具在跑，或最后一步还是流式思考
         running = tools.any { it.running } || liveIndex in seg,
         bodyIndex = body
+    )
+}
+
+/**
+ * 一段途中说明做成一步：标题「说明」，摘要取首行，全文进详情。
+ *
+ * 为什么不是把它并进上一条思考：模型「说」和「想」是两件事，混成一步后
+ * 用户展开只看到一大坨，分不出哪句是说给他听的。
+ */
+private fun textStep(text: String): TraceStep {
+    val line = text.trim().lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+    return TraceStep(
+        title = "说明",
+        summary = if (line.length > 60) line.take(60) + "…" else line,
+        detail = text.trim(),
+        state = TraceState.DONE,
+        isThinking = false
     )
 }
 

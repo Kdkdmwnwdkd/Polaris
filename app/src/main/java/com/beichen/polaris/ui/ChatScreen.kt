@@ -406,9 +406,9 @@ fun ChatScreen(
                             trace = slot.run,
                             // 思考已进上方过程流：段首自己画流，段尾只画正文；段末还在长时保持展开
                             thinkingInFlow = slot.run != null || slot.ownership == TraceOwnership.TAIL,
-                            traceLive = running && slot.run != null && slot.run.lastIndex == traceSource.lastIndex
+                            traceLive = running && slot.run != null && slot.run.lastIndex == traceSource.lastIndex,
+                            showBody = slot.drawBody // 段首若是「途中说明」，正文已进流，别再画一遍
                         )
-                        // W-30：翻译结果（按消息下标缓存；只显示、不写入会话内容）
                         translations[index]?.let { tr ->
                             TranslationBlock(
                                 ui = tr,
@@ -2157,7 +2157,7 @@ private fun ChatSendButton(enabled: Boolean, interrupting: Boolean = false, onCl
  * 身份不需要两个记号：用户靠右对齐 + 淡色底，助手靠「没有底色」。
  */
 @Composable
-private fun MessageRow(item: UiItem, streaming: Boolean, trace: TraceRun? = null, thinkingInFlow: Boolean = false, traceLive: Boolean = false) {
+private fun MessageRow(item: UiItem, streaming: Boolean, trace: TraceRun? = null, thinkingInFlow: Boolean = false, traceLive: Boolean = false, showBody: Boolean = true) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val rowMaxWidth = this.maxWidth // DslMarker：进到 Row / Column 的 scope 后看不见它
         when (item) {
@@ -2182,7 +2182,7 @@ private fun MessageRow(item: UiItem, streaming: Boolean, trace: TraceRun? = null
                 if (!thinkingInFlow && !item.reasoning.isNullOrBlank()) {
                     ThinkingTraceRow(reasoning = item.reasoning.orEmpty(), streaming = streaming)
                 }
-                MessageBubble(
+                if (showBody) MessageBubble(
                     text = item.text,
                     isUser = false,
                     streaming = streaming,

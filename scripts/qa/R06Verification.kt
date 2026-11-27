@@ -537,10 +537,17 @@ fun main() {
         val flow = traceRunAt(msgs, 1)
         expect(flow != null, "整段应当合成一条流")
         eq(flow!!.range, 1..5, "区间要覆盖到最后的正文")
-        eq(flow.steps.size, 5, "思考/工具/思考/工具/思考 五步")
-        // 段中那条带正文的：思考已进流，正文必须留给自己渲染
-        eq(traceOwnership(msgs, 3), TraceOwnership.TAIL, "段中带正文也要自己渲染正文")
-        eq(traceOwnership(msgs, 5), TraceOwnership.TAIL, "段尾带正文同样自己渲染")
+        eq(
+            flow.steps.map { it.title },
+            listOf("思考", "run_shell", "思考", "说明", "run_shell", "思考"),
+            "途中说明紧跟在它自己的思考之后，位置就是它说出口的位置"
+        )
+        // 2026-11-27 四改：**只有最后一条有正文的是回答**。
+        // 「再查一次。」这种说到一半就接着调工具的话，属于过程，不是一条回复：
+        // 它若自己渲染成气泡，一轮里就会冒出两个「回答」，思考被夹在中间。
+        eq(traceOwnership(msgs, 3), TraceOwnership.ABSORBED, "途中说明整条进流（正文变成一步）")
+        eq(traceOwnership(msgs, 5), TraceOwnership.TAIL, "段尾的最终回答才开始渲染正文")
+        eq(flow.bodyIndex, 5, "本轮交出的正文只有最后那条")
     }
 
     // H9/H10（2026-11-27 真机反馈）：跑的时候又是两层——上面一条工具流，下面单挂「思考中」，
@@ -704,12 +711,59 @@ fun main() {
     // 它不算过程条目（isProcessEntry 看 reasoning），所以段停在它之前、正文自己渲染——
     // 这条断言把「停在哪儿」和「塞不塞空步骤」都钉住：以后谁放宽了成段判据，
     // 忘了给这类步产出正文步骤，就会被这里拦住。
-    check("K1 无思考的中途正文不参与成段：流停在它之前，正文自己渲染") {
+    // K1 在 2026-11-27 反转。
+    //
+    // 旧判据：只有正文、没有思考的一步「不算过程」，流停在它之前、正文自己渲染。
+    // 真机上这是错的——它导致一轮里出现**两条正文气泡**（途中汇报 + 最终回答），
+    // 每条都带自己的复制/朗读，思考卡夹在两者中间；而参考实现（ChatGPT 的
+    // collapsed Thought）是一块过程 + 一段回答。
+    //
+    // 新判据：有没有思考跟「是不是回答」无关，**只有本轮最后一条正文是回答**。
+    check("K1 无思考的途中正文进流成为「说明」，流里不出现空白步骤") {
         val mid = UiItem.Assistant(text = "配置是空的，我去建", reasoning = null)
-        val msgs = listOf(hUser, hTool1, mid)
+        val done = UiItem.Assistant(text = "建好了", reasoning = null)
+        val msgs = listOf(hUser, hTool1, mid, done)
         val flow = traceRunAt(msgs, 1)!!
-        eq(flow.steps.size, 1, "流里只有工具那一步，不塞一条空标题的步骤")
-        eq(traceOwnership(msgs, 2), TraceOwnership.NONE, "这条正文自己渲染，不进流")
+        eq(flow.steps.map { it.title }, listOf("run_shell", "说明"), "工具之后接一步「说明」")
+        eq(flow.steps.last().summary, "配置是空的，我去建", "摘要取正文首行")
+        eq(flow.steps.last().detail, "配置是空的，我去建", "全文进详情，点开能读")
+        expect(flow.steps.none { it.isThinking && it.summary.isBlank() }, "流里不能有空白条目")
+        eq(traceOwnership(msgs, 2), TraceOwnership.ABSORBED, "途中正文不自己渲染气泡")
+        eq(traceOwnership(msgs, 3), TraceOwnership.TAIL, "最后一条正文才是回答")
+        eq(flow.bodyIndex, 3, "回答的位置")
+    }
+
+    check("K2 一轮里只有一条正文气泡：说明与思考都进流") {
+        val msgs = listOf(
+            hUser,
+            UiItem.Assistant(text = "先说一句", reasoning = "想一下"),
+            hTool1,
+            UiItem.Assistant(text = "再补一句", reasoning = "再想一下"),
+            hTool2,
+            UiItem.Assistant(text = "结论", reasoning = null)
+        )
+        val flow = traceRunAt(msgs, 1)!!
+        eq(
+            flow.steps.map { it.title },
+            listOf("思考", "说明", "run_shell", "思考", "说明", "run_shell"),
+            "两次途中说明都按位置进流"
+        )
+        val bodies = msgs.indices.filter { traceOwnership(msgs, it) == TraceOwnership.TAIL }
+        eq(bodies, listOf(5), "整轮只有最后一条渲染成正文")
+    }
+
+    check("K3 段首是途中说明时不再重复画正文（同一句话只出现一次）") {
+        val lead = UiItem.Assistant(text = "我先看看配置", reasoning = "得先确认")
+        val answer = UiItem.Assistant(text = "配置是空的", reasoning = null)
+        val msgs = listOf(hUser, lead, hTool1, answer)
+        val flow = traceRunAt(msgs, 1)!!
+        eq(flow.steps.map { it.title }, listOf("思考", "说明", "run_shell"), "段首的那句话进流")
+        eq(traceAt(msgs, 1).drawBody, false, "段首已进流，正文不能再画一遍")
+        eq(traceAt(msgs, 3).drawBody, true, "答案照常渲染")
+        // 不折流的普通问答仍要画正文
+        val simple = listOf(hUser, UiItem.Assistant(text = "42", reasoning = "算一下"))
+        eq(traceAt(simple, 1).drawBody, true, "普通问答的正文不能因为加了判据而消失")
+        eq(traceAt(simple, 1).run, null, "普通问答不折流")
     }
 
     check("H5 中断的步骤带文字说明") {
@@ -779,8 +833,15 @@ fun main() {
             // 这种段落若成流，界面会从「正文上方的思考一行」跳变成「一步的过程流」，
             // 等工具出现再跳回来。H3 只测了「思考+正文」，漏了这条纯思考的情形，
             // 所以补在这里——变异测试把它改坏时，H3 是绿的。
+            // 2026-11-27：段不再要求「必须含工具」。多步思考（含途中说明）也是一段过程，
+            // 没有工具的纯问答仍不折流（H3 守着）。这里改成「要么有工具、要么确实多步」，
+            // 防止把单条助手消息的问答也裹进过程卡。
             for (r in runs) {
-                expect(r.toolCount > 0, "这一段一个工具都没有，不该成流：${r.range} @ $msgs")
+                val assistants = (r.range).count { msgs[it] is UiItem.Assistant }
+                expect(
+                    r.toolCount > 0 || assistants >= 2,
+                    "单步且无工具的一轮不该成流：${r.range} @ $msgs"
+                )
             }
             // I3 一次问全 == 分开问（只有段首拿得到流）
             for (i in msgs.indices) {
@@ -793,21 +854,30 @@ fun main() {
         expect(tools > 3_000, "穷举里工具出现次数太少（$tools）")
     }
 
-    check("H7 正文永远不会被吸收（回答消失是最贵的错）") {
-        var withBody = 0
+    check("H7 每轮的最后一条正文永不被吸收（回答消失是最贵的错）") {
+        var answers = 0
         eachSequence { msgs ->
+            var turnStart = 0
             msgs.forEachIndexed { i, m ->
+                if (m is UiItem.User) { turnStart = i + 1; return@forEachIndexed }
                 if (m is UiItem.Assistant && m.text.isNotBlank()) {
-                    withBody++
+                    // 这一条之后如果还有别的助手正文，它就不是本轮回答，被吸收是对的
+                    val later = (i + 1 until msgs.size).any {
+                        msgs[it] !is UiItem.User && msgs[it] is UiItem.Assistant &&
+                            (msgs[it] as UiItem.Assistant).text.isNotBlank()
+                    }
+                    if (later) return@forEachIndexed
+                    answers++
                     val own = traceOwnership(msgs, i)
                     expect(
                         own != TraceOwnership.ABSORBED,
-                        "下标 $i 的回答被判成「已并入流」，界面上会直接消失：$msgs"
+                        "下标 $i 的最终回答被判成「已并入流」，界面上会直接消失：$msgs"
                     )
                 }
             }
+            expect(turnStart >= 0, "")
         }
-        expect(withBody > 1_000, "穷举里带正文的消息太少（$withBody）")
+        expect(answers > 500, "穷举里的最终回答太少（$answers）")
     }
 
     // ── 汇总 ────────────────────────────────────────────────────

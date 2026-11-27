@@ -100,10 +100,17 @@ internal fun ToolTraceRow(run: TraceRun, live: Boolean = false) {
         if (liveStep >= 0 && !touchedByUser) openStep = liveStep
     }
 
-    // 运行结束 -> 没被用户干预过就折回。用 LaunchedEffect 而不是 remember(active)：
-    // 后者会在每次状态变化时重建 state，运行中每来一步就把用户的展开态冲掉。
+    // 运行结束后的收起规则（2026-11-27 改）：
+    //
+    // 旧规则是「跑完一律折回一行」。真机上被骂的正是这一点——一轮跑完，思考与工具
+    // 合成「2 次工具调用」一行，**链本身看不见了**，用户以为过程被删了。
+    // 现在的规则：**带思考的流跑完保持展开**（那正是他要看的东西，一步一行，并不长）；
+    // 只有「全是工具、一句思考都没有」的流才自动收起，那种流看头就知道发生了什么。
+    //
+    // 用 LaunchedEffect 而不是 remember(active)：后者会在每次状态变化时重建 state，
+    // 运行中每来一步就把用户的展开态冲掉。
     LaunchedEffect(active) {
-        if (!active && !touchedByUser) {
+        if (!active && !touchedByUser && run.steps.none { it.isThinking }) {
             expanded = false
             openStep = -1
         }
@@ -407,6 +414,9 @@ private fun headline(run: TraceRun, active: Boolean): String = when {
     run.failedCount > 0 -> "${run.toolCount} 次工具调用 · ${run.failedCount} 个失败"
     // 中断不是失败，但也不能显示成「跑完了」：收起态一行里就要能看出来。
     run.interruptedCount > 0 -> "${run.toolCount} 次工具调用 · 已中断"
+    // 没有工具的轮次（只有思考、或思考 + 途中说明）也得给一个可点开的由头，
+    // 否则收起行写着「0 次工具调用」——用户会以为那一段是空的。
+    run.toolCount == 0 -> "已完成 · ${run.steps.size} 步"
     else -> "已完成 · ${run.toolCount} 次工具调用"
 }
 
