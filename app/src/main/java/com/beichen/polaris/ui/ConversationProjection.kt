@@ -103,7 +103,7 @@ internal class ConversationProjection(
      *
      * @param usage 仅由 send() 汇总整轮后传给最终回答；中间轮（只有 toolCalls）不传。
      */
-    fun appendMessage(msg: ChatMessage, usage: TokenUsage? = null) {
+    fun appendMessage(msg: ChatMessage, usage: TokenUsage? = null, asTrace: Boolean = false) {
         val item = when (msg) {
             // 用户气泡的图与文件名由 send() 直接构造（那里才有缩略图）；这条路只回放历史协议消息，
             // 不在这里重复实现——UserMessage.images 是**原图**，灌进 UI 项会让落盘大十倍。
@@ -128,11 +128,15 @@ internal class ConversationProjection(
         }
         // hotfix30：显示态只在 owner==active 时追加（后台续跑期间只落盘）
         if (ownerActive()) appendItem(item)
-        appendToStore(item)
+        appendToStore(item, asTrace)
     }
 
     /**
      * 同步一条消息到会话存储。
+     *
+     * [asTrace]：这条助手消息是**过程**（说完还要继续调工具），不是本轮回答。
+     * 存储层据此把它留在有序的 `trace` 里，而不是收进变体池——变体池只显示选中那条，
+     * 中间正文进去就等于消失；`flatten` 也会跳过它，模型下一轮读不到自己说过的话。
      *
      * hotfix30：在途写按 [ownerId]（启动时捕获的归属会话），不读 current——用户生成中切到
      * 别的会话，旧会话的后台出字全部落回旧会话，不写串；非在途调用仍落当前会话。
@@ -141,8 +145,8 @@ internal class ConversationProjection(
      * 「最近对话」的标题/条数/updatedAt 整个会话期间全陈旧。store.list() 是内存快照
      * map+sort（synchronized 内、无磁盘 IO），可负担。
      */
-    fun appendToStore(item: UiItem) {
-        val dropped = store.appendMessage(ownerId() ?: activeId(), item.toMsgRecord())
+    fun appendToStore(item: UiItem, asTrace: Boolean = false) {
+        val dropped = store.appendMessage(ownerId() ?: activeId(), item.toMsgRecord(), asTrace)
         if (dropped > 0) onHistoryTruncated(dropped)
         onStoreChanged()
     }

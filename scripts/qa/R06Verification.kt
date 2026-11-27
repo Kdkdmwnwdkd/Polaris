@@ -639,6 +639,67 @@ fun main() {
         eq(turn.variants.size, 1, "也不成为变体")
     }
 
+    // 真机第四报：一轮里模型「说完一段又接着调工具」，那段话被当成变体收走——界面上
+    // 只显示选中的那条，中间那段消失；flatten 也不带它，下一轮模型读不到自己说过的话。
+    // 判据不是「有没有正文」，是「它是不是本轮最终回答」——只有调用方手里有 lastAnswer，
+    // 所以由调用方用 asTrace 声明，存储层不猜。
+    println("\n[J] 中间正文：说完还接着调工具的，是过程不是回答")
+
+    check("J1 有正文的中间步留在 trace 原位，flatten 保序") {
+        val store = freshStore()
+        val conv = store.create()
+        store.appendMessage(conv, MsgRecord("u1", ROLE_USER, "查一下"))
+        store.appendMessage(conv, MsgRecord("s1", ROLE_ASSISTANT, "", reasoning = "先看配置"))
+        store.appendMessage(conv, toolItem("t1", "ok", running = false).toMsgRecord())
+        store.appendMessage(conv, MsgRecord("m1", ROLE_ASSISTANT, "配置是空的，我去建"), asTrace = true)
+        store.appendMessage(conv, MsgRecord("s2", ROLE_ASSISTANT, "", reasoning = "再确认"))
+        store.appendMessage(conv, toolItem("t2", "ok", running = false).toMsgRecord())
+        store.appendMessage(conv, MsgRecord("a1", ROLE_ASSISTANT, "建好了"))
+
+        val rec = store.load(conv)!!
+        eq(
+            rec.messages.map { it.role },
+            listOf(ROLE_USER, ROLE_ASSISTANT, ROLE_TOOL, ROLE_ASSISTANT, ROLE_ASSISTANT, ROLE_TOOL, ROLE_ASSISTANT),
+            "中间正文不能被挪到末尾：它在第 4 位（工具之后、下一步思考之前）"
+        )
+        eq(rec.messages[3].content, "配置是空的，我去建", "中间正文原样保留")
+        eq(rec.messages.last().content, "建好了", "回答仍在最后")
+        val turn = rec.turns.last()
+        eq(turn.variants.size, 1, "中间正文不占变体槽")
+        eq(turn.variants[0].content, "建好了", "变体仍是最终回答")
+        eq(
+            turn.trace.filter { it.role == ROLE_ASSISTANT && it.content.isNotBlank() }.map { it.content },
+            listOf("配置是空的，我去建"),
+            "trace 里带着这段正文，导出/搜索都还在"
+        )
+    }
+
+    check("J2 不声明 asTrace 时行为不变（旧调用点零改动）") {
+        val store = freshStore()
+        val conv = store.create()
+        store.appendMessage(conv, MsgRecord("u1", ROLE_USER, "你好"))
+        store.appendMessage(conv, MsgRecord("a1", ROLE_ASSISTANT, "回答"))
+        val turn = store.load(conv)!!.turns.last()
+        eq(turn.variants.size, 1, "默认路径仍进变体")
+        eq(turn.trace.size, 0, "不进 trace")
+    }
+
+    check("J3 重新生成只换回答，过程顺序一点不动") {
+        val store = freshStore()
+        val conv = store.create()
+        store.appendMessage(conv, MsgRecord("u1", ROLE_USER, "查"))
+        store.appendMessage(conv, MsgRecord("s1", ROLE_ASSISTANT, "", reasoning = "想"))
+        store.appendMessage(conv, MsgRecord("m1", ROLE_ASSISTANT, "中间"), asTrace = true)
+        store.appendMessage(conv, MsgRecord("a1", ROLE_ASSISTANT, "答一"))
+        store.appendVariant(conv, 0, MsgRecord("a2", ROLE_ASSISTANT, "答二"))
+        val rec = store.load(conv)!!
+        eq(
+            rec.messages.map { it.content },
+            listOf("查", "", "中间", "答二"),
+            "过程原样，只换末尾那条回答"
+        )
+    }
+
     check("H5 中断的步骤带文字说明") {
         val dead = toolItem("t9", "", running = false).copy(interrupted = true)
         val flow = traceRunAt(listOf(hUser, dead), 1)

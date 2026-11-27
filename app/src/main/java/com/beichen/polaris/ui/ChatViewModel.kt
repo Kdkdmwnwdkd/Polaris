@@ -2399,9 +2399,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                                 val shown = messages.value.any { it is UiItem.Tool && it.call.id == msg.id }
                                 if (!shown) append(msg)
                             }
-                            // 中间轮 Assistant 可能只有 toolCalls 无文本，空内容不出气泡
+                            // 空内容不出气泡；非 lastAnswer 的有正文步是**过程**，进 trace 保序
                             is AssistantMessage -> if (msg.content.isNotBlank()) {
-                                append(msg, if (msg === lastAnswer) turnUsage else null)
+                                append(msg, if (msg === lastAnswer) turnUsage else null, msg !== lastAnswer)
                             }
                             else -> Unit
                         }
@@ -2431,9 +2431,9 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
                             "本轮无任何文字回答（工具调用=${if (hadTool) "有" else "无"}），已补提示气泡"
                         )
                     }
-                    // 功能五（P1-10）：回答完成提醒——开了开关且 App 在后台才发通知
-                    // （前台提醒是噪音；权限被拒/被关由 CompletionNotifier 内部静默降级）。
-                    // 只挂 send 路径：regenerate 是「重做这题」的主动操作，用户盯着概率极高
+                    // 中间正文按序落库，但上屏只能追加到末尾——与工具卡错一拍；整表重建回到真实位置
+                    if (history.any { it is AssistantMessage && it.content.isNotBlank() && it !== lastAnswer }) reloadActiveMessages()
+                    // 功能五（P1-10）：只挂 send 路径（regenerate 是主动操作，用户盯着看）；后台才发
                     if (settingsFacade.completionNotifyEnabled.value) {
                         CompletionNotifier.notifyAnswerComplete(
                             app,
@@ -2604,8 +2604,8 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
     /** 整体替换（切会话/重建）。同样入锁，避免与在途工具回调交错后丢事件。 */
     private fun replaceUiItems(items: List<UiItem>) = projection.replace(items)
 
-    private fun append(msg: ChatMessage, usage: TokenUsage? = null) =
-        projection.appendMessage(msg, usage)
+    private fun append(msg: ChatMessage, usage: TokenUsage? = null, asTrace: Boolean = false) =
+        projection.appendMessage(msg, usage, asTrace)
 
     /** 同步一条消息到会话存储（按 owner 落库，见 [ConversationProjection.appendToStore]）。 */
     private fun appendToStore(item: UiItem) = projection.appendToStore(item)

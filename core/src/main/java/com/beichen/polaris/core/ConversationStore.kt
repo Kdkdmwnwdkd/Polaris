@@ -614,7 +614,7 @@ class ConversationStore(file: File) {
      *   调用方（界面投影）据此给一次可见提示——工作集确实变短了，
      *   用户要知道「刚才那几轮去哪了」，而不是等下次翻历史才发现。
      */
-    fun appendMessage(convId: String, rec: MsgRecord): Int {
+    fun appendMessage(convId: String, rec: MsgRecord, asTrace: Boolean = false): Int {
         // W-RT9：被挤出工作集的轮次在这里攒着，出锁后统一落归档。
         val evicted = mutableListOf<TurnRecord>()
         synchronized(lock) {
@@ -623,7 +623,7 @@ class ConversationStore(file: File) {
             if (idx < 0) return 0
             val conv = items[idx]
             // Phase 2 DoD②：先并入轮次变体结构，再据其展开为平坦缓存 messages
-            val turns = appendToTurns(conv.turns, rec, evicted)
+            val turns = appendToTurns(conv.turns, rec, evicted, asTrace)
             val messages = ConversationBranch.flatten(turns)
             var title = conv.title
             if (title == DEFAULT_TITLE && rec.role == ROLE_USER && rec.content.isNotBlank()) {
@@ -651,8 +651,9 @@ class ConversationStore(file: File) {
     /**
      * 把一条新消息并入轮次变体结构（纯函数，Phase 2 DoD②）：
      *  - user → 新开一轮（[TurnRecord.user]）；
-     *  - assistant → 作为**当前轮**的助手变体追加并把游标指向它（重新生成也走这条：追加=新变体，
-     *    原变体保留可切回）；
+     *  - assistant → **过程**进当前轮 `trace`（保序，与工具交替）；只有**最终回答**才作为变体追加并把游标指向它
+     *    （重新生成也走这条：追加=新变体，原变体保留可切回）。二者由调用方的 `asTrace` 区分——
+     *    「有没有正文」判不出来，见下方分支注释。
      *  - tool → 按 id upsert 进**当前轮的 trace**（ToolStarted 空结果占位 → ToolFinished 终态覆盖，
      *    语义与旧 `messages` 的 replace 一致）。
      * 轮数超 [MAX_TURNS] 时最旧轮转入归档（W-RT9 全档保留，见 [archivedTurns]）；
@@ -665,7 +666,8 @@ class ConversationStore(file: File) {
     private fun appendToTurns(
         turns: List<TurnRecord>,
         rec: MsgRecord,
-        evicted: MutableList<TurnRecord>
+        evicted: MutableList<TurnRecord>,
+        asTrace: Boolean = false
     ): List<TurnRecord> {
         val out = turns.toMutableList()
         when (rec.role) {
@@ -677,9 +679,17 @@ class ConversationStore(file: File) {
                     // 只想没答的中间步（content 空、只有 reasoning）是**过程**，不是回答。
                     // 当变体收录的话：一轮会堆出 N 个变体，界面上只剩最后一条，
                     // 前面每一步的思考都看不见——「思考链断了」就是这个。
-                    if (rec.content.isBlank()) {
+                    //
+                    // asTrace：**有正文但仍是过程**的步（「我先看一下配置」这类，说完接着调工具）。
+                    // 判据不能是「content 空不空」——那是把「有没有文字」当成了「是不是回答」。
+                    // 谁才配进 variants，只有调用方知道（回合收尾时它手里有 lastAnswer）。
+                    // 分错了的代价不是难看：变体只显示选中那条，中间那段正文在界面上消失，
+                    // 而 flatten 又把它排除在历史之外，模型下一轮也读不到自己说过的话。
+                    if (rec.content.isBlank() || asTrace) {
                         // 连思考都没有的空步没有可看的：不进 trace（旧行为就是不落）
-                        if (rec.reasoning.isNotBlank()) out[i] = t.copy(trace = t.trace + rec)
+                        if (rec.content.isNotBlank() || rec.reasoning.isNotBlank()) {
+                            out[i] = t.copy(trace = t.trace + rec)
+                        }
                     } else {
                         val variants = t.variants + rec
                         out[i] = t.copy(variants = variants, selectedIndex = variants.lastIndex)
