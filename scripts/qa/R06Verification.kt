@@ -700,6 +700,18 @@ fun main() {
         )
     }
 
+    // 中间正文留在段里之后出现一种新形态：**有正文、没思考**的一步。
+    // 它不算过程条目（isProcessEntry 看 reasoning），所以段停在它之前、正文自己渲染——
+    // 这条断言把「停在哪儿」和「塞不塞空步骤」都钉住：以后谁放宽了成段判据，
+    // 忘了给这类步产出正文步骤，就会被这里拦住。
+    check("K1 无思考的中途正文不参与成段：流停在它之前，正文自己渲染") {
+        val mid = UiItem.Assistant(text = "配置是空的，我去建", reasoning = null)
+        val msgs = listOf(hUser, hTool1, mid)
+        val flow = traceRunAt(msgs, 1)!!
+        eq(flow.steps.size, 1, "流里只有工具那一步，不塞一条空标题的步骤")
+        eq(traceOwnership(msgs, 2), TraceOwnership.NONE, "这条正文自己渲染，不进流")
+    }
+
     check("H5 中断的步骤带文字说明") {
         val dead = toolItem("t9", "", running = false).copy(interrupted = true)
         val flow = traceRunAt(listOf(hUser, dead), 1)
