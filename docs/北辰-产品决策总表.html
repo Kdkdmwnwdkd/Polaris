@@ -64,12 +64,12 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <div class="wrap">
 <span class="badge">决策总表</span>
 <h1>北辰 · 产品决策总表</h1>
-<p class="sub">活文档 / 每次讨论完只改这一份 / 最后更新 2026-11-28 00:10</p>
+<p class="sub">活文档 / 每次讨论完只改这一份 / 最后更新 2026-11-28 00:26</p>
 
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-28 00:10</strong><br />
+<p>最后更新：<strong>2026-11-28 00:26</strong><br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -129,7 +129,12 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <td>动手前核对</td>
 </tr>
 <tr>
-<td>§10 变更记录</td>
+<td>§10 周边生态</td>
+<td>GKD / 保活 / Auto.js 微信实战——<strong>老圈子的坑比 AI 圈密</strong></td>
+<td>动界面操作前必读</td>
+</tr>
+<tr>
+<td>§11 变更记录</td>
 <td>每次追加一行</td>
 <td>只看最新一行</td>
 </tr>
@@ -1269,6 +1274,18 @@ else   -&gt; 组级危险(group)      -&gt; 问
 <td>Trae / Claude Code / Cursor 的四层折叠；WorkBuddy 的"过程实时、结果整段"</td>
 </tr>
 <tr>
+<td><strong>周边生态（非 AI 圈）</strong></td>
+<td>GKD <code>gkd-kit/gkd</code>（41.8k 星 GPL-3.0）：引擎不带内容、JSON5 规则订阅 1300+、规则时间窗、文本/ID/结构三层匹配、「写入安全设置」高级授权、gradle 零遥测</td>
+</tr>
+<tr>
+<td><strong>安卓保活实战</strong></td>
+<td>ROM 差异（MIUI 需关深度睡眠 + 多任务加锁）、三层自愈（引导/保活/自动重开）、Shizuku 代理对比、保活手段合规表、「保活点到为止」</td>
+</tr>
+<tr>
+<td><strong>Auto.js 微信实战</strong></td>
+<td>30 天不封号四条：随机 sleep 3–15s、±4px 随机偏移、<strong>只走控件树不走截屏（截屏被监控严）</strong>、健康分 + 日操作上限；<code>diyBack()</code> 三层兜底；版本碎片化需 A/B/C/坐标兜底</td>
+</tr>
+<tr>
 <td><strong>一手开源（2026-11 实读）</strong></td>
 <td>DeepSeek Harness <code>deepseek-ai/deepseek-harness</code>：MIT、24 万星、34 个包、Capability Seam 三角色定义、Step/Turn「closes once nothing is owed」、事件三域含 <code>continuation</code>、<code>guard</code>/<code>interaction</code>/<code>self-modification</code></td>
 </tr>
@@ -1732,7 +1749,343 @@ PTR/OTR 无法度量的直接原因——<strong>终止原因不是一等公民�
 </table></div>
 <p>最后一条是这一轮唯一的"新发现"，而且它不是来自论文，是来自一个产品的实现细节——<br />
 <strong>只有真的在手机上跑过、被微信拦过的人，才会想到加抖动。</strong></p>
-<h2>十、变更记录</h2>
+<h2>十、周边生态：安卓自动化的老圈子，坑比 AI 圈密</h2>
+<blockquote>
+<p>这一章搜的不是 AI Agent，是<strong>做同一件事但不叫 Agent 的那群人</strong>：自动点击器、跳广告工具、Auto.js 脚本党。<br />
+他们干的就是"看见屏幕→找到控件→点下去"，十几年了，没有 LLM，所以坑全是硬的。<br />
+<strong>AI 圈的论文讲"怎么想"，这个圈子讲"怎么不死"。</strong></p>
+</blockquote>
+<h3>10.1 GKD：41.8k 星，它是"卡片库"的现成先例</h3>
+<p><code>gkd-kit/gkd</code>，GPL-3.0，41.8k star，Google Play 5 万+。做的是跳过开屏广告、自动确认登录。</p>
+<p>它的架构只有三件套：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>件</th>
+<th>干什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>无障碍服务</td>
+<td>看见画面 + 模拟点击</td>
+</tr>
+<tr>
+<td><strong>选择器</strong></td>
+<td>描述"要点的目标长什么样"</td>
+</tr>
+<tr>
+<td><strong>订阅</strong></td>
+<td>把一堆规则打包喂给引擎</td>
+</tr>
+</tbody>
+</table></div>
+<h4>最值得学的一条：引擎出厂不带任何规则</h4>
+<p>README 和使用协议都写明：<strong>应用默认不包含任何规则内容</strong>，你要么自己写，要么导入别人维护的远程订阅。<br />
+规则格式是 JSON5，本地规则和远程订阅<strong>完全同格式</strong>，区别只是远程会自动拉新版。</p>
+<blockquote>
+<p>这个设计把<strong>法律责任和内容质量都留在引擎外面</strong>，工具本体只负责忠实执行。<br />
+听起来像推卸，实际上是开源工具常见的自我保护：<strong>引擎归引擎，内容归内容</strong>。</p>
+</blockquote>
+<p>社区规则已覆盖 1300+ 条，微信、淘宝、抖音、B 站、京东都有。</p>
+<p><strong>这一条直接改写了 §8.6 的"中文 App 卡片库"该怎么落</strong>：不是写死在代码里，是<strong>做成可订阅的内容包</strong>。<br />
+理由三条，都很硬：</p>
+<ol>
+<li>App 界面三个月一变，写死在代码里等于每季度发一次版本</li>
+<li>内容有法律风险（教模型怎么操作别人的 App），引擎不该背这个</li>
+<li>社区能长——1300 条规则不是一家公司写出来的</li>
+</ol>
+<h4>第二个可学的：时间窗</h4>
+<p>GKD 的规则可以限定生效窗口：<strong>只在开屏后的 10 秒内作用，过了时间窗就收手</strong>。</p>
+<p>原文的理由是"<strong>避免误点正常画面上的同款按钮</strong>"。这正是我们 §3.3 落点判据的弱点：<br />
+"发送"这个文案，在聊天页是发消息，在设置页可能只是"发送反馈"。<strong>加一个时间窗，比加一堆规则更省事。</strong></p>
+<h4>第三个：匹配分三层，稳定性递增</h4>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>层</th>
+<th>依据</th>
+<th>稳定性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>文本</td>
+<td><code>text="跳过"</code></td>
+<td>最差，App 改文案就失效（"跳过"→"跳过广告"）</td>
+</tr>
+<tr>
+<td>ID</td>
+<td><code>#agreeBtn</code>、<code>com.zhihu.android:id/btn_skip</code></td>
+<td>中，改 ID 比改文案少</td>
+</tr>
+<tr>
+<td>结构</td>
+<td>"某容器下第 3 个可点击子节点"</td>
+<td><strong>最稳但最难写</strong>，通常当前两层都失效才用</td>
+</tr>
+</tbody>
+</table></div>
+<p>我们现在 <code>ui_click</code> 只按文本/ID 找，<strong>没有结构层兜底</strong>。这解释了 §8.4 说的"失败只说没找到"——因为确实只有两层可找。</p>
+<h4>第四个：绕过"无障碍被杀"的授权方式</h4>
+<p>GKD 有两种授权：</p>
+<ul>
+<li><strong>普通</strong>：手动授无障碍，关了就得重授</li>
+<li><strong>高级（推荐）</strong>：授予「<strong>写入安全设置权限</strong>」，授权<strong>永久有效</strong>，App 可自行开关无障碍，还能放通知栏快捷开关</li>
+</ul>
+<p>第二种是我们完全没有想过的路径。用户抱怨"昨天还能用今天不行了"时，<strong>与其求他再去设置里点一次，不如一次性把开关权拿到手</strong>。</p>
+<h3>10.2 无障碍保活：这是手机端独有的战争，PC 上不存在</h3>
+<p>国产 ROM 会杀掉无障碍服务，用户看到的现象是"<strong>昨天还能自动跳过广告，今天突然不行了，打开设置一看，服务已经变成关闭状态</strong>"。</p>
+<p>各家 ROM 的开关位置都不同：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>ROM</th>
+<th>要做什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MIUI / HyperOS</td>
+<td>省电策略设「<strong>无限制</strong>」+ 多任务界面<strong>加锁</strong>（提升进程 adj 优先级）+ <strong>关闭「深度睡眠」</strong></td>
+</tr>
+<tr>
+<td>EMUI / 荣耀</td>
+<td>电池优化里加白名单</td>
+</tr>
+<tr>
+<td>OriginOS / vivo</td>
+<td>后台耗电管理</td>
+</tr>
+<tr>
+<td>通用</td>
+<td>前台服务 + 持续通知</td>
+</tr>
+</tbody>
+</table></div>
+<p>注意 MIUI 那条：<strong>光开「高耗电允许」不够，必须关「深度睡眠」</strong>。这种细节只有真机踩过才知道。</p>
+<h4>三层自愈（可以直接照结构）</h4>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>层</th>
+<th>做什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 前端引导</td>
+<td>启动时检测服务是否存活，没存活就跳设置页 + 一句<strong>通俗解释</strong>（"很多用户连哪个是服务都分不清"）</td>
+</tr>
+<tr>
+<td>2 保活</td>
+<td>前台 Service + 通知，提高进程优先级</td>
+</tr>
+<tr>
+<td>3 自动重开</td>
+<td>监听无障碍设置变化事件，变化时重新绑定。<strong>实测部分 ROM 有效，但别指望 100%</strong></td>
+</tr>
+</tbody>
+</table></div>
+<h4>一条一定要听的劝告</h4>
+<blockquote>
+<p><strong>保活方案点到为止就好，不要在对抗系统上过度投入。引导用户做一次设置，远比自己死磕"永久不被杀"来得实在。</strong></p>
+</blockquote>
+<p>这条对我们尤其重要。北辰的 <code>service_not_ready</code> 不计熔断（§见前文）已经做对了，<br />
+但<strong>如果继续往"永不掉线"上投入，就是在跟 ROM 打一场必输的仗</strong>。正确做法是把"掉了"变成一件用户能自己修好的事。</p>
+<h4>另一条路径：Shizuku</h4>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>传统无障碍</th>
+<th>Shizuku 代理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>权限来源</td>
+<td>AccessibilityService API</td>
+<td>系统 API 代理（Binder）</td>
+</tr>
+<tr>
+<td>保活压力</td>
+<td><strong>极高</strong>，系统重点监控</td>
+<td>较低，作为系统服务运行</td>
+</tr>
+<tr>
+<td>稳定性</td>
+<td>易被系统清理</td>
+<td>极高（除非 Shizuku 本身崩）</td>
+</tr>
+</tbody>
+</table></div>
+<p>代价：用户要开开发者选项、USB 调试、配对一次，多花十分钟。</p>
+<p><strong>要不要支持，是个产品判断</strong>：普通用户不会为十分钟买单，极客会。所以它应该是<strong>可选的加速通道</strong>，不是主路径。</p>
+<h4>保活手段的合规红线</h4>
+<p>有一张现成的对照表，其中两条要划掉：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>手段</th>
+<th>有效性</th>
+<th>合规</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>前台服务 + 持久通知</td>
+<td>★★★☆☆</td>
+<td>✅ 低风险</td>
+</tr>
+<tr>
+<td>AlarmManager 精确唤醒</td>
+<td>★★★★☆</td>
+<td>✅ 需处理 Doze</td>
+</tr>
+<tr>
+<td>双 Service 相互监听</td>
+<td>★★★★☆</td>
+<td>⚠️ 可能被视为滥用</td>
+</tr>
+<tr>
+<td><strong>绑定前台 Activity 透明窗体</strong>（伪装用户活跃）</td>
+<td>★★★★★</td>
+<td>❌ <strong>违反 Google 政策</strong></td>
+</tr>
+<tr>
+<td><strong>Native 进程守护（C++ 层）</strong></td>
+<td>★★★★★</td>
+<td>❌ <strong>应用市场拒绝</strong></td>
+</tr>
+</tbody>
+</table></div>
+<h3>10.3 Auto.js 微信自动化 30 天不封号：四条实战经验</h3>
+<p>有人用 Auto.js 写微信自动回复，<strong>挂了 30 天没翻车</strong>，写了复盘。四条做法：</p>
+<p><strong>① 随机节奏，不是固定间隔</strong></p>
+<blockquote>
+<p>每条消息处理完 <strong>随机 sleep 3–15 秒</strong>。不是固定间隔，是人手操作的合理节奏。</p>
+</blockquote>
+<p><strong>② 点击不精确点中心，在 ±4 像素内随机偏移</strong></p>
+<blockquote>
+<p>模拟手指点击的自然晃动。</p>
+</blockquote>
+<p>——<strong>这条和豆包的"触屏抖动"完全一致</strong>（§9.4）。两个独立来源、两种完全不同的产品，得出同一个结论：<br />
+<strong>精确落点本身就是机器特征。</strong></p>
+<p><strong>③ 全程用无障碍控件树，不走截屏路线</strong></p>
+<blockquote>
+<p>微信对截图监控比较严，<strong>无障碍相对安全</strong>。</p>
+</blockquote>
+<p>这一条对我们是个<strong>新问题</strong>。北辰现在是"树 + 截图 + OCR"三路都给模型。<br />
+如果目标 App 会检测截图行为（<code>FLAG_SECURE</code> 是一种，静默记录是另一种），我们比纯树路线多一层暴露面。</p>
+<p><strong>至少要做到</strong>：对已知敏感的 App（微信、支付宝、银行）<strong>只给树，不给截图</strong>。</p>
+<p><strong>④ 健康分 + 每日操作上限</strong></p>
+<blockquote>
+<p>整体系统有一个健康分 → 每日操作上限的计算机制，确保每日操作量在安全范围。</p>
+</blockquote>
+<p>我们有 <strong>60 步/轮、30 分钟/轮</strong>，但<strong>没有"每天"这个维度</strong>。一个用户让 agent 跑一整天，<br />
+每轮 60 步、跑 20 轮 = 1200 次操作。这在任何有风控的 App 眼里都是异常的。</p>
+<h4>还有两个工程细节</h4>
+<p><strong>返回栈要三层兜底</strong>（原文的 <code>diyBack()</code>）：</p>
+<ol>
+<li>优先匹配 <code>desc("返回")</code> 或 <code>id("actionbar_up_indicator")</code> 的导航按钮，<strong>坐标点击最可靠</strong></li>
+<li>检查是否已回到主页（某标志控件存在即到家）</li>
+<li>以上都不行才用系统 <code>back()</code></li>
+<li>每次 back 后 <strong>sleep 1500ms 等动画</strong></li>
+</ol>
+<p>为什么这么麻烦：群聊的返回链路是「聊天窗口 → 详情页 → 返回详情页 → 返回聊天窗口 → 返回列表」，<br />
+<strong>随便哪一步卡住，整个循环就废了</strong>。</p>
+<p><strong>版本碎片化是常态，不是意外</strong>：</p>
+<blockquote>
+<p>同一个"返回"按钮，不同微信版本的控件属性不一样。有的版本是 <code>desc="返回"</code>，有的是 <code>id="actionbar_up_indicator"</code>，有的干脆什么都没有只能点坐标。</p>
+</blockquote>
+<p>所以他们的结论是：<strong>每个查找操作都写多层后备策略，A → B → C → 坐标兜底。这是做微信自动化的必修课。</strong></p>
+<p>我们现在是"找到就用、找不到就报错"。<strong>缺的就是这条 A/B/C 链</strong>。</p>
+<h4>反面清单：这些 API 会被识别</h4>
+<p>固定间隔的 <code>setInterval</code>、<code>device.wakeUp()</code> 强唤醒、<code>shell()</code> 执行系统命令——都被列为"高危"。<br />
+替代方案是 <code>random()</code> 生成随机间隔、唤醒后加随机 sleep。</p>
+<h3>10.4 这一章逼出的四个问题</h3>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>问题</th>
+<th>现在</th>
+<th>该怎么办</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>敏感 App 要不要停止给截图</td>
+<td>树 + 截图 + OCR 全给</td>
+<td>微信/支付宝/银行<strong>只给树</strong></td>
+</tr>
+<tr>
+<td>2</td>
+<td>有没有"每日上限"</td>
+<td>只有每轮 60 步</td>
+<td>加日累计操作上限 + 健康分</td>
+</tr>
+<tr>
+<td>3</td>
+<td>返回栈有几层兜底</td>
+<td>一层（找不到就失败）</td>
+<td>补 A/B/C/坐标四层</td>
+</tr>
+<tr>
+<td>4</td>
+<td>操作节奏像不像人</td>
+<td>精确落点、固定间隔</td>
+<td>坐标抖动 + 间隔随机（同一件事，两个来源都证实）</td>
+</tr>
+</tbody>
+</table></div>
+<h3>10.5 净结论</h3>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>结论</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>学</td>
+<td><strong>App 卡片做成可订阅的内容包</strong>，引擎不带内容（GKD 1300+ 规则证明了可行）</td>
+</tr>
+<tr>
+<td>学</td>
+<td><strong>规则加时间窗</strong>，比加一堆判据省事（防"同款按钮"误点）</td>
+</tr>
+<tr>
+<td>学</td>
+<td><strong>匹配补结构层</strong>（文本→ID→结构，稳定性递增）</td>
+</tr>
+<tr>
+<td>学</td>
+<td><strong>高级授权拿"写入安全设置"权限</strong>，把「再去点一次」变成「一次性解决」</td>
+</tr>
+<tr>
+<td>学</td>
+<td><strong>日累计上限 + 健康分</strong>（我们现在只有每轮）</td>
+</tr>
+<tr>
+<td>不学</td>
+<td>绑定前台 Activity 伪装活跃、Native 进程守护（政策/市场红线）</td>
+</tr>
+<tr>
+<td>不学</td>
+<td>Shizuku 当主路径（要十分钟配置，只适合当可选加速）</td>
+</tr>
+<tr>
+<td>★</td>
+<td><strong>别在"永不掉线"上死磕</strong>——引导用户修一次，比对抗 ROM 划算</td>
+</tr>
+</tbody>
+</table></div>
+<p>最后一条是这一章最值钱的：<strong>它告诉我们哪里该停手。</strong> 这比"还能做什么"更难得到。</p>
+<h2>十一、变更记录</h2>
 <div class="tblwrap"><table>
 <thead>
 <tr>
@@ -1768,6 +2121,10 @@ PTR/OTR 无法度量的直接原因——<strong>终止原因不是一等公民�
 <tr>
 <td>2026-11-28 00:10</td>
 <td>新增 §9「四份一手材料实拆」。DeepSeek Harness（24 万星 MIT，Capability Seam 三角色、Step/Turn 定义、continuation 一等事件）、Claude Agent SDK（终止原因枚举、AllowWithModification、PreCompact）、Qwen Intelligence（接口优先/UI 兜底、敏感三分、MobileWorld-Safety）、UI-TARS/豆包（纯视觉代价、0-999 归一化、<strong>触屏抖动防风控</strong>）。净结论三条要补、两条不学、一条新发现</td>
+</tr>
+<tr>
+<td>2026-11-28 00:26</td>
+<td>新增 §10「周边生态」。换了个搜法——不搜 AI Agent，搜做同一件事但不叫 Agent 的人：GKD（41.8k 星，引擎不带规则、规则订阅 1300+、时间窗、三层匹配、写入安全设置高级授权）、无障碍保活的 ROM 差异与三层自愈（含「别死磕永不掉线」）、Auto.js 微信 30 天不封号的四条（随机节奏、±4px 抖动、只给树不给截图、日上限）。逼出四个待答问题</td>
 </tr>
 </tbody>
 </table></div>
