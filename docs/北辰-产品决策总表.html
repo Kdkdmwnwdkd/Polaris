@@ -69,7 +69,7 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-28 02:35</strong>（§11.15 四平台对照 · iOS/鸿蒙/Android/桌面各给一半）<br />
+<p>最后更新：<strong>2026-11-28 02:52</strong>（§11.16 开源平台地图 · 18 个同类项目）<br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -135,7 +135,7 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 </tr>
 <tr>
 <td>§11 脑子</td>
-<td><strong>主线</strong>：上下文 / 记忆 / 问人 / 收尾 / 推理预算 / 评测 / 插件圈 / 四平台对照——官方入口之上剩什么</td>
+<td><strong>主线</strong>：上下文 / 记忆 / 问人 / 收尾 / 推理预算 / 评测 / 插件圈 / 四平台 / 开源地图——官方入口之上剩什么</td>
 <td>定方向时先读这一章</td>
 </tr>
 <tr>
@@ -3274,7 +3274,248 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 <li><strong>要抄的不是功能，是三处工程契约</strong>：只传 ID（iOS <code>EntityCollection</code>）、版本协商（Raycast）、结果三态（Apple 的 typed error + Tasker 的 <code>%err</code> 空）。</li>
 <li><strong>要改一个判断</strong>：任务时长。真实使用是"批量重复 + 十几分钟"，不是"20 秒"。这意味着<strong>断点续跑和进度可见的优先级，应该高于"更聪明的规划"</strong>。</li>
 </ol>
-<h3>11.16 这一章的来源（故意跨出 Agent 圈）</h3>
+<h3>11.16 开源平台地图：这个赛道已经有人了，而且不止一个</h3>
+<p>这一轮不看文章，直接翻仓库和包管理器。<strong>先说打通情况，免得你以为我全查到了</strong>：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>平台</th>
+<th>状态</th>
+<th>拿到什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GitHub</td>
+<td>✅</td>
+<td>按 topic 检索，四个 topic 共 1400+ 仓库，取 star 前若干</td>
+</tr>
+<tr>
+<td>npm</td>
+<td>✅</td>
+<td>搜索接口，能看月下载量</td>
+</tr>
+<tr>
+<td>Hugging Face</td>
+<td>⚠️ 主站不可达，镜像可用</td>
+<td>数据集清单（AndroidControl-Star、android-control 等）</td>
+</tr>
+<tr>
+<td>Gitee</td>
+<td>❌</td>
+<td>搜索接口返回空数组，网页需 JS，没拿到</td>
+</tr>
+<tr>
+<td>魔搭 ModelScope</td>
+<td>❌</td>
+<td>公开 API 404，页面动态渲染，没拿到</td>
+</tr>
+</tbody>
+</table></div>
+<h4>（1）先看事实：这是个正在爆发的赛道，不是空白</h4>
+<p>按 star 排，2026 年下半年冒出来一批<strong>和北辰定位几乎重合</strong>的项目：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>项目</th>
+<th style="text-align: right;">star</th>
+<th>最后推送</th>
+<th>一句话</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>microsoft/OmniParser</code></td>
+<td style="text-align: right;">25,649</td>
+<td>11-25</td>
+<td>纯视觉屏幕解析，给 GUI agent 当眼睛</td>
+</tr>
+<tr>
+<td><code>alibaba/page-agent</code></td>
+<td style="text-align: right;">29,775</td>
+<td>11-23</td>
+<td>网页内 GUI agent（npm 月下载 24 万）</td>
+</tr>
+<tr>
+<td><code>web-infra-dev/midscene</code></td>
+<td style="text-align: right;">15,798</td>
+<td>11-27</td>
+<td>「像人一样看界面」，自然语言 E2E</td>
+</tr>
+<tr>
+<td><strong><code>mobile-next/mobile-mcp</code></strong></td>
+<td style="text-align: right;"><strong>10,942</strong></td>
+<td>11-24</td>
+<td>手机 MCP，npm 月下载 <strong>24.7 万</strong></td>
+</tr>
+<tr>
+<td><code>droidrun/mobilerun</code></td>
+<td style="text-align: right;">10,136</td>
+<td>11-24</td>
+<td>自然语言驱动手机（Portal APK + ADB）</td>
+</tr>
+<tr>
+<td><strong><code>wangzan101/Mika</code></strong></td>
+<td style="text-align: right;"><strong>10,130</strong></td>
+<td>11-27</td>
+<td><strong>端侧</strong> Android agent</td>
+</tr>
+<tr>
+<td><code>kuafuai/andee</code></td>
+<td style="text-align: right;">5,619</td>
+<td>11-26</td>
+<td>「住进设备里的灵魂」，Android + macOS，一个 APK</td>
+</tr>
+<tr>
+<td><code>onehumanbeing/esp32-iphone-agent</code></td>
+<td style="text-align: right;">5,412</td>
+<td>11-26</td>
+<td>用 7 美元 ESP32 控制真 iPhone（硬件 HID）</td>
+</tr>
+<tr>
+<td><code>nano-muse/nanoMuse</code></td>
+<td style="text-align: right;">3,746</td>
+<td>11-27</td>
+<td>跨设备个人 agent</td>
+</tr>
+<tr>
+<td><code>Tongyi-MAI/MAI-UI</code></td>
+<td style="text-align: right;">2,436</td>
+<td>08-19</td>
+<td>通义 Qwen-UI-Agent</td>
+</tr>
+<tr>
+<td><code>Turbo1123/roubao</code>（肉包）</td>
+<td style="text-align: right;">2,428</td>
+<td>11-09</td>
+<td>开源 iOS AI agent</td>
+</tr>
+<tr>
+<td><code>JosssphZhou/poki</code></td>
+<td style="text-align: right;">2,195</td>
+<td>11-27</td>
+<td>iOS 端 agent app</td>
+</tr>
+<tr>
+<td><code>Core-Mate/OpenGUI</code></td>
+<td style="text-align: right;">1,820</td>
+<td>11-16</td>
+<td>Android GUI agent 框架</td>
+</tr>
+<tr>
+<td><code>kellyvv/PhoneClaw</code></td>
+<td style="text-align: right;">1,303</td>
+<td>08-06</td>
+<td>把手机变成<strong>本地 agent 运行时</strong></td>
+</tr>
+<tr>
+<td><code>agents-io/PokeClaw</code></td>
+<td style="text-align: right;">1,178</td>
+<td>11-27</td>
+<td>号称首个<strong>端侧</strong>控制手机的 AI</td>
+</tr>
+<tr>
+<td><code>Purewhiter/mobilegym</code></td>
+<td style="text-align: right;">877</td>
+<td>11-16</td>
+<td>可验证手机模拟器（EMNLP 2026）</td>
+</tr>
+<tr>
+<td><code>Soodok/Deepseek-Harness-Local-Android</code></td>
+<td style="text-align: right;">595</td>
+<td>11-27</td>
+<td>安卓上原生跑 DSH，带真编译环境</td>
+</tr>
+<tr>
+<td><code>ZG0704666/Aries-AI</code></td>
+<td style="text-align: right;">145</td>
+<td>11-25</td>
+<td>国内安卓 agent，自称部分场景比豆包快</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>这张表本身就是结论</strong>，而且不太好受：</p>
+<ul>
+<li><strong>"住在设备里"已经不是差异点。</strong> andee 的原话是 "it becomes the soul of the device"、"Not the assistant that helps you operate your phone"，还有 macOS 版、多设备互联；Mika、PokeClaw、PhoneClaw 全部主打 on-device / local runtime。我们之前说的"北辰是常驻者不是遥控工具"，现在是一群人的共识。</li>
+<li><strong>时间点很集中</strong>：上面 18 个里 13 个最后推送在 11 月，10 个在 11 月下旬。这不是慢慢长出来的，是<strong>同一波能力（VLM 够用 + 端侧模型能跑）到位后一起涌出来的</strong>。</li>
+<li>所以"我先做的"这件事没有壁垒。壁垒只能是我们反复说的那三样：负知识、重复习惯、可回放。</li>
+</ul>
+<h4>（2）andee：安全模型是这一轮最值得抄的</h4>
+<p>它的安全论证只有一句话，但结构很完整：</p>
+<blockquote>
+<p>The whole agent loop is in this repository, including the parts that stop it from doing harm: <strong>the vault, the turns that cannot touch it, the commands that need your yes.</strong><br />
+整个循环都在这个仓库里，包括防止它作恶的那部分：<strong>保险库、碰不到它的轮次、需要你说 yes 的命令。</strong></p>
+</blockquote>
+<p>拆开是三件事，正好对应我们的三层：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>andee</th>
+<th>我们</th>
+<th>差别</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>vault（密钥/敏感数据单独存放）</td>
+<td>敏感数据隔离</td>
+<td>我们还没有独立存储层</td>
+</tr>
+<tr>
+<td>the turns that cannot touch it（有些轮次物理上碰不到）</td>
+<td>能力分级</td>
+<td>我们是"逻辑上不许调"，它是"拿不到"</td>
+</tr>
+<tr>
+<td>the commands that need your yes</td>
+<td>审批三档</td>
+<td>一样</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>"有些轮次碰不到 vault"</strong> 这个说法比我们的"权限检查"更硬：我们是在代码里 <code>if (!allowed) return</code>，它是<strong>根本不在那个上下文里放钥匙</strong>。差别在于——前者可以被提示注入绕过，后者不能。</p>
+<p>它还有一条社区规范值得直接学：Show and tell 要求发帖写清<strong>设备、Android 版本、ROM</strong>，理由写得很直白：</p>
+<blockquote>
+<p>this app talks to Android at a level where ROMs disagree, so "worked on my phone" tells a reader almost nothing.<br />
+这个 App 跟 Android 打交道的那一层，各家 ROM 是不同意的；所以"我手机上能用"对别人几乎等于没说。</p>
+</blockquote>
+<p>这正是 §10 说的 ROM 差异，而它把这条变成了发帖门槛。</p>
+<h4>（3）mobile-mcp：25+ 个工具，但点按给了两种寻址</h4>
+<p><code>@mobilenext/mobile-mcp</code> 月下载 24.7 万，是目前这个方向上用得最多的东西。它的工具面按组切得很清楚：</p>
+<ul>
+<li><strong>设备</strong>：list / screen size / orientation / fold / set location / clipboard</li>
+<li><strong>云设备</strong>：登录 / 列机型 / 占用 / 释放</li>
+<li><strong>App</strong>：list / foreground / launch / terminate / install / uninstall / clear data</li>
+<li><strong>屏幕</strong>：take screenshot / save screenshot / <strong>list elements on screen</strong> / click / double tap / swipe / type</li>
+</ul>
+<p>关键细节在最后这组：<code>mobile_click_on_screen_at_coordinates</code> —— <strong>按坐标点，或按 element 的 ref 点</strong>。也就是说索引化和坐标化并存，模型自己选。</p>
+<p>→ 跟我们 §11.14 第（5）条对上了：<strong>索引优先，坐标兜底</strong>。而 npm 上还有个 <code>@qwen-code/mobile-mcp</code>，说明写着 "opt-in relative coordinate support"——有人专门在解"绝对坐标跨分辨率失效"，用的是相对坐标，而且<strong>默认不开</strong>。</p>
+<p>→ 还有一个包值得单独提：<code>android-agent-mcp</code>，描述是 "A local MCP server for <strong>observable, policy-controlled</strong> Android automation"。<strong>"policy-controlled"</strong> 这个词出现在 MCP 层，说明有人已经把审批做进协议，而不是做进 agent 的提示词。这是我们该走的方向。</p>
+<h4>（4）MobileGym：把"完成判据"做成了代码</h4>
+<p>这个项目解决的是我们一直没答案的问题——<strong>怎么证明它做对了</strong>。</p>
+<ul>
+<li>28 个模拟 App、416 个参数化任务模板</li>
+<li><strong>确定性、亚毫秒的 judge（判分器）</strong>：不看截图，直接读模拟器的状态变量</li>
+<li>单服务器 <strong>256 个并行实例</strong>，每实例约 400MB，冷启动约 3 秒</li>
+<li>GRPO 训 Qwen3-VL-4B：模拟环境 <strong>+42.8 分</strong>，真机保留 <strong>95.1% 的增益（+40.7 分）</strong></li>
+<li>排行榜上目前最高是 Gemini 3.1 Pro，58.8% 成功率</li>
+</ul>
+<p>→ 三条能吃：<br />
+1. <strong>判分不看屏幕，看状态。</strong> 我们改造不了真实 App，但可以照这个思路：把每个任务的完成条件写成<strong>对新树的谓词</strong>（<code>该订单状态 == 已退款</code>、<code>当前页面包含"退款成功"</code>），而不是让模型说"我完成了"。<br />
+2. <strong>sim-to-real 保留 95.1%</strong>，意味着<strong>调策略不一定要上真机</strong>。这对我们"没时间评测"是个现成解法——先在模拟环境里回归，再上手机。<br />
+3. <strong>58.8% 是目前最强的公开成绩</strong>。手机任务的天花板还在六成附近，任何号称九成的都要看它的任务集是不是只挑了简单的。</p>
+<h4>（5）DSH Mobile：把手机当成执行环境，而不是被控对象</h4>
+<p><code>Soodok/Deepseek-Harness-Local-Android</code> 只有 595 星，但做的事很极端：在 Android 上跑完整的 Node.js + <strong>真 clang / 真 JDK / 真 gradle</strong>、双 rootfs、20 套工具链、<strong>176 条设备路由、1354 项权限声明</strong>，原生启动 2.3 秒、容器 1.33 秒。</p>
+<p>→ 它的意义不在技术，在<strong>立场</strong>：手机不是"被遥控的屏幕"，是"可以自己编译、自己跑"的机器。这跟北辰"住在里面"是同一个方向，只是它走得更远——它把开发环境都搬进去了。</p>
+<p>→ 但这也提醒我们一个成本：<strong>1354 项权限声明</strong>。住在设备里的代价是权限面巨大，而权限面越大，越需要"看得见"。这又绕回我们的差异点。</p>
+<h4>（6）净结论</h4>
+<ol>
+<li><strong>赛道不空。</strong> 18 个项目、10 个在 11 月下旬，"本地/端侧/住进设备"已经是共识。<strong>"我能操作手机"不再是卖点，是入场券。</strong></li>
+<li><strong>"看得见"仍然空着。</strong> 18 个里，andee 做到"vault + 不可触碰的轮次 + 需要你 yes"，mobile-mcp 生态里有个包做到 "policy-controlled"，<strong>没有一个做"失败步浮出 + 可回放 + 责任链"</strong>。这正是我们反复说的那一层。</li>
+<li><strong>两条可以直接用的工程做法</strong>：andee 的"不是在代码里拒绝，而是那个上下文里根本没有钥匙"；MobileGym 的"判分读状态，不读截图"。</li>
+<li><strong>一条自省</strong>：我们看到 18 个同类，第一反应容易是"我们晚了"。但把表按"有没有可回放"再筛一遍，剩 0 个。<strong>晚不晚取决于你比的是哪一列。</strong></li>
+</ol>
+<h3>11.17 这一章的来源（故意跨出 Agent 圈）</h3>
 <div class="tblwrap"><table>
 <thead>
 <tr>
@@ -3370,13 +3611,18 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 <td>超时≠成功；等待三件套；跑久了会自己死；服务自愈；索引化；失败要写文档；上下文按"还用不用"裁</td>
 </tr>
 <tr>
+<td>开源平台扫描（§11.16）</td>
+<td>GitHub（topic:android-automation / mobile-agent / gui-agent / accessibility-service，共 1400+ 仓库）、npm registry（<code>@mobilenext/mobile-mcp</code> 24.7 万/月）、HF 镜像（AndroidControl-Star 等）。Gitee 与魔搭本轮未打通</td>
+<td>赛道已拥挤；andee 的 vault/不可触碰轮次；mobile-mcp 的 ref+坐标双寻址；MobileGym 的状态判分</td>
+</tr>
+<tr>
 <td>四平台对照（§11.15）</td>
 <td>iOS：WWDC 2026 App Intents（<code>EntityCollection</code> / <code>LongRunningIntent</code> / <code>IntentExecutionTargets</code>）＋ Apple 文档「can't enforce deterministic behavior」；鸿蒙：Intents Kit 文档（仅企业开发者）＋ 小艺智能体平台（50+ 插件、A2A）；Android：Opposable 45 台机 3324 次实测、无障碍注入检测（<code>FLAG_IS_ACCESSIBILITY_EVENT</code>）；桌面：Raycast 扩展 API（manifest / 版本协商）</td>
 <td>四个平台都只做"手"；失败在"在线与焦点"不在"看屏幕"；藏不住就不该藏；版本协商；任务时长要改判</td>
 </tr>
 </tbody>
 </table></div>
-<p><strong>搜法说明</strong>：这一章刻意避开了"Agent 框架横评"这种搜法。上面十八类来源里，只有三条来自 Agent 圈（MAST、SAGE-Agent、SE-GA），其余来自向量库公司、评测机构、校准/推理预算的学术论文、手机推理引擎实测、<strong>安卓官方文档、中国厂商的商业产品、记忆创业公司、中文 GUI 数据集、安卓自动化插件源码</strong>。<strong>因为要解决的是"判断力"问题，不是"框架选型"问题。</strong></p>
+<p><strong>搜法说明</strong>：这一章刻意避开了"Agent 框架横评"这种搜法。上面十九类来源里，只有三条来自 Agent 圈（MAST、SAGE-Agent、SE-GA），其余来自向量库公司、评测机构、校准/推理预算的学术论文、手机推理引擎实测、<strong>安卓官方文档、中国厂商的商业产品、记忆创业公司、中文 GUI 数据集、安卓自动化插件源码</strong>。<strong>因为要解决的是"判断力"问题，不是"框架选型"问题。</strong></p>
 <p>第二批（§11.13）的搜法再换一次：不问"agent 怎么做"，问"<strong>这个东西官方给了没有、别人卖得怎么样、有没有现成数据</strong>"。三个词的差别，换来的是三条能直接改代码的结论（记忆标记失效、工具按意图分组、端侧只干三件事）。</p>
 <p>第三批（§11.14）再换一次，这次是<strong>换载体不是换问题</strong>：不看论文，看<strong>必须每天在别人手机上真跑的插件和脚本</strong>。理由很实在——论文可以只报告成功的 20 次，插件要面对第 1000 次。所以这一批拿到的东西性质完全不同：论坛里一句"受 Tasker 限制，没办法知道"，比一整节关于可观测性的论述更有用。<strong>看谁在挨骂，比看谁在发表更有信息量。</strong></p>
 <h2>十二、变更记录</h2>
@@ -3439,6 +3685,10 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 <tr>
 <td>2026-11-28 02:35</td>
 <td><strong>新增 §11.15「四个平台各给一半答案」</strong>（来源表顺延 §11.16，十八类）。① <strong>iOS</strong>：App Intents 三项改动——<code>EntityCollection</code> 只传 ID（1000 个 Entity 从 OOM 到瞬秒）、<code>LongRunningIntent</code> 解除 30 秒强杀、<code>IntentExecutionTargets</code> 指定执行进程；Apple 原文 <strong>「You can't use app skills to enforce deterministic behavior」</strong>，并举了「订单能否重复送出要由执行方检查」——正是我们的场景；规范要求 <code>perform()</code> 幂等 + 抛类型化错误不可静默失败。② <strong>鸿蒙</strong>：Agent 分三层（意图/Skill/端侧 Agent），首次把「跨应用」单列一层；但<strong>意图能力仅面向企业开发者</strong>、仅中国境内；「意图共享」让 App 把做过什么交给系统学行为规律 → 系统自己在收「重复习惯」，我们得存理由与例外。③ <strong>Android 实测</strong>（Opposable，45 台机 3324 次操作）：成功率 91%、<strong>点击本身 99% 正确</strong>、305 次失败里 140 次是手机/OS 侧（<strong>108 次设备不可达</strong>、21 次无输入焦点），27/45 台中途掉线（小米 7/9、三星 14/20、Pixel 2/5）。<strong>瓶颈不在看屏幕，在在线与焦点</strong>；北辰住本机，「不可达」天然没有。④ <strong>注入检测</strong>：<code>FLAG_IS_ACCESSIBILITY_EVENT</code>(0x800)、<code>FLAG_IS_GENERATED_GESTURE</code>、事件属性缺失、服务列表黑名单 → <strong>藏不住就不该藏</strong>，SAEP 已有 151 款 App 拒绝屏幕自动化。⑤ <strong>Raycast</strong>：manifest 声明 + <strong>版本协商（兼容才安装）</strong> + 内置 UI → HandProvider 应是「换之前就知道能不能换」。⑥ 中文社区三档与我们收敛到「按可逆性分」。⑦ <strong>修正判断</strong>：「我十分钟它要一个多小时」→ 手机 agent 有两类任务，长任务（批量重复、十几分钟到一小时）我们几乎没设计，<strong>断点续跑与进度可见应优先于更聪明的规划</strong>。<strong>代码零改动</strong></td>
+</tr>
+<tr>
+<td>2026-11-28 02:52</td>
+<td><strong>新增 §11.16「开源平台地图」</strong>（来源表顺延 §11.17，十九类）。直接翻仓库而非搜文章。<strong>打通情况如实记录</strong>：GitHub ✅（四个 topic 共 1400+ 仓库）、npm ✅、HF 镜像 ✅；<strong>Gitee ❌（接口返回空）、魔搭 ❌（API 404）</strong>。① 列出 18 个同赛道项目（OmniParser 25.6k、page-agent 29.8k、mobile-mcp 10.9k、mobilerun 10.1k、Mika 10.1k、andee 5.6k、esp32-iphone-agent 5.4k…），<strong>13 个最后推送在 11 月、10 个在 11 月下旬</strong>——同一波能力到位后集体涌出；② <strong>「住在设备里」已非差异点</strong>（andee「soul of the device」、Mika/PokeClaw/PhoneClaw 全主打 on-device）；③ <strong>andee 安全模型</strong>：「vault / 碰不到它的轮次 / 需要你说 yes 的命令」——「不是代码里拒绝，是那个上下文里根本没有钥匙」；其社区规范要求发帖写清设备+Android 版本+ROM（因为「各家 ROM 是不同意的」）；④ <strong>mobile-mcp</strong> 工具面按组切分，点击同时支持<strong>坐标与 element ref</strong>；npm 上 <code>android-agent-mcp</code> 自称 <strong>policy-controlled</strong>（审批做进协议层）、<code>@qwen-code/mobile-mcp</code> 提供 opt-in 相对坐标；⑤ <strong>MobileGym</strong>（EMNLP 2026）：28 个模拟 App / 416 任务 / <strong>亚毫秒状态 judge（不看截图）</strong>、256 并行、sim-to-real 保留 95.1%（+40.7 分）、最高公开成绩 58.8%；⑥ <strong>DSH Mobile</strong> 把手机当执行环境（真 clang/JDK/gradle、176 路由、1354 权限声明）。净结论：赛道不空、<strong>「看得见」仍为 0/18</strong>、两条可抄（上下文无钥匙 / 判分读状态）。<strong>代码零改动</strong></td>
 </tr>
 </tbody>
 </table></div>
