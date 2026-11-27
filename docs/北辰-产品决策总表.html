@@ -64,12 +64,12 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <div class="wrap">
 <span class="badge">决策总表</span>
 <h1>北辰 · 产品决策总表</h1>
-<p class="sub">活文档 / 每次讨论完只改这一份 / 最后更新 2026-11-27 23:15</p>
+<p class="sub">活文档 / 每次讨论完只改这一份 / 最后更新 2026-11-27 23:45</p>
 
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-27 23:15</strong><br />
+<p>最后更新：<strong>2026-11-27 23:45</strong><br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -119,7 +119,12 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <td>有空再验</td>
 </tr>
 <tr>
-<td>§8 变更记录</td>
+<td>§8 从零做 Agent</td>
+<td><strong>十四部位对照</strong>，十二条对齐、五条长特色</td>
+<td>做之前先读</td>
+</tr>
+<tr>
+<td>§9 变更记录</td>
 <td>每次追加一行</td>
 <td>只看最新一行</td>
 </tr>
@@ -778,7 +783,272 @@ else   -&gt; 组级危险(group)      -&gt; 问
 <p>| 6 | 通知正文里的验证码是否已经进了模型上下文 | <code>NotificationDigest</code> 会读通知全文，验证码就在里面。Pinky 的做法是读前打码，我们是原样进 |<br />
 | 7 | 截图/OCR 是否会把金融 App 的画面交出去 | App 级隐身如果只做 <code>ui_tree</code> 不做截图，等于没做 |</p>
 <hr />
-<h2>八、变更记录</h2>
+<h2>八、从零做 Agent：十四个部位对照</h2>
+<blockquote>
+<p>这一章回答一个问题：<strong>如果今天从零搭一个手机 Agent，每个部位应该长什么样，北辰现在长什么样。</strong><br />
+看别人怎么做，不是搬参数，是搞清"他为什么必须这么干"，再想我们能改造成什么。</p>
+</blockquote>
+<h3>8.1 全景表</h3>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>部位</th>
+<th>业界锚点</th>
+<th>北辰现状</th>
+<th>改造方向</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>模型接入</td>
+<td>多 provider + 失败切换 + 按任务选模型（Droidrun：Manager 用强模型，Executor 用快模型）</td>
+<td>30+ 预设，含本地 Ollama</td>
+<td>已在第一梯队，<strong>不动</strong></td>
+</tr>
+<tr>
+<td>2</td>
+<td>提示词架构</td>
+<td>指令分散布置在不同段落，不堆在一处；记忆<strong>双注入</strong>（system prompt + 最后一条用户消息）</td>
+<td>单块 system prompt</td>
+<td>记忆双注入，<strong>小改</strong></td>
+</tr>
+<tr>
+<td>3</td>
+<td>上下文管理</td>
+<td>前缀稳定、只追加、遮蔽而非移除；预算内整步丢</td>
+<td>已有 <code>ContextBudget</code> + 钉锚点</td>
+<td>补"空 success 优先丢、失败最后丢"</td>
+</tr>
+<tr>
+<td>4</td>
+<td>循环控制</td>
+<td>Manager→单步→Manager 紧反馈，不做一次性长计划</td>
+<td>单循环 + 60 步 + 熔断</td>
+<td><strong>加 <code>complete()</code> 完成信号</strong></td>
+</tr>
+<tr>
+<td>5</td>
+<td>工具设计</td>
+<td>少而准；组合优于罗列（<code>search_contacts</code> 而非 <code>list_contacts</code>）；30-50 个是劣化线</td>
+<td><strong>52 个</strong>，按 Strength 分组 + <code>__find_tools</code></td>
+<td>命名空间收敛 + <code>response_format</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td>感知</td>
+<td>a11y 树为主、截图为辅、<strong>差分状态</strong>（当前树 + 上一次树同送）</td>
+<td>树 + 截图 + OCR + 通知</td>
+<td><strong>加差分</strong>，这一步省最多 token</td>
+</tr>
+<tr>
+<td>7</td>
+<td>执行</td>
+<td><code>click(index)</code> 而非坐标；动作后<strong>等画面稳定</strong>（0.5s 起，比对到不变）</td>
+<td><code>ui_click</code> 按文本/ID，<code>ui_tap</code> 坐标兜底</td>
+<td>补画面稳定判定</td>
+</tr>
+<tr>
+<td>8</td>
+<td>状态与恢复</td>
+<td>checkpoint + resume</td>
+<td><code>AgentRunStateStore</code> + 启动自救</td>
+<td>已够</td>
+</tr>
+<tr>
+<td>9</td>
+<td>记忆</td>
+<td><code>remember()</code> / <code>get_memory()</code>；app 卡片（YAML 教模型怎么用某个 App）</td>
+<td>工作区 + 会话，<strong>没有 app 卡片</strong></td>
+<td><strong>中文 App 卡片库 = 最大差异化</strong></td>
+</tr>
+<tr>
+<td>10</td>
+<td>审批</td>
+<td>三层筛子 + 草稿态 + App 隐身</td>
+<td>见 §3</td>
+<td>按 §3 做</td>
+</tr>
+<tr>
+<td>11</td>
+<td>人机交互</td>
+<td>什么时候该问人；中断后能接管</td>
+<td><code>ask_user</code> 有</td>
+<td>补"接管"语义</td>
+</tr>
+<tr>
+<td>12</td>
+<td>可观测</td>
+<td>trace / 回放 / 每步截图</td>
+<td>trace 完整、保序</td>
+<td><strong>可回放 = 第二条差异化</strong></td>
+</tr>
+<tr>
+<td>13</td>
+<td>评测</td>
+<td>模块级评测与人工判断一致度 94.7%（MobiBench）；AndroidWorld 已饱和</td>
+<td>R06 就是模块级</td>
+<td>路子对，<strong>别追榜</strong></td>
+</tr>
+<tr>
+<td>14</td>
+<td>成本</td>
+<td>输入输出比 100:1；缓存价差 10 倍；单次工具输出限 25k token</td>
+<td>有计量，无软告警</td>
+<td>补 70% 告警</td>
+</tr>
+</tbody>
+</table></div>
+<h3>8.2 工具设计：我们的 52 个，已经在劣化区</h3>
+<p>Anthropic 的量化口径：<strong>超过 30–50 个可用工具后，模型挑对工具的能力开始劣化</strong>；超过 10 个工具、或工具定义超过 1 万 token 时，官方建议启用工具搜索按需加载。</p>
+<p>我们有 <strong>52 个</strong>，正好压在线上面。</p>
+<p>已有的解法是对的（按 Strength 分组暴露 + <code>__find_tools</code> 查回），但还差三件事：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>缺什么</th>
+<th>别人怎么做</th>
+<th>具体数字</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>response_format</code> 开关</strong></td>
+<td>返回值加 <code>concise / detailed</code> 枚举，默认只给核心字段</td>
+<td>Anthropic 用这招把 Slack 线程响应从 <strong>206 token 压到 72 token</strong></td>
+</tr>
+<tr>
+<td><strong>命名空间</strong></td>
+<td><code>asana_search</code> / <code>jira_search</code>，按域加前缀</td>
+<td>前缀 vs 后缀的效果差异"非平凡"，要自己评测</td>
+</tr>
+<tr>
+<td><strong>组合型工具</strong></td>
+<td><code>schedule_event</code>（查空闲 + 建日程）替代 <code>list_users + list_events + create_event</code></td>
+<td>减少中间输出，也就减少上下文</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>我们的 <code>ui_tree</code> 是最好的例子</strong>：它现在返回全量 JSON（每个节点的 cls、bounds、clickable、focusable…），一次几百个节点。这正是 Anthropic 说的"把数据库整行倒出来"。</p>
+<p>改造方向：<code>ui_tree(format="concise")</code> 默认只返回<strong>可点元素 + 文本 + 稳定 index</strong>，<code>detailed</code> 才给全量。</p>
+<blockquote>
+<p><strong>这个改动一举两得</strong>：省上下文，同时正好是 §4 里"JSON 不主动出现"的那件事。一个改动，治两个病。</p>
+</blockquote>
+<h3>8.3 感知：差分比全量省得多</h3>
+<p>Droidrun（AndroidWorld 91.4%）的做法值得抄思路：</p>
+<blockquote>
+<p>最近一条用户消息放<strong>当前</strong>截图 + 当前树；上一条放<strong>上一次</strong>的树。模型自己就能看出"变了什么"。</p>
+</blockquote>
+<p>对比我们：每一步都把整棵树重发一遍。一次 200 个节点，十步就是 2000 个节点，其中 95% 没变。</p>
+<p><strong>为什么差分在手机上特别有效</strong>：手机界面变化幅度小——点一下通常只变一个开关、一个弹窗、一行文字。整棵树重发是巨大的浪费。</p>
+<p><strong>我们能改造成什么</strong>：差分之外再做一层<strong>界面指纹</strong>。</p>
+<blockquote>
+<p>给每次 <code>ui_tree</code> 的树算一个指纹（包名 + 可见文本的哈希）。同一个指纹第二次出现，直接复用上次的解析结果，只标注"回到此页"。</p>
+</blockquote>
+<p>效果：模型连续几步在同一个页面里操作（找按钮、点、再找），只付一次解析成本。<strong>这条公开资料里没见过，是我们自己能长的东西。</strong></p>
+<h3>8.4 执行：等画面稳定，别等固定时间</h3>
+<p>Droidrun 的做法：<strong>每次动作后等 0.5 秒，比对屏幕状态，重复直到稳定或超时。</strong></p>
+<p>我们现在有 <code>getFreshUiTreeSnapshot</code>（等窗口切换事件），但没有"画面是否已经不动了"这一层。差别在于：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>场景</th>
+<th>现在的行为</th>
+<th>稳定的行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>点了一下，页面有 300ms 动画</td>
+<td>可能读到动画中间态，节点对不上</td>
+<td>等到不动再读，节点一定是对的</td>
+</tr>
+<tr>
+<td>点了一下，加载要 2 秒</td>
+<td>读到的还是旧页面，模型以为没反应，重复点</td>
+<td>等到新页面出现</td>
+</tr>
+<tr>
+<td>点击确实无效</td>
+<td>直接判定失败</td>
+<td>等 1 秒仍未变，才判失败</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>我们能改造成什么</strong>：稳定判定 + <strong>失败回执带"屏幕没变"这个事实</strong>。现在失败只说"没找到"，不说"点了但界面没动"——后者才是模型最需要知道的。</p>
+<h3>8.5 循环：缺一个 <code>complete()</code></h3>
+<p>Droidrun 的动作空间里有个 <code>complete()</code> 工具，任务结束由模型显式声明。</p>
+<p>我们现在的终止条件是"<code>tool_calls</code> 为空"——<strong>模型不说话就等于做完了</strong>。这有两个问题：</p>
+<ol>
+<li>模型可能只是这一轮不想调工具，但任务没完</li>
+<li>模型说"我完成了"，没有任何东西能校验它是不是真完成</li>
+</ol>
+<p><strong>改造方向</strong>：加 <code>complete(summary, evidence)</code>。<code>evidence</code> 要求给出"我凭什么说完成了"——比如"设置页里开关已显示为关闭"。</p>
+<p>这比"沉默即完成"强得多，而且它天然接上 §2：<code>complete</code> 一到，正文整段出、过程折叠。<strong>一个信号管三件事。</strong></p>
+<h3>8.6 记忆：app 卡片是别人没做的中文空白</h3>
+<p>Droidrun 有个东西叫 <strong>app card</strong>：一份 YAML，告诉模型"这个 App 是干什么的、主要页面有哪些、常见操作在哪"。</p>
+<p>他们的卡片是英文 App（Gmail、YouTube、Maps）。<strong>中国用户用的是微信、支付宝、美团、钉钉、小红书、高德。</strong></p>
+<p>这些 App 的界面逻辑、常用路径、容易踩的坑（"微信的发送按钮在右下角，不是右上角"），英文资料里一条都没有。</p>
+<p><strong>这就是北辰最实在的差异化资产</strong>：</p>
+<blockquote>
+<p>一套中文 App 卡片库。不是代码，是知识。</p>
+</blockquote>
+<p>它符合 §1.5 的三关：<br />
+1. 别人做不到吗？——不是做不到，是<strong>没人做</strong>，因为他们的用户不在中国<br />
+2. 用户能一句话说清吗？——"它认识微信"<br />
+3. 能录 30 秒演示吗？——能：同样一句"帮我在群里发个通知"，有卡片和没卡片，步数差一半</p>
+<p>而且卡片可以<strong>让用户自己长</strong>：用过三次的 App，自动把路径记下来，问用户"要不要存成卡片"。这是"住在手机里"才有的能力——云端 Agent 不知道你昨天怎么用美团。</p>
+<h3>8.7 五条能变成特色的（其余十二条是必须对齐的）</h3>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>特色</th>
+<th>为什么别人不会做</th>
+<th>能否演示</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>中文 App 卡片库</strong></td>
+<td>他们的用户不在中国，没这个需求</td>
+<td>能，步数对比</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>可回放</strong>：从结果点回"当时那一屏 + 点了哪个节点"</td>
+<td>官方做等于替结果担责</td>
+<td>能，录屏</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>界面指纹缓存</strong></td>
+<td>云端 Agent 每次都是新会话，没有"回到此页"的概念</td>
+<td>能，token 对比</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>失败不折叠、失败步不裁剪</strong></td>
+<td>别人默认收起过程，失败也一起收</td>
+<td>能，报错场景</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>过程实时 / 结果整段</strong></td>
+<td>他们的用户只要结果</td>
+<td>能，录屏</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>其余十二条不要想着做出花。</strong> 模型接入、上下文、循环、工具、感知、执行、恢复、审批、交互、可观测、评测、成本——这些必须长得像别人，因为它们是语义层：模型要认、供应商要认、用户要认。<strong>在这一层搞"特色"，等于让模型学一门新语言。</strong></p>
+<h3>8.8 一句话总结这一章</h3>
+<blockquote>
+<p><strong>十二条对齐，五条长出自己。</strong><br />
+对齐的部分照抄结论（数字、阈值、结构），长出来的部分只抄思路（为什么这么做），形态自己定。</p>
+</blockquote>
+<h2>九、变更记录</h2>
 <div class="tblwrap"><table>
 <thead>
 <tr>
@@ -798,6 +1068,10 @@ else   -&gt; 组级危险(group)      -&gt; 问
 <tr>
 <td>2026-11-27 23:15</td>
 <td>查了五家同类产品的判定标准（Claude Code / Pinky / FoneClaw / 掘金策略引擎 / Mika）。判据从「两层」补成「三层筛子」（新增 App 级隐身），并抓出三条缺口：App 屏蔽、验证码打码、草稿态（§3.3–3.5 重写，§3.6 补 Claude Code 的四条断路器）</td>
+</tr>
+<tr>
+<td>2026-11-27 23:45</td>
+<td>新增 §8「从零做 Agent：十四个部位对照」。查了 Anthropic 工具设计文档、Droidrun（AndroidWorld 91.4%）、OpenAI agent guide 一系材料，逐部位对照后提炼出五条可长成特色的，其余十二条明确「必须对齐、不要搞特色」</td>
 </tr>
 </tbody>
 </table></div>
@@ -856,6 +1130,14 @@ else   -&gt; 组级危险(group)      -&gt; 问
 <tr>
 <td>论文</td>
 <td>GTA（2510.02204）、AgentHazard（2507.04227）、MobiBench（2512.12634）、UI-Nexus（2506.08972）、MobileWorld（2512.19432）</td>
+</tr>
+<tr>
+<td>大厂工程文档（工具与循环）</td>
+<td>Anthropic《Writing effective tools for agents》：30–50 个工具劣化线、<code>response_format</code> 206→72 token、示例把 72% 提到 90%、单次工具输出 25k token 上限</td>
+</tr>
+<tr>
+<td>手机端工程细节</td>
+<td>Droidrun 91.4% AndroidWorld 复盘：Manager→单步→Manager 紧反馈、0.5s 屏幕稳定化、差分状态、<code>complete()</code> 信号、app 卡片（YAML）、文本原子替换</td>
 </tr>
 <tr>
 <td>开源源码</td>
