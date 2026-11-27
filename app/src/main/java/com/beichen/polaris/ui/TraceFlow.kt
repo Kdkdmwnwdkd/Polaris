@@ -68,14 +68,14 @@ internal data class TraceStep(
  * 「一堆工具」和「一块思考」两个互不相干的块——用户的原话是
  * 「工具自己一个地方、思考自己一个地方」。
  *
- * 现在边界由**正文**决定：一段流一直延续到某条助手消息交出正文为止。
- * 段内的思考与工具一律按 index 顺序排，不再分"谁的块"。
+ * 现在边界是**用户消息**：一段流就是一轮（到下一条用户消息为止）。
+ * 段内的思考、工具、途中说明一律按 index 顺序排，不再分"谁的块"。
  *
  * @param range 本段覆盖的下标区间（含两端）。它是「这一段是谁」的唯一表述：
- *   不再另设「被吸收的下标集合」，谁被吸收由区间 + 正文有无现算。
- * @param bodyIndex 段内**最后一条**交出正文的助手消息下标（`-1` = 段内没有正文）。
- *   段内可能不止一条（同轮正文+工具、多轮中间态），每条的正文都在自己的位置渲染；
- *   这个字段只用于「这一段最终给了什么答复」这类判断，不决定谁渲染。
+ *   不再另设「被吸收的下标集合」，谁被吸收由区间 + 回答位置现算。
+ * @param bodyIndex 本轮**回答**的下标（最后一条有正文的助手消息；`-1` = 没交正文）。
+ *   只有它留在流外当气泡，其余有正文的步都作为「说明」进流；
+ *   动作行（复制 / 朗读）也只属于它一条。
  */
 internal data class TraceRun(
     val range: IntRange,
@@ -187,7 +187,7 @@ internal fun traceRunAt(messages: List<UiItem>, index: Int, liveIndex: Int = -1)
  * [index] 处那条助手消息的归属。
  *
  * 判据只有一条：**它是不是本轮最后一条有正文的消息**。
- *  - 段首自己画流 → NONE（正文在流下方照常渲染，思考已进流）；
+ *  - 段首自己画流 → NONE（正文画不画由 [TraceSlot.drawBody] 决定，思考已进流）；
  *  - 是最终回答 → TAIL（思考进流，正文留在原地，动作行只属于它一条）；
  *  - 其余（途中说明 / 纯思考）→ ABSORBED（整条进流：思考一步、说明一步）。
  *
@@ -259,8 +259,10 @@ private fun buildRun(messages: List<UiItem>, seg: IntRange, liveIndex: Int): Tra
             is UiItem.Assistant -> {
                 // liveIndex 是末尾那条还没落库的草稿：它这一步还在长，必须染成「跑」，
                 // 否则用户看到的是「思考」打着已完成的对勾、正文却还在往外蹦。
-                if (!m.reasoning.isNullOrBlank()) {
-                    steps += thinkingStep(m.reasoning, running = i == liveIndex)
+                // 局部变量：reasoning 是跨模块属性，Kotlin 不给它做 smart cast（实测 e: 263:43）
+                val think = m.reasoning
+                if (!think.isNullOrBlank()) {
+                    steps += thinkingStep(think, running = i == liveIndex)
                 }
                 if (m.text.isNotBlank()) {
                     // 只有最后那条有正文的是回答，其余都是「途中说明」：
