@@ -56,23 +56,60 @@ const val TOOL_INTERRUPTED_NOTE = "⏹ 该调用未完成：运行被中断，�
 private const val DEFAULT_TITLE = "新对话"
 
 /**
- * 单条消息内容/入参的落盘上限。
- * 为什么截断：ui_tree 转储、read_file 大文件等工具结果可达数十 KB，200 条不截断的
- * 会话能把单个分片撑到 MB 级。分片后只重写这一个文件，但流式追加仍会反复 fsync 它，
- * 截断仍是必要的。UI 气泡仍显示完整结果——截断只影响落盘的那一份。
+ * 正文 / 思考的落盘上限。
+ *
+ * **2026-11-27 从 4000 抬到 40000。** 4000 是当年为了「会话文件不能无限长」随手定的，
+ * 落到真实使用上是一条硬墙：一份方案、一段代码、一篇长回答，四千字刚开头就没了；
+ * 更糟的是**读回来的残文还会被当作上下文发给下一轮**，模型于是接着半句话往下写，
+ * 越跑越偏。用户的原话是「有些问题就要 4000 字，这种对用的人不太好」。
+ *
+ * 40000 字符（约 1.5 万汉字）能覆盖绝大多数单条回答；再长的分成多轮本来也更合理。
+ * 截断仍然是必要的：`ui_tree` 转储、大文件读取这类结果可达数十 KB。
  */
-private const val MAX_FIELD_CHARS = 4000
+private const val MAX_TEXT_CHARS = 40_000
 
 /**
- * 正文落盘时被丢弃的字符数（0 = 完整）。
+ * 单次工具结果的落盘上限，比正文收紧一半——工具结果长得快、信息密度低。
  *
- * 与 `take(MAX_FIELD_CHARS)` 成对使用：取了多少、丢了多少必须一起算出来，
+ * 超限时**保留头尾**（见 [clipTool]）：开头是命令与上下文，结尾是结论和报错，
+ * 真正会被一眼用上的两段都在；只切尾部等于把「测试通过没通过」删掉。
+ */
+private const val MAX_TOOL_CHARS = 20_000
+
+/** 工具结果超限时，头部保留的字符数；其余额度留给尾部。 */
+private const val TOOL_HEAD_CHARS = 8_000
+
+/**
+ * 落盘时被丢弃的字符数（0 = 完整）。
+ *
+ * 与截断成对使用：取了多少、丢了多少必须一起算出来，
  * 否则读盘端只看到「短」，分不清「本来就短」和「被截短」。
  *
- * 调用方一律写成 `truncatedChars + droppedChars(...)`：从磁盘读回的 [UiItem] 已经带着
+ * 调用方一律写成 `truncatedChars + droppedText(...)`：从磁盘读回的 [UiItem] 已经带着
  * 上一次的丢弃量，若直接覆盖成 0，一次「读回 → 重写」就会把标记抹掉。
  */
-private fun droppedChars(text: String): Int = (text.length - MAX_FIELD_CHARS).coerceAtLeast(0)
+private fun droppedText(text: String): Int = (text.length - MAX_TEXT_CHARS).coerceAtLeast(0)
+
+private fun droppedTool(text: String): Int = (text.length - MAX_TOOL_CHARS).coerceAtLeast(0)
+
+/**
+ * 正文截断：只取头部。
+ *
+ * 正文的结尾是「结论」而不是「遗漏」，所以不保留尾部——保留尾部会让一段回答
+ * 变成「开头 + 结尾」的缝合体，读起来是断的。要完整就提高上限（[MAX_TEXT_CHARS]），
+ * 不要在一条消息里做拼接。
+ */
+private fun clipText(text: String, max: Int = MAX_TEXT_CHARS): String =
+    if (text.length <= max) text else text.take(max)
+
+/** 工具结果截断：头 + 尾，中间用一行可见的省略标记说明丢了多少。 */
+private fun clipTool(text: String): String {
+    if (text.length <= MAX_TOOL_CHARS) return text
+    val dropped = text.length - MAX_TOOL_CHARS
+    val head = text.take(TOOL_HEAD_CHARS)
+    val tail = text.takeLast(MAX_TOOL_CHARS - TOOL_HEAD_CHARS)
+    return "$head\n…〔中间省略 $dropped 字符〕…\n$tail"
+}
 
 /**
  * 会话摘要（抽屉「最近对话」区直接消费，不加载消息正文——列表要轻）。
@@ -143,7 +180,7 @@ data class MsgRecord(
      */
     val pending: Boolean = false,
     /**
-     * 落盘截断标记（2026-11-18）：正文超过 [MAX_FIELD_CHARS] 时被丢弃的字符数，0 = 完整。
+     * 落盘截断标记（2026-11-18）：正文超过 [MAX_TEXT_CHARS] 时被丢弃的字符数，0 = 完整。
      *
      * 修前只是静默 `take(4000)`：会话内 UI 看全文，重启后读到残文，看起来像「模型话说一半」；
      * 冷启动续跑还会基于断掉的上下文继续推理。有了这个数，读盘路径能明确告诉用户
@@ -224,30 +261,30 @@ fun UiItem.toMsgRecord(): MsgRecord = when (this) {
     is UiItem.User -> MsgRecord(
         id = UUID.randomUUID().toString(),
         role = ROLE_USER,
-        content = text.take(MAX_FIELD_CHARS),
+        content = clipText(text),
         timeMs = timeMs,
         // 气泡里那几张图与文件名随消息落盘（存的是缩略图，见 MsgRecord.images）
         images = images,
         fileNames = fileNames,
-        truncatedChars = truncatedChars + droppedChars(text)
+        truncatedChars = truncatedChars + droppedText(text)
     )
 
     is UiItem.Assistant -> MsgRecord(
         id = UUID.randomUUID().toString(),
         role = ROLE_ASSISTANT,
-        content = text.take(MAX_FIELD_CHARS),
+        content = clipText(text),
         // 功能五（P1-5）：token 用量随气泡落盘（无 usage 存 0，读时按 0 还原为 null）
         promptTokens = usage?.promptTokens ?: 0L,
         completionTokens = usage?.completionTokens ?: 0L,
         // 功能五（P1-9）：推理过程随气泡落盘（截断纪律同正文）
-        reasoning = reasoning.orEmpty().take(MAX_FIELD_CHARS),
+        reasoning = clipText(reasoning.orEmpty()),
         timeMs = timeMs,
         // W-RT7：模型归属随气泡落盘（费用下钻的依据）
         modelId = modelId,
         // 正文与推理过程各自独立截断，丢弃量必须**都**计入：只看正文的话，
         // 「正文很短 + 思维链超长」的历史消息会显示「完整」，而推理过程已经被砍掉一半。
         truncatedChars = truncatedChars +
-            droppedChars(text) + droppedChars(reasoning.orEmpty()),
+            droppedText(text) + droppedText(reasoning.orEmpty()),
         // 2026-11-23：界面合成文案随记录落盘，读回历史时按它决定「算不算模型的话」
         synthetic = synthetic
     )
@@ -256,7 +293,7 @@ fun UiItem.toMsgRecord(): MsgRecord = when (this) {
         // tool 的 id = call.id：appendMessage 据此覆盖「执行中 → 终态」两次写入
         id = call.id,
         role = ROLE_TOOL,
-        content = result.take(MAX_FIELD_CHARS),
+        content = clipTool(result),
         toolName = call.name,
         // arguments 是 JsonObject，toString() 即标准 JSON 文本，直接存。
         // 超预算时**不能**像正文那样 take()——见 encodeToolArgs 的注释。
@@ -264,7 +301,7 @@ fun UiItem.toMsgRecord(): MsgRecord = when (this) {
         isError = isError,
         // R-06：只有「执行中」这一段落 pending=true；终态落盘时一并清掉
         pending = running && !interrupted,
-        truncatedChars = truncatedChars + droppedChars(result)
+        truncatedChars = truncatedChars + droppedTool(result)
     )
 }
 
@@ -376,7 +413,7 @@ fun ConversationRecord.toUiItems(): List<UiItem> = buildList {
  *
  * 2026-11-27 真机，十次闪退的根因就在这里。
  *
- * 修前与正文共用一条截断：`call.arguments.toString().take(MAX_FIELD_CHARS)`。
+ * 修前与正文共用一条截断：`call.arguments.toString().take(4000)`。
  * 正文是纯文本，切一半只是显示不全；参数是**结构化 JSON**，切一半就是非法 JSON。
  * 真机上的那条被切在 `<rect x="322" y="215"` 中间——一次生图/绘图工具的入参里
  * 带了几十字节的 SVG，超过 4000 就断在那儿。落盘后下次启动：
@@ -392,7 +429,7 @@ fun ConversationRecord.toUiItems(): List<UiItem> = buildList {
  */
 private fun encodeToolArgs(args: JsonObject): String {
     val raw = args.toString()
-    if (raw.length <= MAX_FIELD_CHARS) return raw
+    if (raw.length <= MAX_TOOL_CHARS) return raw
     return buildJsonObject {
         put("__note", JsonPrimitive("参数过长，已省略（原文 ${raw.length} 字符）"))
         put("__chars", JsonPrimitive(raw.length))

@@ -49,7 +49,7 @@ fi
 
 # 未超预算时必须**原样**保存：正常路径的字节不能因为我们加了兜底而变化，
 # 否则每一份历史会话都会被重写一遍，diff、备份、指纹全跟着抖。
-if grep -qF 'if (raw.length <= MAX_FIELD_CHARS) return raw' "$STORE"; then
+if grep -qF 'if (raw.length <= MAX_TOOL_CHARS) return raw' "$STORE"; then
     pass "未超预算时原样返回（不改变正常路径的字节）"
 else
     fail "encodeToolArgs 缺「未超预算原样返回」"
