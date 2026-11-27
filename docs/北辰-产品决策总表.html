@@ -64,12 +64,12 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <div class="wrap">
 <span class="badge">决策总表</span>
 <h1>北辰 · 产品决策总表</h1>
-<p class="sub">活文档 / 每次讨论完只改这一份 / 最后更新 2026-11-27 23:10</p>
+<p class="sub">活文档 / 每次讨论完只改这一份 / 最后更新 2026-11-27 23:15</p>
 
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-27 23:10</strong><br />
+<p>最后更新：<strong>2026-11-27 23:15</strong><br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -95,8 +95,8 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 </tr>
 <tr>
 <td>§3 审批</td>
-<td><strong>已定</strong>，唯一待定是危险组名单</td>
-<td>见 §6</td>
+<td><strong>已定</strong>：三层筛子 + 五家对照 + 三条缺口</td>
+<td>直接引用</td>
 </tr>
 <tr>
 <td>§4 视觉</td>
@@ -382,13 +382,43 @@ else   -&gt; 组级危险(group)      -&gt; 问
           落点级危险(toolCall) -&gt; 问
           其余                -&gt; 不问
 </code></pre>
-<h3>3.3 危险的判据：看落点，不看动作</h3>
+<h3>3.3 危险的判据：三层筛子</h3>
 <p><strong>三把尺子</strong>（用户定义，一字不改）：</p>
 <blockquote>
 <p>不威胁隐私、不触碰财产、不损害财产 —— 三者都不沾，就不算危险。</p>
 </blockquote>
 <p><strong>动作类型本身没有意义。</strong> 点"返回"和点"立即支付"是同一个 <code>ui_tap</code>；搜网页和读短信都是"读"。所以判据必须落在<strong>这一步会造成什么</strong>上。</p>
-<h4>组级（工具本身就只能干危险事）</h4>
+<h4>第一层：App 级（整体隐身）</h4>
+<p>有些应用，<strong>整个都不该进模型的视野</strong>——不是"看了再问"，是根本不给看。</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>类别</th>
+<th>例子</th>
+<th>判</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>金融</td>
+<td>银行、支付宝、微信支付、券商</td>
+<td><strong>隐身</strong>：<code>ui_tree</code> 里没有，截图里也没有</td>
+</tr>
+<tr>
+<td>密码管理</td>
+<td>1Password、Bitwarden、系统钥匙串</td>
+<td><strong>隐身</strong></td>
+</tr>
+<tr>
+<td>证件/身份</td>
+<td>电子身份证、社保、护照类</td>
+<td><strong>隐身</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>为什么隐身强于提问</strong>：问了，用户很可能点"允许"；而且此时模型<strong>已经读到了内容</strong>，问只是事后追认。Pinky（DIYgod 开源项目）就是这么做的——"银行、钱包、密码管理器应用默认对 Agent 完全隐形，通知也会在通知栏和锁屏上被藏起来"。</p>
+<p><strong>代价</strong>：任务做不了（"帮我看下余额"）。所以要给一个出口：用户可以在白名单里<strong>手动解除某个 App 的隐身</strong>，单次有效。</p>
+<h4>第二层：组级（工具本身就只能干危险事）</h4>
 <div class="tblwrap"><table>
 <thead>
 <tr>
@@ -400,58 +430,58 @@ else   -&gt; 组级危险(group)      -&gt; 问
 <tbody>
 <tr>
 <td>应用安装 / 卸载 / 停止</td>
-<td><strong>危险</strong></td>
+<td><strong>问</strong></td>
 <td>不可逆，数据会没</td>
 </tr>
 <tr>
 <td>GitHub 写入（push）</td>
-<td><strong>危险</strong></td>
+<td><strong>问</strong></td>
 <td>外发，别人看得见，撤不回</td>
 </tr>
 <tr>
 <td>shell 破坏性</td>
-<td><strong>危险</strong></td>
+<td><strong>问</strong></td>
 <td><code>rm -rf</code> 级</td>
 </tr>
 <tr>
 <td>shell 提权（uid 2000）</td>
-<td><strong>危险</strong></td>
+<td><strong>问</strong></td>
 <td>—</td>
 </tr>
 <tr>
 <td>本机隐私读取（短信/通讯录/相册/通话记录）</td>
-<td><strong>危险</strong></td>
+<td><strong>问</strong></td>
 <td>隐私</td>
 </tr>
 <tr>
 <td>普通 shell</td>
-<td>不危险</td>
+<td>放行</td>
 <td>靠 <code>ShellCommandRules</code> 按参数判</td>
 </tr>
 <tr>
 <td>网络请求</td>
-<td>不危险</td>
+<td>放行</td>
 <td>纯读，外发另有 <code>EgressGuard</code> 三道闸</td>
 </tr>
 <tr>
 <td>工作区外文件读取</td>
-<td>不危险</td>
+<td>放行</td>
 <td>纯读</td>
 </tr>
 <tr>
 <td>工作区文件写入</td>
-<td>不危险</td>
+<td>放行</td>
 <td><code>FileBackupStore</code> 逐文件备份，可回滚</td>
 </tr>
 <tr>
 <td>截图 / 读界面树 / 朗读 / 通知</td>
-<td>不危险</td>
+<td>放行</td>
 <td>只看、只说</td>
 </tr>
 </tbody>
 </table></div>
-<h4>落点级（同一把工具，点哪儿决定危不危险）</h4>
-<p>界面操作、输入、点击这类工具<strong>组级一律不算危险</strong>——否则第二档就退化成第一档（连续界面操作要弹十几次窗），这正是当初做三档要解决的问题。</p>
+<h4>第三层：落点级（同一把工具，点哪儿决定危不危险）</h4>
+<p>界面操作、输入、点击这类工具<strong>组级一律放行</strong>——否则第二档就退化成第一档（连续界面操作要弹十几次窗），这正是当初做三档要解决的问题。</p>
 <p>危险与否，看这一下的<strong>落点</strong>：</p>
 <div class="tblwrap"><table>
 <thead>
@@ -463,42 +493,161 @@ else   -&gt; 组级危险(group)      -&gt; 问
 </thead>
 <tbody>
 <tr>
-<td>文案含发送/支付/转账/确认/删除/授权/同意/提交/购买/下单</td>
-<td><strong>危险</strong></td>
+<td>文案含 发送/支付/转账/付款/确认/删除/授权/同意/提交/购买/下单/申请/绑定</td>
+<td><strong>问</strong></td>
 <td>"立即支付"、"确认转账"、"发送"、"删除对话"</td>
 </tr>
 <tr>
 <td>密码框 / 验证码框 / 银行卡号框</td>
-<td><strong>危险</strong></td>
+<td><strong>问</strong></td>
 <td>—</td>
 </tr>
 <tr>
 <td>打开 App、返回、关闭、滚动、翻页、切换标签</td>
-<td>不危险</td>
+<td>放行</td>
 <td>—</td>
 </tr>
 <tr>
 <td>搜索框、普通输入框打字</td>
-<td>不危险</td>
+<td>放行</td>
 <td>—</td>
 </tr>
 <tr>
 <td>识别不出目标（图标按钮、纯图形）</td>
-<td><strong>看可逆性</strong>：不可逆 → 问；可逆 → 放行但链上标黄"未识别目标"</td>
+<td>不可逆 → 问；可逆 → 放行但链上标黄"未识别目标"</td>
 <td>—</td>
 </tr>
 </tbody>
 </table></div>
-<p><strong>这条判据的技术前提</strong>：<code>ui_tree</code> 能读到落点控件的文案/资源 id。绝大多数 Android 控件能读到；读不到就走最后一行的兜底。</p>
-<p><strong>为什么不做"任何点击都问"</strong>：用户原话是"操控手机这些算"，但如果字面执行，第二档等于第一档，三档设计就白做了。真正让人不安的不是"点了一下"，是"点到了会花钱/发出去/删掉的地方"。所以按落点判，才是那句话的技术落地。</p>
-<p><strong>兜底纪律</strong>：拿不准时<strong>宁可不问，但不能不记</strong>。第二档的定位是"别烦我"，把每一处不确定都变成弹窗，用户三天内就会点"始终允许"，那等于关掉了所有保护。</p>
-<h3>3.4 第三档凭什么敢做</h3>
+<p><strong>技术前提</strong>：<code>ui_tree</code> 能读到落点控件的文案/资源 id。绝大多数 Android 控件能读到；读不到走最后一行的兜底。</p>
+<p><strong>多语言</strong>：风险词表不能只有中文。Pinky 做的是 <strong>10 种语言</strong>的标签识别。我们至少要覆盖中/英，加上常见的"Pay / Send / Delete / Confirm / OK"。</p>
+<h4>三级优先级</h4>
+<pre><code>隐身  &gt;  问  &gt;  放行
+</code></pre>
+<p>App 级命中的，不管组级和落点级怎么判，一律隐身。</p>
+<p><strong>为什么是三层</strong>：业界的档位都按"操作类别"分，没有按"单步危不危险"分的（见 §3.4）。原因是类别可预测、可解释，用户能形成预期；单步判断永远有误判空间。所以<strong>档位定类别，单步判定只做加法</strong>——在类别之上再加一层拦截，而不是拿它替代类别。</p>
+<h3>3.4 业界怎么判（五家对照）</h3>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>来源</th>
+<th>判定单位</th>
+<th>具体分类</th>
+<th>我们的对应</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Claude Code</strong></td>
+<td>操作类别（6 档）</td>
+<td>default 只读 / acceptEdits 加文件编辑 / plan 只读+分类器 / <strong>auto 全部+第二个模型当分类器</strong> / dontAsk 只跑预批准 / bypass 全放</td>
+<td>§3.2 三档 = 它的精简版。<strong>它没做"单步危不危险"，做的是"哪类操作不用问"</strong></td>
+</tr>
+<tr>
+<td><strong>Pinky</strong>（开源）</td>
+<td>App + 落点</td>
+<td>金融/密码管理器整体隐身；风险按钮标签 10 语言识别；60 秒无响应=不允许；验证码读前打码</td>
+<td>我们<strong>完全没有</strong>前两条，见 §3.5</td>
+</tr>
+<tr>
+<td><strong>FoneClaw</strong></td>
+<td>变更时刻</td>
+<td>查询状态、整理文字、产生建议 = 不改变外部世界；发消息、删文件、改设置、分享位置 = 有可见结果。<strong>确认强度要与影响相称</strong></td>
+<td>我们只有"弹/不弹"二元，缺强度分级</td>
+</tr>
+<tr>
+<td><strong>掘金「策略引擎」</strong></td>
+<td>能力 + 参数</td>
+<td>白名单、参数范围、调用频率、风险级别；<strong>"整理相册只能生成候选分组，删除必须逐项确认；回复消息只生成预览，发送留给用户"</strong></td>
+<td>草稿态，我们完全没有，见 §3.5</td>
+</tr>
+<tr>
+<td><strong>Mika</strong></td>
+<td>碰"钱、权、密"</td>
+<td>登录输密码、收发验证码、点支付、系统权限弹窗 → 主动暂停，通知用户手动介入</td>
+<td>方向一致，粒度比我们细</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>一个共同的空白</strong>：五家里没有一家用"这一步危不危险"作为主判据。都是"哪一类不用问" + "哪一类永远问"，中间地带靠 App 名单和落点表填。我们原来只想做落点判据，是漏了两层。</p>
+<h3>3.5 三条我们缺的（都是别人已经做出来的）</h3>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>缺什么</th>
+<th>谁做了</th>
+<th>我们现在的状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>App 级整体隐身</strong></td>
+<td>Pinky</td>
+<td><code>grep</code> 零命中，没有包名黑名单</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>验证码读前打码</strong></td>
+<td>Pinky</td>
+<td>没有。只有注释写过"通知正文里有验证码，读一次等于把用户此刻的手机看穿"（审计 F9），但没实现</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>草稿态</strong></td>
+<td>掘金策略引擎</td>
+<td>没有。我们只有"允许 / 拒绝"两个按钮</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>草稿态最值得学，因为它改变了"问"的形态：</strong></p>
+<blockquote>
+<p>与其问"要不要发这条消息"，不如把消息写好放在输入框里，让用户按发送。</p>
+</blockquote>
+<p>用户看到的不是抽象的"允许/拒绝"，而是<strong>真实的、可改的结果</strong>。信息量完全不是一个量级，而且它天然符合我们的主轴——<strong>完全可见</strong>。</p>
+<p>适用范围：发消息、填表单、发邮件、提交评论。不适用：删文件、卸载 App（这些没有"草稿"可言，只能问或不做）。</p>
+<h3>3.6 第三档凭什么敢做</h3>
 <p>用户的话说到了根子上：<em>"电脑完全放权不就这么做的吗？只不过他们有黑箱、有回收站……我们手机做不到而已。"</em></p>
-<p>手机没有回收站，所以不能照抄，得补另外两样：</p>
+<p><strong>先纠正一个事实：电脑上的"完全放权"也不是 100%。</strong> Claude Code 的 <code>bypassPermissions</code> 文档里明确写着，即使在最放的一档，<strong>四条硬底线仍然会拦</strong>：</p>
+<ol>
+<li>显式 <code>ask</code> 规则（用户自己标过的）</li>
+<li>需要用户交互的工具（<code>AskUserQuestion</code>）</li>
+<li>对关键路径的 <code>rm</code> / <code>rmdir</code></li>
+<li>工作目录外的读取（开启 <code>blockReadsOutsideWorkingDirectories</code> 时）</li>
+</ol>
+<p>而且官方建议"仅在容器/虚拟机里使用此模式"。<strong>换句话说，连 Anthropic 都不敢给一个真的 100%。</strong></p>
+<p>所以第三档的定义应该是：<strong>跳过所有弹窗，但保留四条断路器。</strong></p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>断路器</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>隐身 App</td>
+<td>第三档下依然隐身。<strong>这不是权限，是看不见</strong></td>
+</tr>
+<tr>
+<td>自伤保护</td>
+<td>关键路径的 <code>rm -rf</code>、卸载系统应用 → 仍拦</td>
+</tr>
+<tr>
+<td>硬止损</td>
+<td>60 步 / 30 分钟，不受档位影响</td>
+</tr>
+<tr>
+<td>全程留痕</td>
+<td>每步落 trace，事后可回放（这条本来就一直有）</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>补偿机制（手机没有回收站，所以要补两样）</strong>：</p>
 <p><strong>第一样：全程可见、随时能掐。</strong> 这正好接着 §2 的"过程链实时展开"。第三档不是闭眼放权——它每点一下你都看得见，觉得不对随时按停止。<strong>电脑上你也不知道它点了哪个按钮，我们知道。这是手机端唯一比电脑强的地方，也正是第三档成立的前提。</strong></p>
-<p><strong>第二样：事后一份清单，不可撤的标红。</strong> 跑完给一张"这轮做了什么"的表，能撤的给撤销入口，撤不了的（卸载、push、发消息）明确标出来。</p>
-<p><strong>外加硬止损（不受档位影响）</strong>：60 步 / 30 分钟照旧。完全放权 ≠ 无限跑。</p>
-<h3>3.5 文案要改</h3>
+<p><strong>第二样：事后一份清单，不可撤的标红。</strong> 跑完给一张"这轮做了什么"的表，能撤的给撤销入口（文件写入有 <code>FileBackupStore</code>），撤不了的（卸载、push、发消息）明确标出来。</p>
+<h3>3.7 文案要改</h3>
 <ul>
 <li>第二档副标题：~~"危险操作弹窗确认，勾选后同类不再问"~~ → <strong>"不危险的我直接做，危险的问你"</strong></li>
 <li>第三档副标题：~~"……应用装卸、GitHub 提交、shell 命令仍必问"~~ → <strong>"一律不再询问。每一步你都能看见，跑完给你清单，撤销不了的会标出来"</strong></li>
@@ -589,7 +738,7 @@ else   -&gt; 组级危险(group)      -&gt; 问
 </table></div>
 <p>第 3 条的理由：这行在展开时是多余的（下面二十条链自己会说明在干啥），在折叠后却必需（它是唯一的可见入口）。所以不是删掉，是<strong>展开时让位、折叠后归位</strong>——同一个位置，两种状态各取所需。</p>
 <hr />
-<h2>七、待验证（五条，都能几十行验完）</h2>
+<h2>七、待验证（七条，都能几十行验完）</h2>
 <div class="tblwrap"><table>
 <thead>
 <tr>
@@ -626,6 +775,8 @@ else   -&gt; 组级危险(group)      -&gt; 问
 </tr>
 </tbody>
 </table></div>
+<p>| 6 | 通知正文里的验证码是否已经进了模型上下文 | <code>NotificationDigest</code> 会读通知全文，验证码就在里面。Pinky 的做法是读前打码，我们是原样进 |<br />
+| 7 | 截图/OCR 是否会把金融 App 的画面交出去 | App 级隐身如果只做 <code>ui_tree</code> 不做截图，等于没做 |</p>
 <hr />
 <h2>八、变更记录</h2>
 <div class="tblwrap"><table>
@@ -643,6 +794,10 @@ else   -&gt; 组级危险(group)      -&gt; 问
 <tr>
 <td>2026-11-27 23:10</td>
 <td>三件落定：危险判据改为「看落点」（§3.3 重写）、中断不落地正文且摘要写三层（新增 §2.5）、段头「正在执行」展开时让位（§6）</td>
+</tr>
+<tr>
+<td>2026-11-27 23:15</td>
+<td>查了五家同类产品的判定标准（Claude Code / Pinky / FoneClaw / 掘金策略引擎 / Mika）。判据从「两层」补成「三层筛子」（新增 App 级隐身），并抓出三条缺口：App 屏蔽、验证码打码、草稿态（§3.3–3.5 重写，§3.6 补 Claude Code 的四条断路器）</td>
 </tr>
 </tbody>
 </table></div>
