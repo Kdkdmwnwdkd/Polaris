@@ -1066,7 +1066,13 @@ private fun testReasoningFold() {
         assertContains("U10", traceUi, "if (!streaming && !touchedByUser) expanded = false")
         // 2026-11-26：折回判据从 run.running 扩成 active（= run.running || live）。
         // 模型在思考时还没有新工具进来，只看 tools.running 会把刚出现的思考立刻折起来。
-        assertContains("U10", traceUi, "if (!active && !touchedByUser)")
+        //
+        // 2026-11-27 加第三个条件：**带思考的流跑完不再折回**。
+        // 真机上「跑完折成一行」正是用户说的「合起来就看不见了」——他要看的就是那条链。
+        // 只有「全是工具、一句思考都没有」的流才自动收起（那种流看头就知道发生了什么）。
+        assertContains("U10", traceUi, "if (!active && !touchedByUser && run.steps.none { it.isThinking })")
+        // 单行思考（非过程流，即普通问答）仍是跑完折回：它只有一行，不折反而占地方
+        assertContains("U10", traceUi, "if (!streaming && !touchedByUser) expanded = false")
         // null 不渲染：由调用处的 isNullOrBlank 判据保证，组件只接收非空
         assertTrue("U10", !traceUi.contains("reasoning == null"))
     }
