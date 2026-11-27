@@ -64,12 +64,12 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <div class="wrap">
 <span class="badge">决策总表</span>
 <h1>北辰 · 产品决策总表</h1>
-<p class="sub">活文档 / 每次讨论完只改这一份 / 最后更新 2026-11-27 23:52</p>
+<p class="sub">活文档 / 每次讨论完只改这一份 / 最后更新 2026-11-27 23:55</p>
 
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-27 23:52</strong><br />
+<p>最后更新：<strong>2026-11-27 23:55</strong><br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -387,6 +387,32 @@ else   -&gt; 组级危险(group)      -&gt; 问
           落点级危险(toolCall) -&gt; 问
           其余                -&gt; 不问
 </code></pre>
+<h4>一条重要修正：不能让模型"自己判断有没有把握"</h4>
+<p>第二档叫"智能审核"，很容易做成"模型觉得没把握就问"。<strong>这条路是错的</strong>，有实证：</p>
+<blockquote>
+<p>智能体自报成功率 <strong>70–75%</strong>，实际完成率只有 <strong>20–35%</strong>。</p>
+</blockquote>
+<p>模型对自己的判断系统性偏高。靠它自省来决定"要不要问人"，结果一定是<strong>该问的不问，不该问的狂问</strong>。</p>
+<p>所以第二档的"判断"必须落在<strong>确定性触发器</strong>上，不落在模型的自我评估上：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>类型</th>
+<th>触发器</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>结构性</td>
+<td>工具输出互相矛盾、缺必填字段、命中风险词、操作超出爆炸半径</td>
+</tr>
+<tr>
+<td>行为性</td>
+<td>同一查询重述重试 &gt;2 次、超出原始任务边界、反复检索又丢弃</td>
+</tr>
+</tbody>
+</table></div>
+<p>再加一条工程纪律：<strong>同一个动作不要双重门控</strong>——既弹窗、又被规则拦，用户会以为系统在抽风。</p>
 <h3>3.3 危险的判据：三层筛子</h3>
 <p><strong>三把尺子</strong>（用户定义，一字不改）：</p>
 <blockquote>
