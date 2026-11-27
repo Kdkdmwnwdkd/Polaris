@@ -102,6 +102,9 @@ fun MediaScreen() {
     var videoProviderId by rememberSaveable { mutableStateOf("dashscope") }
     var modelExtra by rememberSaveable { mutableStateOf("") }
     var keyDraft by remember { mutableStateOf("") }
+
+    // 媒体 Base URL 草稿。只有 OpenAI 图片需要它——其余三家端点写死在 Provider 里。
+    var baseDraft by remember { mutableStateOf("") }
     var refDataUri by remember { mutableStateOf<String?>(null) }
 
     // Key 保存后 bump 一次，强制重算 providers（SharedPreferences 无响应式）
@@ -127,6 +130,11 @@ fun MediaScreen() {
     val selectedId = if (tab == 1) videoProviderId else imageProviderId
     val selected = available.firstOrNull { it.id == selectedId } ?: available.firstOrNull()
     val hasKey = selected != null && store.loadMediaKey(selected.id).isNotBlank()
+
+    // 切 Provider 时把已存的端点同步进草稿（否则会把上一家的地址带过来）。
+    LaunchedEffect(selected?.id) {
+        baseDraft = selected?.let { store.loadMediaBaseUrl(it.id) }.orEmpty()
+    }
 
     // 相册选参考图 → data URI（OpenAI images/edit 只认字节，先转 base64）
     val pickImage = rememberLauncherForActivityResult(
@@ -431,6 +439,68 @@ fun MediaScreen() {
                                 }
                             })
                         }
+                        Spacer(Modifier.height(AgentSpacing.space3))
+                    }
+
+                    // Base URL（仅 OpenAI 图片）：媒体端点与对话端点分离。
+                    //
+                    // 真机上这里是「配了 Key 也 404」的根源：出图请求曾经借用对话的
+                    // baseUrl，用户主对话换成 deepseek 后，图片就打到
+                    // `api.deepseek.com/v1/images/generations`——那个路径不存在。
+                    // 留空 = 官方 https://api.openai.com/v1。
+                    if (selected?.id == "openai") {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .padding(
+                                        horizontal = AgentSpacing.space4,
+                                        vertical = AgentSpacing.space2
+                                    ),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                BasicTextField(
+                                    value = baseDraft,
+                                    onValueChange = { baseDraft = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textStyle = MediaMonoStyle.copy(
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    ),
+                                    singleLine = true,
+                                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                    decorationBox = { inner ->
+                                        Box(contentAlignment = Alignment.CenterStart) {
+                                            if (baseDraft.isEmpty()) {
+                                                Text(
+                                                    "Base URL（留空 = 官方 api.openai.com/v1）",
+                                                    style = MediaMonoStyle,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            inner()
+                                        }
+                                    }
+                                )
+                            }
+                            Spacer(Modifier.width(AgentSpacing.space2))
+                            AkTextButton(text = "保存", onClick = {
+                                store.saveMediaBaseUrl("openai", baseDraft)
+                                keyVersion++
+                                Toast.makeText(
+                                    context,
+                                    if (baseDraft.isBlank()) "已恢复官方端点" else "已保存图片端点",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            })
+                        }
+                        Spacer(Modifier.height(AgentSpacing.space1))
+                        Text(
+                            "对话供应商是别家（如 deepseek）时，这里必须单独填一个支持 images 接口的地址。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         Spacer(Modifier.height(AgentSpacing.space3))
                     }
 

@@ -210,6 +210,23 @@ class ConfigStore(context: Context) {
     }
 
     /**
+     * 保存媒体 Provider 的 Base URL（目前只有 OpenAI 图片需要——其余三家端点写死）。
+     *
+     * 传空串等于「恢复默认」：删除该键，让 Provider 回落到官方地址，
+     * 而不是把空串当成一个合法地址存着（空串拼出来是 `/images/generations`，
+     * 那是一个相对路径，OkHttp 会直接抛 IllegalArgumentException，比 404 更难读）。
+     */
+    fun saveMediaBaseUrl(providerId: String, url: String) {
+        val v = url.trim().trimEnd('/')
+        if (v.isEmpty()) sp.edit().remove(KEY_MEDIA_BASE_PREFIX + providerId).apply()
+        else sp.edit().putString(KEY_MEDIA_BASE_PREFIX + providerId, v).apply()
+    }
+
+    /** 读媒体 Provider 的 Base URL；未配置返回空串（调用方负责回落官方端点）。 */
+    fun loadMediaBaseUrl(providerId: String): String =
+        sp.getString(KEY_MEDIA_BASE_PREFIX + providerId, "").orEmpty()
+
+    /**
      * 保存 GitHub 构建配置（第 9 步「构建」按钮用，与 LLM/媒体 Key 同库不同键）。
      * PAT 明文存储的取舍见 [ConfigStore] 类注释：App 私有目录 + 开源前迁移加密。
      */
@@ -326,6 +343,19 @@ class ConfigStore(context: Context) {
         /** 功能五（P1-6）：收藏模型名（逗号分隔）。 */
         private const val KEY_FAVORITE_MODELS = "favorite_models"
         private const val KEY_MEDIA_KEY_PREFIX = "media_key_"
+
+        /**
+         * 媒体 Provider 自己的 Base URL（前缀 + providerId）。
+         *
+         * 2026-11-27 真机：用户主对话是 deepseek，OpenAI 图片通道却把请求打到了
+         * `https://api.deepseek.com/v1/images/generations` —— 因为它的 baseUrl 一直
+         * 借用 `load().baseUrl`（对话端点）。于是「有 Key 也出不了图」，报 404，
+         * 而 404 长得像「中转站不支持下图」，把人和我一起带偏了半小时。
+         *
+         * 对话与出图是两条独立链路，端点不该共享。这里存媒体专用地址，
+         * 为空时由 Provider 回落各家官方端点（见 MediaRegistry）。
+         */
+        private const val KEY_MEDIA_BASE_PREFIX = "media_base_"
         private const val KEY_GH_OWNER = "gh_owner"
         private const val KEY_GH_REPO = "gh_repo"
         private const val KEY_GH_PAT = "gh_pat"

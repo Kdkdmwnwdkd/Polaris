@@ -39,13 +39,22 @@ import com.beichen.polaris.core.net.BodySlice
  *     data[0].b64_json（gpt-image-1 默认，包成 data URI 交给下载器解码）。
  *   - 图生图：POST /images/edits（multipart，参考图走文件字节）。
  *
- * baseUrl / apiKey 与 LLM 配置同源（ConfigStore.load()），媒体 Key 为空时
- * 由 ConfigStore.loadMediaKey 回退 LLM Key——同一账号同一把钥匙。
+ * apiKey 为空时由 ConfigStore.loadMediaKey 回退 LLM Key——同一账号同一把钥匙。
+ *
+ * **但 baseUrl 不再与对话同源**（2026-11-27 真机）。原来它读 `ConfigStore.load().baseUrl`，
+ * 于是用户把主对话换成 deepseek 之后，出图请求跟着打到
+ * `api.deepseek.com/v1/images/generations`——那个路径不存在，回来的是 404，
+ * 而 404 的样子（`{"message":"Not Found"}`）看起来像「中转站不支持下图」，
+ * 把人往错误方向带。现在读 `ConfigStore.loadMediaBaseUrl("openai")`，
+ * 留空回落官方端点。
  */
 class OpenAIMediaProvider(
     private val apiKey: String,
-    private val baseUrl: String = "https://api.openai.com/v1"
+    baseUrl: String = "https://api.openai.com/v1"
 ) : MediaProvider {
+
+    /** 去掉尾斜杠：`https://x/v1/` + `/images/generations` 会拼出 `//`，部分网关直接 404。 */
+    private val baseUrl = baseUrl.trim().trimEnd('/')
 
     override val id = "openai"
     override val displayName = "OpenAI 图片"
@@ -110,7 +119,19 @@ class OpenAIMediaProvider(
                 ?.let { BoundedBody.read(it, BoundedBody.MAX_READ_BYTES) }
                 ?: BodySlice.EMPTY
             val text = slice.text
-            if (!resp.isSuccessful) throw MediaException("HTTP ${resp.code}: ${text.take(300)}")
+            if (!resp.isSuccessful) {
+                // 404 / 401 各给一句人话。真机上的 404 原文是
+                // `{"error":{"message":"Not Found","type":"not_found_error"}}`——
+                // 读起来像「中转站不支持下图」，实际是请求打到了对话端点（deepseek），
+                // 那里根本没有 /images/generations。不把端点写进错误里，用户永远猜不到。
+                val hint = when (resp.code) {
+                    404 -> "（该端点不存在：当前 Base URL = $baseUrl，" +
+                        "请确认它支持 images 接口；多数对话中转站只代理 /chat/completions）"
+                    401, 403 -> "（Key 无效，或该 Key 无权调用 images 接口）"
+                    else -> ""
+                }
+                throw MediaException("HTTP ${resp.code}$hint：${text.take(300)}")
+            }
             if (slice.truncated) {
                 throw MediaException("响应超过 ${BoundedBody.MAX_READ_BYTES / 1024 / 1024} MB，已中止解析")
             }
@@ -176,15 +197,21 @@ class OpenAIMediaProvider(
     }
 
     /**
-     * 审计 F6：这里的 baseUrl 与 LLM 配置同源（见 [MediaRegistry] 的构造），
-     * 用户填了公网明文地址时，媒体 Key 也会以明文出网。判据与对话请求共用
-     * [EndpointPolicy]，避免两套规则各自漂移。
+     * 审计 F6：用户填了公网明文地址时，媒体 Key 会以明文出网。
+     * 判据与对话请求共用 [EndpointPolicy]，避免两套规则各自漂移。
+     *
+     * 注意 baseUrl 自 2026-11-27 起**独立于对话端点**（见类注释），
+     * 但这条判据不能跟着松：正因为它现在可以由用户任意填写，
+     * 才更需要在下单前拦一次明文地址。
      */
     private fun requireSafeEndpoint() {
         EndpointPolicy.refusalFor(baseUrl, apiKey.isNotBlank())?.let { throw MediaException(it) }
     }
 
     companion object {
+        /** 官方端点。媒体 baseUrl 未配置时的回落值——**不再继承对话端点**。 */
+        const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
+
         /** Ratio → OpenAI size（x 分隔；CLASSIC 无官方尺寸，退 SQUARE）。 */
         fun openAiSize(ratio: Ratio): String = when (ratio) {
             Ratio.SQUARE, Ratio.CLASSIC -> "1024x1024"

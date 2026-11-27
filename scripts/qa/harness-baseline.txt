@@ -477,7 +477,12 @@
 #   依据是 run 45319884795：PASS=167 SKIP=0 XFAIL=0 FAIL=0，GATE PASS。
 #   （任务书里写的 168 是手数 runner 文件得到的，与 gate 汇总的 PASS 口径差 1；
 #     这里以 gate 实际读到的那个数为准，否则门禁 5 会对不上。）
-169
+170
+# 2026-11-27（晚）：169 → 170（出图端点独立 + 崩溃清空入口）。
+#   新增 run-media-endpoint-and-crash-clear-verification.sh（11 条断言，三组变异各自被精确抓住：
+#   图片通道改回借用对话 baseUrl → 2 红；清空入口移回展开分支 → 1 红；空串照存 → 1 红）。
+#   这两条都不是「写错了」，是「设计上把两件不同的事当成了一件」：
+#   对话端点与出图端点、删除日志与清空崩溃。
 # 2026-11-27：168 → 169（toolArgs 截断导致整应用打不开）。
 #   新增 run-conversation-toolargs-verification.sh（7 条断言，两组变异各自被精确抓住：
 #   改回 take → 2 红；去掉 runCatching → 2 红）。

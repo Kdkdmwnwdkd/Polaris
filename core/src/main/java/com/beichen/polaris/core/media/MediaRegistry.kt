@@ -31,7 +31,14 @@ object MediaRegistry {
         val store = ConfigStore(context)
         return listOf(
             DashScopeMediaProvider(store.loadMediaKey("dashscope")),
-            OpenAIMediaProvider(store.loadMediaKey("openai"), store.load().baseUrl),
+            // 媒体端点必须独立于对话端点。修前这里是 `store.load().baseUrl`，
+            // 于是主对话一换 deepseek，出图请求就跟到 deepseek/images/generations，
+            // 必然 404——「配了 Key 也画不出图」的真正原因（见 ConfigStore.KEY_MEDIA_BASE_PREFIX）。
+            OpenAIMediaProvider(
+                apiKey = store.loadMediaKey("openai"),
+                baseUrl = store.loadMediaBaseUrl("openai")
+                    .ifBlank { OpenAIMediaProvider.DEFAULT_BASE_URL }
+            ),
             VolcMediaProvider(store.loadMediaKey("volc")),
             MiniMaxMediaProvider(store.loadMediaKey("minimax"))
         )

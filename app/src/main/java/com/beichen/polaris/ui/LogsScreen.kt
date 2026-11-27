@@ -105,6 +105,9 @@ fun LogsScreen(vm: LogsContract) {
     var expandedRaw by rememberSaveable { mutableStateOf<String?>(null) }
     var exportHint by remember { mutableStateOf<String?>(null) }
     var showClear by remember { mutableStateOf(false) }
+    // 清空崩溃记录也要二次确认：崩溃报告是崩溃发生时的**唯一**证据（进程死了，
+    // 内存日志没来得及落盘），误删就再也拿不到。修前折叠状态下这个入口根本不可见。
+    var showClearCrash by remember { mutableStateOf(false) }
 
     // —— 搜索（2026-11-25 第二轮：从「过滤屏幕上这 500 行」改成「查磁盘历史」）——
     //
@@ -246,12 +249,7 @@ fun LogsScreen(vm: LogsContract) {
                         unseenCrashNames = unseenCrashNames - name
                     }
                 },
-                onClear = {
-                    CrashLogger.clearCrashFiles(ctx)
-                    crashExpanded = ""
-                    reloadCrashes()
-                    vm.refreshLogs()
-                }
+                onClear = { showClearCrash = true }
             )
         }
 
@@ -375,7 +373,8 @@ fun LogsScreen(vm: LogsContract) {
             }
             Spacer(Modifier.weight(1f))
             AkTextButton(
-                text = "删除",
+                // 「删除」两个字太笼统：用户以为删的是这一页所有东西，点了发现崩溃还在。
+                text = "删除日志",
                 onClick = { showClear = true },
                 tint = MaterialTheme.colorScheme.error
             )
@@ -537,7 +536,8 @@ fun LogsScreen(vm: LogsContract) {
         AkConfirmDialog(
             title = "删除全部日志",
             message = "将删除今天和之前几天的全部日志文件（含轮转归档），" +
-                "删除后不可恢复。需要留证时请先「导出」。",
+                "删除后不可恢复。需要留证时请先「导出」。\n\n" +
+                "注意：崩溃记录不在这里删——它在「最近崩溃」区块的「清空」里，单独确认。",
             confirmText = "确认删除",
             icon = Icons.Outlined.Delete,
             danger = true,
@@ -548,6 +548,28 @@ fun LogsScreen(vm: LogsContract) {
                 showClear = false
             },
             onDismiss = { showClear = false }
+        )
+    }
+
+    // —— 清空崩溃记录：同样的破坏性操作，同样的二次确认 ——
+    AkModalHost(target = if (showClearCrash) Unit else null) { _, dialogVisible ->
+        AkConfirmDialog(
+            title = "清空崩溃记录",
+            message = "将删除全部 ${crashes.size} 份崩溃报告。\n\n" +
+                "崩溃发生时进程已经死了，内存日志来不及落盘，这些文件是当时唯一的现场。" +
+                "如果里面还有没弄清的问题，请先「复制全部」。",
+            confirmText = "确认清空",
+            icon = Icons.Outlined.Delete,
+            danger = true,
+            visible = dialogVisible,
+            onConfirm = {
+                CrashLogger.clearCrashFiles(ctx)
+                crashExpanded = ""
+                showClearCrash = false
+                reloadCrashes()
+                vm.refreshLogs()
+            },
+            onDismiss = { showClearCrash = false }
         )
     }
 }
@@ -591,7 +613,8 @@ private fun CrashSection(
             // 第二屏，用户以为按钮没了——而他来这一页正是为了把证据拿出去。
             Row(verticalAlignment = Alignment.CenterVertically) {
                 AkTextButton(
-                    text = "复制全部崩溃",
+                    // 常驻行一行要放三个动作，标题用短名；Toast 里仍说全称，避免歧义。
+                    text = "复制全部",
                     icon = Icons.Outlined.ContentCopy,
                     tint = MaterialTheme.colorScheme.error,
                     onClick = {
@@ -599,6 +622,16 @@ private fun CrashSection(
                         cm.setPrimaryClip(ClipData.newPlainText("北辰 崩溃报告", CrashLogger.digest(records)))
                         Toast.makeText(ctx, "已复制 ${records.size} 次崩溃全文", Toast.LENGTH_SHORT).show()
                     }
+                )
+                Spacer(Modifier.width(AgentSpacing.space2))
+                // 2026-11-27 真机：用户说「崩溃删不掉」。清空按钮原本在展开后的最底部，
+                // 而折叠态（默认）里根本没有入口，操作行的「删除」又只删日志——
+                // 于是他点了删除、崩溃还在，只能得出「删不掉」这个结论。
+                AkTextButton(
+                    text = "清空",
+                    icon = Icons.Outlined.Delete,
+                    tint = MaterialTheme.colorScheme.error,
+                    onClick = onClear
                 )
                 Spacer(Modifier.weight(1f))
                 AkTextButton(
@@ -697,13 +730,6 @@ private fun CrashSection(
                     if (index != records.lastIndex) Spacer(Modifier.height(AgentSpacing.space1))
                 }
             }
-            Spacer(Modifier.height(AgentSpacing.space1))
-            AkTextButton(
-                text = "清空崩溃记录",
-                icon = Icons.Outlined.Delete,
-                tint = MaterialTheme.colorScheme.error,
-                onClick = onClear
-            )
         }
     }
 }
