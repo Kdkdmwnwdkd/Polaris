@@ -69,7 +69,7 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-28 01:55</strong>（§11.13 第二批材料 · 十个方向）<br />
+<p>最后更新：<strong>2026-11-28 01:38</strong>（§11.5 补「变淡 ≠ 作废」· 遗忘曲线三种形态）<br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -2286,6 +2286,107 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 <p><strong>（3）睡眠期整理不是万灵药——有明确的失效边界。</strong><br />
 论文给了个诚实的负结果：收益取决于"用户接下来要问的东西，能不能从当前上下文预测出来"。能预测（金融客服夜里整理财报、用户每天固定点同一家外卖），收益大；预测不了，收益塌缩，还不如把算力花在当场推理上。SWE 那个案例里，睡眠期预读平均省约 3000 token，但<strong>测试时思考预算超过约 8500 token 后，纯测试时计算反超</strong>。<br />
 → 对我们：<strong>别给所有用户开夜间整理</strong>。只对"重复性任务占比高"的用户开——这个判断本身可以用确定性信号做（同一 App 同一路径一周内 ≥3 次）。</p>
+<p><strong>（4）"变淡"和"作废"是两种遗忘，我们之前只写了后一种。</strong></p>
+<p>先把出处核准：用户说的"DeepSeek 那个天使插件"不是 DeepSeek 官方出品，是 <strong>AstrBot 的「天使之魂」</strong>（<code>kawayiYokami/astrbot_plugin_angel_memory</code>），只是可以拿 DeepSeek 当后端模型。它的做法是每天<strong>凌晨 4 点本地时间</strong>整理一次：不常用的慢慢变淡 → 淡到尽头的<strong>先交给模型审一遍</strong> → 该留的升成永久记忆从此不再变淡、该忘的才真删 → <strong>审查出了岔子就整批不动</strong>，等下次睡眠重来 → 每天留一份备份、最多 3 份。</p>
+<p>三种遗忘形态放一起看，差别是硬的：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>形态</th>
+<th>谁在用</th>
+<th>触发</th>
+<th>可逆</th>
+<th>管什么</th>
+<th>管不了什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>删除</td>
+<td>上下文截断、粗粒度插件</td>
+<td>超容量 / 过期</td>
+<td>否</td>
+<td>省空间</td>
+<td>丢的是最旧的，不是最不相关的</td>
+</tr>
+<tr>
+<td>降权（衰减）</td>
+<td>天使之魂、fish-memory、YourMemory、Memory Hybrid</td>
+<td>久未被提起</td>
+<td>是，召回即回升</td>
+<td>降噪、省 prompt</td>
+<td><strong>变质</strong></td>
+</tr>
+<tr>
+<td>失效（双时态）</td>
+<td>Zep / Graphiti</td>
+<td>出现矛盾的新事实</td>
+<td>否，但可查历史</td>
+<td>防"自信地说旧答案"</td>
+<td>只管矛盾，不管"没用但没错"</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>衰减管"变老"，失效管"变质"，两件事，不能互相替代。</strong> 有句话把这件事说透了：</p>
+<blockquote>
+<p>importance 是写入时定的，相关性却是读取时才确定的。入职新公司写进去那天是 9 分，三个月后你换了工作，它的分数还是 9。衰减管变淡，底分管重要，但它们都管不了变质。</p>
+</blockquote>
+<p>手机上"变质"比"变老"更频繁——换工作、搬家、换常用 App、换口味，全是硬变更。所以我们不能只做衰减，也不能只做失效。</p>
+<p><strong>该抄的一个细节</strong>：它把不可逆动作（真删）挡在一道显式审查后面，而且<strong>审查失败就整批跳过、一条不删</strong>。我们现在 <code>ContextBudget</code> 是无声裁剪，连"到站"这个概念都没有。该补的是：强度低于阈值<strong>不直接删</strong>，先进"待决"队列，下次整理统一判一次；判定过程出错 → 整批不动。</p>
+<p><strong>该反着做的两条</strong>：</p>
+<ol>
+<li>它<strong>没有手动 pin</strong>，永久地位只能靠"衰减到尽头 + 模型审查"升格——最该永久的东西要先快烂掉才有机会被保住，中间还是模型说了算。我们要倒过来：<strong>负知识（这个确认按钮会直接扣款）和硬约束（以后别用微信发）写入即 pin，永不进衰减队列。</strong></li>
+<li>它靠"凌晨 4 点进程在跑"，没跑当天不补。手机上没有这回事——Android 会杀进程。必须 JobScheduler + 充电/息屏/空闲约束，且<strong>可中断可续</strong>；"当天没跑就不补"在手机上等于"永远不跑"。</li>
+</ol>
+<p><strong>参数怎么定</strong>（先说结论：<strong>别在绝对值上较真</strong>）：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>类别</th>
+<th>半衰期</th>
+<th>参与衰减</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>负知识</td>
+<td>∞</td>
+<td>否</td>
+<td>写入即 pin</td>
+</tr>
+<tr>
+<td>硬约束</td>
+<td>∞</td>
+<td>否</td>
+<td>只被新约束"失效"覆盖，不因时间变淡</td>
+</tr>
+<tr>
+<td>用户偏好</td>
+<td>~90 天</td>
+<td>是</td>
+<td></td>
+</tr>
+<tr>
+<td>重复路径（每周三那家咖啡）</td>
+<td>~30 天</td>
+<td>是</td>
+<td></td>
+</tr>
+<tr>
+<td>任务中间态</td>
+<td>≤1 天</td>
+<td>是</td>
+<td>任务结束即归档</td>
+</tr>
+</tbody>
+</table></div>
+<p>各家半衰期 30 / 180 / 200 天，差 6 倍，说明都是拍的；心理学界（Wixted &amp; Ebbesen）还认为真实遗忘更接近幂律、长尾比指数更长，但 agent 系统几乎全用指数，理由很务实——<strong>一个参数就够用</strong>。所以半衰期取 30 还是 60 不重要，<strong>类别之间的差异才重要</strong>。</p>
+<p><strong>最后两条，一条比一条反直觉</strong>：</p>
+<ul>
+<li><strong>入口比出口重要。</strong> 有研究结论是：仅靠严格的选择性添加、即使完全不删，也能带来约 10% 的绝对性能提升。手机上一次任务 20 秒，真正值得进库的东西极少；先把"什么不许记"卡住，比设计一条漂亮的衰减曲线划算得多。</li>
+<li><strong>小心回音室。</strong> "被检索即强化"是正反馈：常用的越来越强，冷门的永远起不来。一个用户三个月只订过两次电影票，那两次的记忆会一直沉底。解法是给每类留固定名额（偏好类永远保留 top N），不纯按强度淘汰。（这条是我的推断，没找到直接实证。）</li>
+</ul>
 <h3>11.6 器官三：问人——不是"不确定就问"，是"算这一问值不值"</h3>
 <p>这一节是整章最值钱的，因为<strong>"什么时候该问"在手机上是主要矛盾</strong>：手机上动作有副作用，问早了烦，问晚了钱没了。</p>
 <p>先把"不确定"拆开。现在业界比较一致的拆法是四类，映射到手机非常干净：</p>
@@ -2877,6 +2978,16 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 <td>标记失效优于覆盖；检索必须不走模型</td>
 </tr>
 <tr>
+<td>遗忘曲线</td>
+<td>AstrBot「天使之魂」<code>astrbot_plugin_angel_memory</code>（凌晨整理 + 淡到尽头交模型审 + 审查失败整批不动）、dsh-decay-memory（200 天半衰期、pin 不衰减）、qq-memory、dsh-fish-memory（30 天、淡出不删）、dsh-xiaofeiyu-memory（分区隔离）、YourMemory（按类别 11–38 天）、Memory Hybrid（四级分类 + 可复活）、Auto-Dream（归档成一行摘要）</td>
+<td>衰减/失效是两回事；淡出不删；到站必须显式签字；负知识要能手动 pin</td>
+</tr>
+<tr>
+<td>遗忘的反面证据</td>
+<td>《The Forgetting Problem》、《记忆衰减：可治理的遗忘》、guanweilu《Agent 的记忆遗忘曲线》（含 Wixted &amp; Ebbesen 的幂律争议）</td>
+<td>过期信息会"自信地错"；选择压力会造回音室；半衰期绝对值别较真</td>
+</tr>
+<tr>
 <td>GUI 数据与榜单</td>
 <td>AndroidControl / GUI-Odyssey / AITZ / CMGUI（44 个中国 App、12.1 万步）、AndroidWorld、SE-GA（ICML 2026）、GUI-SAGE（CVPR 2026）</td>
 <td>记忆值 12–14 点；失败轨迹要进库；harness 与模型的 4 倍差</td>
@@ -2931,7 +3042,11 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 <td><strong>§10 降级为「手脚」，新增 §11「脑子」——主线换回 AI 本身</strong>。① 讲清厂商的入口只给「能力清单/权限/分发」三层，不给「该做什么、做到没到、要不要问」；② METR：50% 那条线 7 个月翻倍（Opus 4.5 达 320 分钟），<strong>80% 那条线只有 27 分钟</strong>，差 12 倍，战场在后者；③ 手机与 PC 的四个不同（任务短 20 秒–5 分钟、频次高、副作用不可逆、观察有损）→ 脑子强在「知不知道自己不知道」，不是「能规划多长」；④ 五个器官逐条落：上下文（Chroma Context Rot 18 模型 + RLM 10M token 91.33%，我们裁剪不看 <code>isError</code>）、记忆（Letta 读写分离 + 睡眠期整理的失效边界）、问人（四类不确定性 + SAGE-Agent EVPI、When2Call 36%→65% + Abstain-R1 澄清 0.6%→55.1%）、收尾（MAST 44.2%/23.5% + <code>end_turn</code>≠完成，完成判据写成断言）、推理预算（峰值 12K、翻转率 0.32→0.71）与评测（pass^5、违规率是独立轴）；⑤ 反面清单五条 + 只留三样资产（负知识、重复习惯、可回放）。<strong>代码零改动</strong></td>
 </tr>
 <tr>
-<td>2026-11-28 01:55</td>
+<td>2026-11-28 01:38</td>
+<td><strong>补 §11.5（4）：变淡 ≠ 作废。</strong> 用户提到「DeepSeek 那个会遗忘的天使插件」，核准为 AstrBot「天使之魂」（<code>astrbot_plugin_angel_memory</code>，可拿 DeepSeek 当后端）。机制：每天凌晨 4 点衰减 → 淡到尽头交模型审 → 该留升永久、该忘真删 → 审查出错整批不动 → 每天备份最多 3 份。① 三种遗忘形态分列（删除 / 降权 / 失效），<strong>衰减管"变老"、失效管"变质"，不能互替</strong>——手机上变质更频繁（换工作、搬家、换口味）；② 抄它一条：不可逆动作前要有显式审查，审查失败整批跳过；③ 反它两条：它没有手动 pin（最该永久的东西要先烂掉才有机会被保住）→ 我们负知识与硬约束<strong>写入即 pin</strong>；它靠"凌晨 4 点进程在跑"，手机上必须 JobScheduler + 充电/息屏/空闲 + 可中断可续；④ 给定五类 TTL 表（负知识/硬约束 ∞、偏好 90 天、重复路径 30 天、任务中间态 ≤1 天），并说明各家半衰期差 6 倍、幂律 vs 指数有争议，<strong>绝对值别较真，类别差异才要紧</strong>；⑤ 两条反直觉：入口比出口重要（严格选择性添加不删也能 +10%）、小心回音室（被检索即强化，冷门永远起不来）。<strong>代码零改动</strong></td>
+</tr>
+<tr>
+<td>2026-11-28 01:30</td>
 <td>新增 §11.13 第二批材料（十个方向）+ §11.14 来源扩到十五类。这一批换了搜法：不问「agent 怎么做」，问「官方给了没有、别人卖得怎么样、有没有现成数据」。① <strong>Android AppFunctions 已落地</strong>（Android 16+、alpha13、<code>EXECUTE_APP_FUNCTIONS</code> 只发系统助手，Gemini 2026-05 私测）——§1 判断兑现，但 App 可主动暴露，反而留了缝；② <strong>AutoGLM</strong>（9B/MIT 开源、云手机 0.2 美元/单、主动不碰微信）与豆包手机（系统级集成引发 App 封控）说明「系统级 vs 外挂」是体验差主因；③ <strong>系统端侧模型只有 4096 token 窗口</strong>（AFM 3）→ 端侧只干分类/判断/摘要，编排必须上云；④ <strong>MCP 上下文税 40–50%</strong>、单 server 5.5 万 token、完成率 72% vs CLI 100% → 工具按意图分组到 8–10；⑤ <strong>记忆改判</strong>：Zep 双时态 → 满则「标记失效」不做覆盖，检索必须不走模型；⑥ <strong>SE-GA</strong>：移除记忆 AndroidControl-High 73.8→61.4，top-k 检索优于只存成功轨迹 → 失败轨迹必须进库；⑦ <strong>中文 GUI 数据集 CMGUI 已存在</strong>（44 个 App、12.1 万步）；⑧ <strong>harness 与模型差 4 倍</strong>（AndroidWorld：纯视觉 3B 19.8% vs Droidrun 91.4%）。据此定五个改动：记忆标记失效、工具压到 8–10 组、端侧只干三件事、失败轨迹进库、HandProvider 优先级。<strong>代码零改动</strong></td>
 </tr>
 </tbody>
