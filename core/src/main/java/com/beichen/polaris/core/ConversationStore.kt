@@ -100,15 +100,40 @@ private fun droppedTool(text: String): Int = (text.length - MAX_TOOL_CHARS).coer
  * 不要在一条消息里做拼接。
  */
 private fun clipText(text: String, max: Int = MAX_TEXT_CHARS): String =
-    if (text.length <= max) text else text.take(max)
+    if (text.length <= max) text else text.substring(0, safeEnd(text, max))
 
 /** 工具结果截断：头 + 尾，中间用一行可见的省略标记说明丢了多少。 */
 private fun clipTool(text: String): String {
     if (text.length <= MAX_TOOL_CHARS) return text
-    val dropped = text.length - MAX_TOOL_CHARS
-    val head = text.take(TOOL_HEAD_CHARS)
-    val tail = text.takeLast(MAX_TOOL_CHARS - TOOL_HEAD_CHARS)
-    return "$head\n…〔中间省略 $dropped 字符〕…\n$tail"
+    val head = text.substring(0, safeEnd(text, TOOL_HEAD_CHARS))
+    val tailStart = MAX_TOOL_CHARS - head.length
+    val tail = text.substring(safeStart(text, text.length - tailStart))
+    val dropped = text.length - head.length - tail.length
+    // 标记里带一句「怎么拿全」：Cline 的裁剪提示会写 "Refine the command"，
+    // 模型读到这句会主动缩小范围重跑，而不是拿半截结果硬往下编。
+    return "$head\n…〔中间省略 $dropped 字符；需要完整内容请缩小范围重跑〕…\n$tail"
+}
+
+/**
+ * 切点不能落在代理对中间（2026-11-27）。
+ *
+ * `take(n)` / `substring` 按 UTF-16 code unit 切，而 emoji、扩展区汉字、数学字母
+ * 占两个 unit。切在中间会留下一个孤立代理，落盘后编码成 U+FFFD——用户看到的是
+ * 回答末尾一个「�」。
+ *
+ * Cline 在 2026-09 修的是同一件事（cline#14563）：所有预算裁切都回退到 code point 边界。
+ * 做法也一样——只在会切坏时退一格，绝不改变预算语义。
+ */
+private fun safeEnd(text: String, end: Int): Int {
+    var e = end.coerceIn(0, text.length)
+    if (e in 1 until text.length && Character.isHighSurrogate(text[e - 1])) e--
+    return e
+}
+
+private fun safeStart(text: String, start: Int): Int {
+    var s = start.coerceIn(0, text.length)
+    if (s in 1 until text.length && Character.isLowSurrogate(text[s])) s++
+    return s
 }
 
 /**

@@ -90,4 +90,14 @@ class ConversationTruncationTest {
         ).toMsgRecord()
         assertEquals(130, rec.truncatedChars)
     }
+
+    @Test
+    fun `截断不会切出孤立代理`() {
+        // emoji 占两个 UTF-16 unit，take() 按 unit 切会留下半个字符，
+        // 落盘编码成 U+FFFD——用户看到回答末尾一个「�」。Cline 在 #14563 修的是同一件事。
+        val emoji = "\uD83D\uDE00".repeat(25_000)
+        val rec = UiItem.User(emoji).toMsgRecord()
+        assertEquals("长度仍按预算卡住", textLimit, rec.content.length)
+        assertEquals("末尾不能是孤立高代理", false, Character.isHighSurrogate(rec.content.last()))
+    }
 }
