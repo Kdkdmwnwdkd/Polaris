@@ -73,8 +73,9 @@ internal data class TraceStep(
  *
  * @param range 本段覆盖的下标区间（含两端）。它是「这一段是谁」的唯一表述：
  *   不再另设「被吸收的下标集合」，谁被吸收由区间 + 正文有无现算。
- * @param bodyIndex 交出正文的那条助手消息下标（`-1` = 段尾没有正文）。
- *   它的思考进了流，但正文仍要在自己的位置渲染。
+ * @param bodyIndex 段内**最后一条**交出正文的助手消息下标（`-1` = 段内没有正文）。
+ *   段内可能不止一条（同轮正文+工具、多轮中间态），每条的正文都在自己的位置渲染；
+ *   这个字段只用于「这一段最终给了什么答复」这类判断，不决定谁渲染。
  */
 internal data class TraceRun(
     val range: IntRange,
@@ -111,13 +112,21 @@ private fun isProcessEntry(item: UiItem?): Boolean = when (item) {
 /**
  * 这一条后面还能不能接着长流。
  *
- * 与 [isProcessEntry] 差在「有正文的助手消息」：它是段内合法的**最后一步**，
- * 但正文已经交出去了，后面再出现的工具属于下一轮，不能续在这一段里。
- * 少了这层区分，一段流会跨过一条完整回答，把两轮的事缝成一件。
+ * **墙是用户消息，不是正文。**（2026-11-27 修正）
+ *
+ * 上一版把「交出正文的助手消息」当墙，理由是「别把两轮缝成一件」。方向对，判据错：
+ * 两轮之间必然隔着一条用户消息，`isProcessEntry(User) == false` 已经天然断开，
+ * 不需要再拿正文当第二道墙。而拿正文当墙会误伤一种真实形态——同一个 assistant
+ * 消息里既有 content 又说要调工具（「我先查一下」+ tool_call）：
+ *
+ *   [User] [Assistant(r=有, t=有)] [Tool]
+ *
+ * 正文成了墙 → 段从 Tool 重新开始 → 思考留在正文上方单独一行、工具另起一条流，
+ * 用户看到的就是「思考和工具还是分开的」。而这本来是同一轮、同一件事。
  */
 private fun canContinueFlow(item: UiItem?): Boolean = when (item) {
     is UiItem.Tool -> true
-    is UiItem.Assistant -> item.text.isBlank() && !item.reasoning.isNullOrBlank()
+    is UiItem.Assistant -> !item.reasoning.isNullOrBlank()
     else -> false
 }
 
@@ -127,10 +136,13 @@ private fun canContinueFlow(item: UiItem?): Boolean = when (item) {
  * **段的唯一定义就在这里。** 前后的判据都用同一把尺 [canContinueFlow]：
  * 往前退到不能续流为止，往后走到非过程条目或「交出正文的助手消息」为止。
  *
- * 三种不成段：
- * 1. 段首是「有正文的助手消息」——它是一条回答，正文得在原地，不能被流吞掉；
- * 2. 段内一个工具都没有——那是普通问答，思考仍按「正文上方一行」渲染，
- *    不能为了统一把一次没有工具的回答也折进「过程」里。
+ * 两种不成段：
+ * 1. 段内一个工具都没有——那是普通问答，思考仍按「正文上方一行」渲染，
+ *    不能为了统一把一次没有工具的回答也折进「过程」里；
+ * 2. 段首不是过程条目（用户消息 / 无思考的助手消息），它压根不属于任何一段。
+ *
+ * 段首**可以**是一条带正文的助手消息：正文自己在原地渲染（流在它上方），
+ * 不会被吞掉——见 [traceOwnership] 的 TAIL。
  *
  * 参数不是过程条目时返回 null（由调用方先判 [isProcessEntry]）。
  */
@@ -139,17 +151,12 @@ private fun segmentAt(messages: List<UiItem>, index: Int): IntRange? {
 
     var start = index
     while (canContinueFlow(messages.getOrNull(start - 1))) start--
-    // 退到头是「交出过正文的助手消息」：它不能当段首，整段不成立。
-    val head = messages.getOrNull(start)
-    if (head is UiItem.Assistant && head.text.isNotBlank()) return null
 
     var end = start
     while (true) {
         val next = messages.getOrNull(end + 1) ?: break
         if (!isProcessEntry(next)) break
         end++
-        // 交出正文 = 这一轮到此为止（含它，然后停）。它后面若还有工具，属于下一段。
-        if (next is UiItem.Assistant && next.text.isNotBlank()) break
     }
 
     if ((start..end).none { messages[it] is UiItem.Tool }) return null
@@ -170,8 +177,14 @@ internal fun traceRunAt(messages: List<UiItem>, index: Int): TraceRun? {
 /**
  * [index] 处那条助手消息的归属。
  *
- * 三段判据全部从区间现算，没有第二份状态：区间起点自己画流 → NONE（否则没人画）；
- * 无正文 → 整条已进流 → ABSORBED；否则它必是段尾的正文 → TAIL。
+ * 三段判据全部从区间现算，没有第二份状态：
+ *  - 区间起点自己画流 → NONE（正文在流下方照常渲染，思考已进流）；
+ *  - 无正文 → 整条已进流 → ABSORBED（原地不用再画一次）；
+ *  - 有正文 → TAIL（思考进流，正文留在原地）。
+ *
+ * 注意 TAIL 不再要求「必须是段尾」。同一个 assistant 消息既有正文又要调工具时，
+ * 它的正文就落在段中间；这时它仍然要自己渲染正文——否则那句「我先查一下」会消失。
+ * 段内出现多条 TAIL 是允许的，它们按各自的位置依次渲染，流在上面。
  */
 internal fun traceOwnership(messages: List<UiItem>, index: Int): TraceOwnership {
     val item = messages.getOrNull(index) as? UiItem.Assistant ?: return TraceOwnership.NONE
@@ -180,9 +193,7 @@ internal fun traceOwnership(messages: List<UiItem>, index: Int): TraceOwnership 
     return when {
         seg.first == index -> TraceOwnership.NONE
         item.text.isBlank() -> TraceOwnership.ABSORBED
-        index == seg.last -> TraceOwnership.TAIL
-        // 段中带正文却不在段尾：段尾一定还有一条交过正文的，那这条属于别的段。
-        else -> TraceOwnership.NONE
+        else -> TraceOwnership.TAIL
     }
 }
 

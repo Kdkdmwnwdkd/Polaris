@@ -494,13 +494,51 @@ fun main() {
         eq(traceOwnership(msgs, 1), TraceOwnership.NONE, "思考仍按正文上方一行渲染")
     }
 
-    check("H4 正文是墙：它后面的工具属于下一段") {
-        val msgs = listOf(hUser, hAnswer, hTool1)
-        expect(traceRunAt(msgs, 1) == null, "带正文的助手消息不能当流首，否则正文被吞")
-        val second = traceRunAt(msgs, 2)
-        expect(second != null, "它后面的工具应当自成一（新）段")
-        eq(second!!.steps.size, 1, "新段里只有它自己")
+    // H4 三改（2026-11-27）。
+    //
+    // 一改：`while (next is Tool)` 只收相邻工具 → 思考与工具切成两块。
+    // 二改：反过来把所有「交出正文的助手消息」当墙 → 修好了多段，但误伤了
+    //   同轮「正文 + tool_call」（`[A(r=有,t=有)] [Tool]`），又变回两块。
+    // 三改（现在）：**墙只有用户消息**。两轮之间必然隔着 User，`isProcessEntry`
+    //   已经天然断开；再拿正文当墙就是多此一举，而代价是真实形态被切碎。
+    check("H4 墙是用户消息：同轮正文与工具合并，正文仍自己渲染") {
+        // ① 同轮：一条助手消息既说了话、又要调工具
+        val same = listOf(hUser, hAnswer, hTool1)
+        val flow = traceRunAt(same, 1)
+        expect(flow != null, "同轮的正文与工具应当成一条流（否则思考与工具分开）")
+        eq(flow!!.range, 1..2, "段应覆盖正文与工具两条")
+        eq(flow.steps.size, 2, "流里应有两步：思考 + 工具")
+        // 段首带正文：自己渲染流，正文在流下方照常出现——不能被判成「已吸收」
+        eq(traceOwnership(same, 1), TraceOwnership.NONE, "段首的正文必须还在，不能被吸收")
+        expect(traceRunAt(same, 2) == null, "段内的工具不该自己再开一段")
+
+        // ② 隔了一条用户消息 = 真的下一轮，必须断开
+        val nextTurn = listOf(hUser, hAnswer, hUser, hTool1)
+        expect(traceRunAt(nextTurn, 1) != null || traceRunAt(nextTurn, 3) != null, "两轮里至少各成一段")
+        eq(traceRunAt(nextTurn, 2), null, "用户消息不成段")
+        val second = traceRunAt(nextTurn, 3)
+        expect(second != null, "第二轮的工具应当自成一（新）段")
+        eq(second!!.range, 3..3, "新段只含第二轮的工具")
         eq(second.bodyIndex, -1, "新段没有正文尾巴")
+    }
+
+    check("H8 同轮正文落在段中：思考进流，正文留在原地") {
+        // 真实形态：think → tool → 「我再查一次」+ tool → 结论
+        val msgs = listOf(
+            hUser,
+            hThink1,
+            hTool1,
+            UiItem.Assistant(text = "再查一次。", reasoning = "结果不够"),
+            hTool2,
+            hAnswer
+        )
+        val flow = traceRunAt(msgs, 1)
+        expect(flow != null, "整段应当合成一条流")
+        eq(flow!!.range, 1..5, "区间要覆盖到最后的正文")
+        eq(flow.steps.size, 5, "思考/工具/思考/工具/思考 五步")
+        // 段中那条带正文的：思考已进流，正文必须留给自己渲染
+        eq(traceOwnership(msgs, 3), TraceOwnership.TAIL, "段中带正文也要自己渲染正文")
+        eq(traceOwnership(msgs, 5), TraceOwnership.TAIL, "段尾带正文同样自己渲染")
     }
 
     check("H5 中断的步骤带文字说明") {
