@@ -64,12 +64,12 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <div class="wrap">
 <span class="badge">决策总表</span>
 <h1>北辰 · 产品决策总表</h1>
-<p class="sub">活文档 / 每次讨论完只改这一份 / 最后更新 2026-11-27 23:45</p>
+<p class="sub">活文档 / 每次讨论完只改这一份 / 最后更新 2026-11-27 23:52</p>
 
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-27 23:45</strong><br />
+<p>最后更新：<strong>2026-11-27 23:52</strong><br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -1043,7 +1043,208 @@ else   -&gt; 组级危险(group)      -&gt; 问
 </tbody>
 </table></div>
 <p><strong>其余十二条不要想着做出花。</strong> 模型接入、上下文、循环、工具、感知、执行、恢复、审批、交互、可观测、评测、成本——这些必须长得像别人，因为它们是语义层：模型要认、供应商要认、用户要认。<strong>在这一层搞"特色"，等于让模型学一门新语言。</strong></p>
-<h3>8.8 一句话总结这一章</h3>
+<h3>8.8 记忆：三层，而且这层我们基本是空的</h3>
+<blockquote>
+<p>§8.6 讲的是 <strong>App 知识</strong>（它认识微信），这一节讲的是 <strong>用户知识</strong>（它认识你）。两套都要，存的地方不同。</p>
+</blockquote>
+<p>Letta（原 MemGPT）的三层，是目前最完整的公开设计：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>层</th>
+<th>存什么</th>
+<th>特点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Core memory</strong></td>
+<td>用户画像、人设、当前目标（几个记忆块）</td>
+<td><strong>始终在上下文里</strong>，Agent 可用 <code>core_memory_append/replace</code> 自己改</td>
+</tr>
+<tr>
+<td><strong>Recall memory</strong></td>
+<td>全部历史对话与工具调用</td>
+<td>可检索，类似"磁盘缓存"</td>
+</tr>
+<tr>
+<td><strong>Archival memory</strong></td>
+<td>长期知识、文档</td>
+<td>按需检索，不占窗口</td>
+</tr>
+</tbody>
+</table></div>
+<p>关键的一句是：<strong>记忆不是自动变长的，是 Agent 主动管理的。</strong> 块一改，系统提示词整体重编译，下一次调用就看见新内容——不需要检索动作。</p>
+<p><strong>我们的现状</strong>：工作区文件 + 会话分片。那不是记忆，那是存储。缺的是"始终在窗口里、能被自己改的那一小块"。</p>
+<p><strong>能改造成什么</strong>：一个 <code>memory</code> 工具（append / replace），只维护三块——</p>
+<pre><code>用户偏好：不用红色、发通知默认用微信、叫我老张
+常用流程：美团下单走「再来一单」
+已知雷区：这个 App 的「确认」按钮会直接扣款
+</code></pre>
+<p>三块加起来控制在 300 token 内。<strong>这是唯一能"越用越懂你"的地方，而且只有常驻的 Agent 做得到。</strong></p>
+<p>顺带一条：Letta 有 <strong>sleep-time compute</strong>——利用交互间隙主动整理记忆。北辰是常驻的，用户半夜不用的时候可以整理；云端 Agent 关掉就没了，做不了这件事。</p>
+<h3>8.9 评测：PTR 和 OTR，这一对指标我们一个都没有</h3>
+<p>SPA-Bench（ICLR 2025，340 个任务 / 39 个英文 App + 29 个中文 App）把"终止"拆成两个独立的错误：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>指标</th>
+<th>含义</th>
+<th>后果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>PTR</strong>（过早终止）</td>
+<td>任务没完就宣布完成</td>
+<td>用户以为做完了，实际没做</td>
+</tr>
+<tr>
+<td><strong>OTR</strong>（过期终止）</td>
+<td>任务完了还在跑</td>
+<td>烧 token、多余操作、可能误触</td>
+</tr>
+</tbody>
+</table></div>
+<p>有个数据很说明问题：SeeAct 的 PTR 是 <strong>0.100（最低）</strong>，但 OTR 是 <strong>0.276（最高）</strong>——<strong>这两个指标是互相拉扯的</strong>。压低一个，另一个就上去。</p>
+<p>我们的 R06 现在只断言"流是否对"，没有断言"该停时停了、不该停时没停"。<code>complete()</code> 加进来之后，应该配两条断言：</p>
+<ol>
+<li>任务完成 → 必须 <code>complete</code>，不能继续调工具（压 OTR）</li>
+<li>任务未完成 → 不能说"好了"（压 PTR）</li>
+</ol>
+<h3>8.10 失败：分三层，恢复只修最小前置条件</h3>
+<p>FoneClaw 的失败分层比我们的 <code>FailureGuard</code> 细：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>层</th>
+<th>典型症状</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>界面层</td>
+<td>按钮标签变了、编号位置变了、滚动没到位</td>
+</tr>
+<tr>
+<td>外部服务层</td>
+<td>网络断、账号过期、短信服务不可用、限流</td>
+</tr>
+<tr>
+<td>确认层</td>
+<td>用户没批准、批准错了对象、高影响动作前取消</td>
+</tr>
+</tbody>
+</table></div>
+<p>三条恢复原则，我们一条都没有：</p>
+<ol>
+<li><strong>不重跑整个任务，只恢复失败那一步的前置条件。</strong> 权限没了就补权限，页面跑偏就把 App 带回正确页面。</li>
+<li><strong>Rerun 选"最小安全后缀"。</strong> 只读查询可以重跑；可逆设置先读当前状态再改；<strong>会产生外部效果的动作，先确认是不是已经完成了</strong>——不然就是重复发短信、重复下单。</li>
+<li><strong>根因要带置信度和备选项。</strong> 好描述是"联系人权限在调用时不可用，可能是重名"；坏描述是"模型坏了"。</li>
+</ol>
+<p><strong>幂等是硬要求</strong>：HITL 的工程实践里有一条原话——"一个已批准的退款在 resume 时重试，会变成重复付款"。第三档完全放权 + 自动重试，没有幂等键就是重复扣款。<strong>每个会产生外部效果的调用，必须带 <code>hash(线程 + 动作 + 参数)</code> 的幂等键。</strong></p>
+<h3>8.11 接管：五层，我们只有最极端的那一层</h3>
+<p>生产级 HITL 把"人介入"拆成五层，打断成本从零到最高：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>层</th>
+<th>做什么</th>
+<th>恢复语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 插话</td>
+<td>不打断，把新约束塞进对话（"另外，用中文写"）</td>
+<td>下一步吸收</td>
+</tr>
+<tr>
+<td>2 暂停检视</td>
+<td>冻结状态，凑近看细节，然后原样继续</td>
+<td>恢复后要知道"为什么停过"</td>
+</tr>
+<tr>
+<td>3 纠偏</td>
+<td>不回滚，只改方向继续跑</td>
+<td>已完成的部分要不要作废？</td>
+</tr>
+<tr>
+<td>4 回滚重来</td>
+<td>撤销到检查点，换路再跑</td>
+<td>丢掉已完成步骤</td>
+</tr>
+<tr>
+<td>5 完全接管</td>
+<td>人接手剩余步骤，Agent 旁观</td>
+<td>出口</td>
+</tr>
+</tbody>
+</table></div>
+<p>我们现在只有"允许 / 拒绝"——<strong>那是最硬的第 5 层</strong>。用户要么放，要么停，中间什么都没有。</p>
+<h4>两个可以直接用的数字</h4>
+<p><strong>① 中断率的目标是 10–15%。</strong> 超过 20%，审核者会开始不认真读，变成橡皮图章；低于 5%，说明该拦的没拦。这条可以直接校准第二档：一段长任务里弹窗超过两成，就是设计错了，不是用户"太谨慎"。</p>
+<p><strong>② 不要用"置信度"当触发器。</strong> 实证数据：智能体自报成功率 <strong>70–75%</strong>，实际完成率只有 <strong>20–35%</strong>。所以靠"模型觉得没把握就问"必然失效。要用两类<strong>确定性触发器</strong>：</p>
+<ul>
+<li>结构性：工具输出互相矛盾、缺必填字段、命中合规词、操作超出爆炸半径</li>
+<li>行为性：同一查询重述重试 &gt;2 次（循环）、超出原始任务边界（范围蔓延）、反复检索又丢弃（上下文抖动）</li>
+</ul>
+<p>这四条行为触发器，我们只有"指纹去重"近似了第一条。</p>
+<h4>还有一条反直觉的</h4>
+<p><strong>同一个动作不要双重门控。</strong> 既弹窗、又被规则拦，用户会以为系统在抽风。要么规则静默处理，要么交给人看，不要两个都上。</p>
+<h3>8.12 这次查证的全部来源（按部位索引）</h3>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>部位</th>
+<th>来源与它给的硬货</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>工具设计</td>
+<td>Anthropic《Writing effective tools for agents》：30–50 个劣化线、<code>response_format</code> 206→72 token、示例 72%→90%、单次输出 25k token</td>
+</tr>
+<tr>
+<td>循环 / 终止</td>
+<td>Droidrun 91.4% AndroidWorld 复盘：Manager→单步→Manager、<code>complete()</code>、0.5s 画面稳定、差分状态、app 卡片</td>
+</tr>
+<tr>
+<td>记忆</td>
+<td>Letta / MemGPT：Core / Recall / Archival 三层、自编辑记忆块、sleep-time compute</td>
+</tr>
+<tr>
+<td>评测</td>
+<td>SPA-Bench（ICLR 2025）：PTR / OTR 权衡、SeeAct 0.100 vs 0.276、中文任务普遍更差、跨 App 任务几乎全败</td>
+</tr>
+<tr>
+<td>失败恢复</td>
+<td>FoneClaw 失败调试手册：三层失败、最小前置条件、最小安全后缀、先确认是否已完成</td>
+</tr>
+<tr>
+<td>接管</td>
+<td>HITL 工程实践：五层接管、中断率 10–15%、置信度 70–75% vs 实际 20–35%、幂等键、禁止双重门控</td>
+</tr>
+<tr>
+<td>审批</td>
+<td>Claude Code 六档 + 四条断路器；Pinky App 隐身 / 10 语言标签 / 60 秒超时；掘金策略引擎的草稿态；Mika「钱权密」接管</td>
+</tr>
+<tr>
+<td>上下文</td>
+<td>Manus：输入输出 100:1、前缀稳定、遮蔽而非移除、保留错误</td>
+</tr>
+<tr>
+<td>交互形态</td>
+<td>Trae / Claude Code / Cursor 的四层折叠；WorkBuddy 的"过程实时、结果整段"</td>
+</tr>
+<tr>
+<td>论文</td>
+<td>GTA（EG/RG 分类）、AgentHazard（28.8% 误导率）、MobiBench（模块级 94.7%）、UI-Nexus、MobileWorld（最强组合 51.7%）</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>十四条里，有九条能从上面找到直接可用的数字或结构；剩下五条（模型接入、提示词、可观测、成本、状态恢复）本来就是我们做得比较靠前的部分。</strong></p>
+<h3>8.13 一句话总结这一章</h3>
 <blockquote>
 <p><strong>十二条对齐，五条长出自己。</strong><br />
 对齐的部分照抄结论（数字、阈值、结构），长出来的部分只抄思路（为什么这么做），形态自己定。</p>
@@ -1072,6 +1273,10 @@ else   -&gt; 组级危险(group)      -&gt; 问
 <tr>
 <td>2026-11-27 23:45</td>
 <td>新增 §8「从零做 Agent：十四个部位对照」。查了 Anthropic 工具设计文档、Droidrun（AndroidWorld 91.4%）、OpenAI agent guide 一系材料，逐部位对照后提炼出五条可长成特色的，其余十二条明确「必须对齐、不要搞特色」</td>
+</tr>
+<tr>
+<td>2026-11-27 23:52</td>
+<td>§8 补第二批材料：Letta 三层记忆、SPA-Bench 的 PTR/OTR、FoneClaw 三层失败与最小恢复、HITL 五层接管与 10–15% 中断率、幂等与禁止双重门控；新增 §8.13 来源索引（十一类，按部位对应）</td>
 </tr>
 </tbody>
 </table></div>
