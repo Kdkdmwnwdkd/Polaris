@@ -69,7 +69,7 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-28 01:38</strong>（§11.5 补「变淡 ≠ 作废」· 遗忘曲线三种形态）<br />
+<p>最后更新：<strong>2026-11-28 01:56</strong>（§11.14 插件圈七条 · 跑过的代码比写过的文章硬）<br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -135,7 +135,7 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 </tr>
 <tr>
 <td>§11 脑子</td>
-<td><strong>主线</strong>：上下文 / 记忆 / 问人 / 收尾 / 推理预算 / 评测——官方入口之上剩什么</td>
+<td><strong>主线</strong>：上下文 / 记忆 / 问人 / 收尾 / 推理预算 / 评测 / 插件圈七条——官方入口之上剩什么</td>
 <td>定方向时先读这一章</td>
 </tr>
 <tr>
@@ -2902,7 +2902,136 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 </tbody>
 </table></div>
 <p><strong>第 5 条要特别说一句</strong>：<code>EXECUTE_APP_FUNCTIONS</code> 只发给系统助手，这一条坐实了"手会被收编"。但它同时留了个缝——<strong>App 可以主动暴露自己的函数</strong>。也就是说未来不是"我们求厂商给权限"，而是"我们能用多少，取决于有多少 App 愿意暴露"。<strong>这反而对我们有利</strong>：中国的 App 更愿意对接本地工具，而不是把能力交给字节或小米。</p>
-<h3>11.14 这一章的来源（故意跨出 Agent 圈）</h3>
+<h3>11.14 插件圈：跑过的代码，比写过的文章硬</h3>
+<p>前十三节看的是论文、官方文档、商业产品。这一节换了个看法——<strong>看那些必须每天在别人手机上真跑的插件和小工具</strong>。它们的作者没钱做 benchmark，但有一件更硬的东西：<strong>用户的手机不会给他们留情面。</strong></p>
+<p>七条，只有最后一条来自"研究"，其余六条全部来自"有人真的让它跑起来了"。</p>
+<p><strong>（1）最危险的不是失败，是"失败长得像成功"。</strong></p>
+<p>Tasker 官方论坛里有一段对话，值得逐字看：</p>
+<blockquote>
+<p>——我让 AutoInput 点一个不存在的输入框，勾了 continue，为什么 <code>%err</code> 是空的？<br />
+——因为那个动作会<strong>超时</strong>，超时不算错误，所以没有错误信息。<br />
+——那我的脚本怎么知道它没做成？勾 continue 就静默失败，不勾就永久挂死。<br />
+——受 Tasker 限制，没办法知道。抱歉。</p>
+</blockquote>
+<p>作者后来给了一个土办法：<strong>把插件自己的超时设得比宿主短</strong>，这样还来得及返回一句"timeout, nothing done"。</p>
+<p>→ 对我们是一记直拳。我们的完成判据是 <code>toolCalls</code> 为空，而一次超时如果只是"没返回"，它和"做完了"在数据上<strong>长得一模一样</strong>。修法只有一个：<strong>工具结果必须是三态 <code>Ok / Failed(reason) / TimedOut</code>，<code>TimedOut</code> 永远不能进完成分支，也不能和"没调用"混为一谈。</strong></p>
+<p><strong>（2）等待必须三件套：等什么、最多多久、等不到算什么。</strong></p>
+<p>AutoX.js 圈反复踩的坑：<code>text("提交").findOne(3000)</code> 十次里有一两次返回 null，重跑又好了。原因是动画没结束、控件树没刷新、或者按钮在 WebView 里根本不在原生树。官方那个带 timeout 的 <code>findOne</code> 被很多人评价"不好用"，于是大家退回自己写 <code>while(count--) { sleep; click; }</code>——<strong>从"有条件等待"退化成"固定次数重试"</strong>。</p>
+<p>→ 这就是 §8 里 PTR/OTR 那条的民间版。可落地的判据：<strong>每个等待都要能回答三问——等什么（可观测条件）、最多等多久、等不到算哪种失败。第三问答不上来的等待，就是 <code>sleep</code> 换了个名字。</strong></p>
+<p><strong>（3）插件圈最硬的一条经验，论文从来不写：跑久了会自己死。</strong></p>
+<p>同一个作者的实测：脚本跑几个小时后越来越慢，最后被系统杀掉。两个原因——<code>captureScreen()</code> 拿到的 <code>Image</code> 没 <code>recycle()</code>，native 内存一路涨；<code>console.log</code> 每轮打好几行，控制台文本堆积拖慢渲染。他的解法是三条：每轮 recycle、日志降频到 20 轮一次、脚本内部计数到一定轮数<strong>主动重跑自己把状态清零</strong>。</p>
+<p>→ 我们是常驻服务，这条比任何一篇 agent 论文都贴。三个问题必须能答：<strong>每次截图/每次树 dump 的 Bitmap 回收了吗？日志有没有上限？连续跑 8 小时后堆内存曲线是什么形状？</strong> 这三个问题我们现在一个都答不上来。</p>
+<p><strong>（4）Droidrun 把"服务掉了"当成常态，不是异常。</strong></p>
+<p>它的 <code>_recover_portal()</code> 干的就是这件事：关掉无障碍服务（<code>settings put secure accessibility_enabled 0</code>）→ 等 0.5 秒 → 把服务名设回去 → 再打开开关。注释原文是"重启 Portal 的无障碍服务和 TCP socket 服务"。<strong>它不指望服务一直活着，它假设一定会掉，并且准备好了一条三行的复活路径。</strong></p>
+<p>它顺带解决了一个我们迟早会遇到的问题：UiAutomation 连接<strong>全局只能有一个</strong>，被别的工具占用时标准通道就没了。它绕开的办法是<strong>用一个常驻无障碍服务读树</strong>，不走 UiAutomation。</p>
+<p>→ 我们的 <code>AgentAccessibilityService</code> 有没有"自己发现自己死了"的路径？现在靠系统重连，还是靠用户手动去设置里关一下再开？</p>
+<p><strong>（5）Agent 不输出坐标，只输出索引。</strong></p>
+<p>DroidRun Portal 扫完屏幕后，给每个可交互元素分配一个<strong>连续索引</strong>（<code>clickableIndex</code>），序列化成嵌套 JSON，Agent 全程只说"点第 7 个"，坐标由 Portal 自己填。</p>
+<p>→ 这一条直接消掉一整类错误：模型算错坐标、换分辨率坐标失效、状态栏差 2px 点偏。我们的 <code>ui_tap</code> 如果吃的是坐标，这就是一个<strong>不需要模型能力的确定性改进</strong>。（Mobile-Agent 同源：v1 让模型说"点文字 X"、由 OCR 定位；v3 才把 grounding 训进模型。）</p>
+<p><strong>（6）失败也要写文档，只有"什么都没发生"不值得写。</strong></p>
+<p>AppAgent 的反思是<strong>四分类</strong>，不是二分类：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>判定</th>
+<th>含义</th>
+<th>后续动作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SUCCESS</td>
+<td>达到预期</td>
+<td>该元素永不被拉黑</td>
+</tr>
+<tr>
+<td>BACK</td>
+<td>界面被带到错误的地方</td>
+<td><strong>真的调一次 <code>back()</code> 撤销</strong>，元素进黑名单</td>
+</tr>
+<tr>
+<td>CONTINUE</td>
+<td>界面变了，但没帮上任务</td>
+<td>不撤销、进黑名单，但<strong>照样写文档</strong></td>
+</tr>
+<tr>
+<td>INEFFECTIVE</td>
+<td>界面完全没变</td>
+<td>不写文档（零信息），进黑名单</td>
+</tr>
+</tbody>
+</table></div>
+<p>它的逻辑很干净：<strong>只要界面变了，"点这个东西会发生什么"就是一条知识，哪怕这次没帮上忙。</strong> 只有"点了没反应"才真的零信息。</p>
+<p>→ 这是"失败步不许裁掉"的第三个独立证据（前两个是 SE-GA 的 top-k、Manus 的保留错误内容）。而且它给了更好的分类法：<strong>我们的失败步至少该分"界面变了"和"界面没变"</strong>——后者才是死路，前者是走错但学到了东西。</p>
+<p><strong>（7）Mobile-Agent 四代演进，把"上下文该留什么"答完了。</strong></p>
+<ul>
+<li><strong>v1</strong>：每轮存一张截屏 → 步数一多上下文就烂（Context Rot 的现场版）。</li>
+<li><strong>v2</strong>：解法不是压缩，是<strong>只留当前截屏、历史全丢</strong>；丢掉的信息由 memory agent 补——比如"微信里朋友发的那条消息"必须被记下来，否则后面去浏览器搜的时候连搜索词都没有。</li>
+<li><strong>v2 消融</strong>：<strong>planning 影响最大，memory 次之，reflection 最小</strong>，后两个可以关掉换速度。</li>
+<li>作者自己的总结：<strong>手机 agent 在向马尔可夫过程逼近</strong>——只靠当前屏幕 + 走到这里的轨迹 + 记下来的关键值。理由很朴素：人和界面交互，主要也是看当前这一屏。</li>
+</ul>
+<p>→ 这条把 §11.4 的"按位置裁剪"彻底否了。<strong>该留的不是"最近 N 条"，是"后面还会用到的值"。</strong> 判据可以很土：<strong>这条信息，如果下一步屏幕上不再出现，任务会不会做不下去？会，必须留；不会，就可以走。</strong><br />
+→ 消融那条更实用：我们现在把力气花在"反思"上（重试、重规划），它恰恰是收益最低的一环。<strong>该加的是规划，该砍的是反思。</strong></p>
+<p><strong>（8）"应用卡片"这个形态，第三方独立做出来了。</strong></p>
+<p>Droidrun 有 App Cards：YAML 写清某个 App 的按钮位置、搜索语法、常见工作流、<strong>"特定于应用的怪癖"</strong>，喂给 Agent 当备忘单。这跟我们说的"负知识卡片"是同一个东西，只是它叫 cards。</p>
+<p>→ 有意思的是它强调 <strong>quirks（怪癖）</strong>，不是 features。功能模型自己能看懂，怪癖看不懂——这跟 §11.11 的判断一致：<strong>值钱的是坑，不是功能。</strong></p>
+<p><strong>这轮能落地的七件</strong>：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>改什么</th>
+<th>来自</th>
+<th>成本</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>工具结果三态化，<code>TimedOut</code> 独立于 <code>Failed</code> 与"未调用"</td>
+<td>Tasker <code>%err</code></td>
+<td>小</td>
+</tr>
+<tr>
+<td>2</td>
+<td>每个等待补"等什么/多久/等不到算什么"</td>
+<td>AutoX.js</td>
+<td>小</td>
+</tr>
+<tr>
+<td>3</td>
+<td>自查三项：Bitmap 回收、日志上限、8 小时堆曲线</td>
+<td>AutoX.js</td>
+<td>查证成本</td>
+</tr>
+<tr>
+<td>4</td>
+<td>无障碍服务自愈：关 → 0.5s → 开</td>
+<td>Droidrun</td>
+<td>小</td>
+</tr>
+<tr>
+<td>5</td>
+<td>元素索引化，模型不输出坐标</td>
+<td>Droidrun Portal</td>
+<td>中</td>
+</tr>
+<tr>
+<td>6</td>
+<td>失败步分"界面变了/没变"</td>
+<td>AppAgent</td>
+<td>小</td>
+</tr>
+<tr>
+<td>7</td>
+<td>上下文按"下一步还用不用"裁，不按位置</td>
+<td>Mobile-Agent v2</td>
+<td>中</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>这七条的共同点</strong>：没有一条能写成论文，因为每条都是"某个具体机型、某个具体 App、跑了三个小时之后"才暴露的。这正是你说的那件事——<strong>插件的 benchmark 是用户的耐心。</strong></p>
+<h3>11.15 这一章的来源（故意跨出 Agent 圈）</h3>
 <div class="tblwrap"><table>
 <thead>
 <tr>
@@ -2992,10 +3121,16 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 <td>AndroidControl / GUI-Odyssey / AITZ / CMGUI（44 个中国 App、12.1 万步）、AndroidWorld、SE-GA（ICML 2026）、GUI-SAGE（CVPR 2026）</td>
 <td>记忆值 12–14 点；失败轨迹要进库；harness 与模型的 4 倍差</td>
 </tr>
+<tr>
+<td>安卓自动化插件（§11.14）</td>
+<td>Tasker / AutoInput 官方论坛（<code>%err</code> 为空的那段对话）、AutoX.js 踩坑集与反例库、Droidrun Portal 源码（<code>_recover_portal</code>、<code>clickableIndex</code>）、AppAgent（四分类反思 + <code>useless_list</code>）、Mobile-Agent v1→v3 演进与消融</td>
+<td>超时≠成功；等待三件套；跑久了会自己死；服务自愈；索引化；失败要写文档；上下文按"还用不用"裁</td>
+</tr>
 </tbody>
 </table></div>
-<p><strong>搜法说明</strong>：这一章刻意避开了"Agent 框架横评"这种搜法。上面十五类来源里，只有三条来自 Agent 圈（MAST、SAGE-Agent、SE-GA），其余来自向量库公司、评测机构、校准/推理预算的学术论文、手机推理引擎实测、<strong>安卓官方文档、中国厂商的商业产品、记忆创业公司、中文 GUI 数据集</strong>。<strong>因为要解决的是"判断力"问题，不是"框架选型"问题。</strong></p>
+<p><strong>搜法说明</strong>：这一章刻意避开了"Agent 框架横评"这种搜法。上面十七类来源里，只有三条来自 Agent 圈（MAST、SAGE-Agent、SE-GA），其余来自向量库公司、评测机构、校准/推理预算的学术论文、手机推理引擎实测、<strong>安卓官方文档、中国厂商的商业产品、记忆创业公司、中文 GUI 数据集、安卓自动化插件源码</strong>。<strong>因为要解决的是"判断力"问题，不是"框架选型"问题。</strong></p>
 <p>第二批（§11.13）的搜法再换一次：不问"agent 怎么做"，问"<strong>这个东西官方给了没有、别人卖得怎么样、有没有现成数据</strong>"。三个词的差别，换来的是三条能直接改代码的结论（记忆标记失效、工具按意图分组、端侧只干三件事）。</p>
+<p>第三批（§11.14）再换一次，这次是<strong>换载体不是换问题</strong>：不看论文，看<strong>必须每天在别人手机上真跑的插件和脚本</strong>。理由很实在——论文可以只报告成功的 20 次，插件要面对第 1000 次。所以这一批拿到的东西性质完全不同：论坛里一句"受 Tasker 限制，没办法知道"，比一整节关于可观测性的论述更有用。<strong>看谁在挨骂，比看谁在发表更有信息量。</strong></p>
 <h2>十二、变更记录</h2>
 <div class="tblwrap"><table>
 <thead>
@@ -3042,12 +3177,16 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 <td><strong>§10 降级为「手脚」，新增 §11「脑子」——主线换回 AI 本身</strong>。① 讲清厂商的入口只给「能力清单/权限/分发」三层，不给「该做什么、做到没到、要不要问」；② METR：50% 那条线 7 个月翻倍（Opus 4.5 达 320 分钟），<strong>80% 那条线只有 27 分钟</strong>，差 12 倍，战场在后者；③ 手机与 PC 的四个不同（任务短 20 秒–5 分钟、频次高、副作用不可逆、观察有损）→ 脑子强在「知不知道自己不知道」，不是「能规划多长」；④ 五个器官逐条落：上下文（Chroma Context Rot 18 模型 + RLM 10M token 91.33%，我们裁剪不看 <code>isError</code>）、记忆（Letta 读写分离 + 睡眠期整理的失效边界）、问人（四类不确定性 + SAGE-Agent EVPI、When2Call 36%→65% + Abstain-R1 澄清 0.6%→55.1%）、收尾（MAST 44.2%/23.5% + <code>end_turn</code>≠完成，完成判据写成断言）、推理预算（峰值 12K、翻转率 0.32→0.71）与评测（pass^5、违规率是独立轴）；⑤ 反面清单五条 + 只留三样资产（负知识、重复习惯、可回放）。<strong>代码零改动</strong></td>
 </tr>
 <tr>
+<td>2026-11-28 01:30</td>
+<td>新增 §11.13 第二批材料（十个方向）+ §11.14 来源扩到十五类。这一批换了搜法：不问「agent 怎么做」，问「官方给了没有、别人卖得怎么样、有没有现成数据」。① <strong>Android AppFunctions 已落地</strong>（Android 16+、alpha13、<code>EXECUTE_APP_FUNCTIONS</code> 只发系统助手，Gemini 2026-05 私测）——§1 判断兑现，但 App 可主动暴露，反而留了缝；② <strong>AutoGLM</strong>（9B/MIT 开源、云手机 0.2 美元/单、主动不碰微信）与豆包手机（系统级集成引发 App 封控）说明「系统级 vs 外挂」是体验差主因；③ <strong>系统端侧模型只有 4096 token 窗口</strong>（AFM 3）→ 端侧只干分类/判断/摘要，编排必须上云；④ <strong>MCP 上下文税 40–50%</strong>、单 server 5.5 万 token、完成率 72% vs CLI 100% → 工具按意图分组到 8–10；⑤ <strong>记忆改判</strong>：Zep 双时态 → 满则「标记失效」不做覆盖，检索必须不走模型；⑥ <strong>SE-GA</strong>：移除记忆 AndroidControl-High 73.8→61.4，top-k 检索优于只存成功轨迹 → 失败轨迹必须进库；⑦ <strong>中文 GUI 数据集 CMGUI 已存在</strong>（44 个 App、12.1 万步）；⑧ <strong>harness 与模型差 4 倍</strong>（AndroidWorld：纯视觉 3B 19.8% vs Droidrun 91.4%）。据此定五个改动：记忆标记失效、工具压到 8–10 组、端侧只干三件事、失败轨迹进库、HandProvider 优先级。<strong>代码零改动</strong></td>
+</tr>
+<tr>
 <td>2026-11-28 01:38</td>
 <td><strong>补 §11.5（4）：变淡 ≠ 作废。</strong> 用户提到「DeepSeek 那个会遗忘的天使插件」，核准为 AstrBot「天使之魂」（<code>astrbot_plugin_angel_memory</code>，可拿 DeepSeek 当后端）。机制：每天凌晨 4 点衰减 → 淡到尽头交模型审 → 该留升永久、该忘真删 → 审查出错整批不动 → 每天备份最多 3 份。① 三种遗忘形态分列（删除 / 降权 / 失效），<strong>衰减管"变老"、失效管"变质"，不能互替</strong>——手机上变质更频繁（换工作、搬家、换口味）；② 抄它一条：不可逆动作前要有显式审查，审查失败整批跳过；③ 反它两条：它没有手动 pin（最该永久的东西要先烂掉才有机会被保住）→ 我们负知识与硬约束<strong>写入即 pin</strong>；它靠"凌晨 4 点进程在跑"，手机上必须 JobScheduler + 充电/息屏/空闲 + 可中断可续；④ 给定五类 TTL 表（负知识/硬约束 ∞、偏好 90 天、重复路径 30 天、任务中间态 ≤1 天），并说明各家半衰期差 6 倍、幂律 vs 指数有争议，<strong>绝对值别较真，类别差异才要紧</strong>；⑤ 两条反直觉：入口比出口重要（严格选择性添加不删也能 +10%）、小心回音室（被检索即强化，冷门永远起不来）。<strong>代码零改动</strong></td>
 </tr>
 <tr>
-<td>2026-11-28 01:30</td>
-<td>新增 §11.13 第二批材料（十个方向）+ §11.14 来源扩到十五类。这一批换了搜法：不问「agent 怎么做」，问「官方给了没有、别人卖得怎么样、有没有现成数据」。① <strong>Android AppFunctions 已落地</strong>（Android 16+、alpha13、<code>EXECUTE_APP_FUNCTIONS</code> 只发系统助手，Gemini 2026-05 私测）——§1 判断兑现，但 App 可主动暴露，反而留了缝；② <strong>AutoGLM</strong>（9B/MIT 开源、云手机 0.2 美元/单、主动不碰微信）与豆包手机（系统级集成引发 App 封控）说明「系统级 vs 外挂」是体验差主因；③ <strong>系统端侧模型只有 4096 token 窗口</strong>（AFM 3）→ 端侧只干分类/判断/摘要，编排必须上云；④ <strong>MCP 上下文税 40–50%</strong>、单 server 5.5 万 token、完成率 72% vs CLI 100% → 工具按意图分组到 8–10；⑤ <strong>记忆改判</strong>：Zep 双时态 → 满则「标记失效」不做覆盖，检索必须不走模型；⑥ <strong>SE-GA</strong>：移除记忆 AndroidControl-High 73.8→61.4，top-k 检索优于只存成功轨迹 → 失败轨迹必须进库；⑦ <strong>中文 GUI 数据集 CMGUI 已存在</strong>（44 个 App、12.1 万步）；⑧ <strong>harness 与模型差 4 倍</strong>（AndroidWorld：纯视觉 3B 19.8% vs Droidrun 91.4%）。据此定五个改动：记忆标记失效、工具压到 8–10 组、端侧只干三件事、失败轨迹进库、HandProvider 优先级。<strong>代码零改动</strong></td>
+<td>2026-11-28 01:56</td>
+<td><strong>新增 §11.14「插件圈：跑过的代码，比写过的文章硬」</strong>（来源表顺延为 §11.15，十七类）。换载体不换问题——不看论文，看必须每天在别人手机上真跑的插件。七条：① Tasker 论坛原文「超时不算错误，所以 <code>%err</code> 是空的」→ <strong>失败长得像成功</strong>，工具结果必须三态 <code>Ok/Failed/TimedOut</code>；② AutoX.js 的 <code>findOne(3000)</code> 偶发返回 null、官方 timeout 被评价不好用 → 等待要三件套（等什么/多久/等不到算什么）；③ <strong>跑几小时变慢最后被杀</strong>：Bitmap 没 recycle、日志堆积 → 常驻服务必查三项；④ Droidrun <code>_recover_portal()</code> 关→0.5s→开，假设服务一定会掉；⑤ Portal 给元素发<strong>连续索引</strong>，模型只说"点第 7 个"，坐标自己填；⑥ AppAgent 反思<strong>四分类</strong>（SUCCESS/BACK/CONTINUE/INEFFECTIVE），只有"界面没变"不写文档 → 失败步该分两类；⑦ Mobile-Agent v1→v3：只留当前截屏 + memory 记关键值、消融 <strong>planning &gt; memory &gt; reflection</strong> → 上下文按"下一步还用不用"裁。附七件可落地清单。<strong>代码零改动</strong></td>
 </tr>
 </tbody>
 </table></div>
