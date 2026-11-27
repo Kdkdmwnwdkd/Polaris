@@ -613,14 +613,15 @@ private fun testTokenUsage() {
         // 直接断言 send 路径独有的三行
         assertContains("P11", vm, "val turnUsage = TokenUsage.sum(")
         assertContains("P11", vm, "val lastAnswer = history.filterIsInstance<AssistantMessage>()")
-        assertContains("P11", vm, "append(msg, if (msg === lastAnswer) turnUsage else null)")
+        // 2026-11-27：append 多了 asTrace——用量仍只挂 lastAnswer，其余有正文步进 trace
+        assertContains("P11", vm, "if (msg === lastAnswer) turnUsage else null, msg !== lastAnswer)")
     }
     check("P12 VM：regenerate 新变体带用量 + append 支持 usage 参数") {
         // P4-2 起投影搬进 ConversationProjection：VM 只留 `append(msg, usage)` 这层转发，
         // 「usage 怎么进气泡」的实现在投影里——断言跟着所有权走，不再锚在宿主文件上。
         val proj = readSource("ui/ConversationProjection.kt")
-        assertContains("P12", vm, "private fun append(msg: ChatMessage, usage: TokenUsage? = null)")
-        assertContains("P12", proj, "fun appendMessage(msg: ChatMessage, usage: TokenUsage? = null)")
+        assertContains("P12", vm, "private fun append(msg: ChatMessage, usage: TokenUsage? = null, asTrace: Boolean = false)")
+        assertContains("P12", proj, "fun appendMessage(msg: ChatMessage, usage: TokenUsage? = null, asTrace: Boolean = false)")
         // hotfix26 起 append 透传 reasoning（P1-9）；助手分支是命名参数（timeMs 加入后），用稳定片段
         assertContains("P12", proj, "is AssistantMessage -> UiItem.Assistant(")
         assertContains("P12", proj, "usage = usage,")
@@ -1337,8 +1338,8 @@ private fun testConversationSwitchWhileRunning() {
     check("Y3 在途写按 owner：appendToStore/appendVariant/流式草稿三通道") {
         // P4-2：落库目标由投影统一算（owner ?: active），三条通道共用同一个入口
         val proj = readSource("ui/ConversationProjection.kt")
-        val appendStore = proj.substringAfter("fun appendToStore(item: UiItem)")
-        assertContains("Y3", appendStore, "store.appendMessage(ownerId() ?: activeId(), item.toMsgRecord())")
+        val appendStore = proj.substringAfter("fun appendToStore(item: UiItem, asTrace: Boolean = false)")
+        assertContains("Y3", appendStore, "store.appendMessage(ownerId() ?: activeId(), item.toMsgRecord(), asTrace)")
         // regenerate 成功/失败两条 appendVariant 都按 owner（切走期间结果仍写回原会话）
         assertTrue("Y3", vm.split("appendVariant(\n").size >= 2)
         assertTrue("Y3", vm.contains("owner, turnIndex, variant.toMsgRecord()"))
