@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>北辰修复纪实 · 1.911 → 1.922</title>
+<style>
+:root{
+  --paper:#EDE3DC; --bg:#F8EFE9; --card:#FFFFFF; --sunken:#F4E9E2;
+  --ink:#2E2620; --ink2:#6B5B4E; --ink3:#756450;
+  --teal:#0E5D6B; --tealWeak:rgba(14,93,107,.08);
+  --line:rgba(46,38,32,.09);
+}
+*{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+body{margin:0;padding:34px 20px 90px;background:var(--paper);color:var(--ink);
+  font-family:"PingFang SC","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  font-size:15px;line-height:1.78}
+.wrap{max-width:680px;margin:0 auto}
+.badge{display:inline-block;padding:5px 12px;border-radius:999px;background:var(--tealWeak);
+  color:var(--teal);font-size:12px;font-weight:600;letter-spacing:.03em}
+h1{font-size:25px;line-height:1.32;font-weight:600;margin:14px 0 8px;letter-spacing:-.01em}
+.sub{margin:0 0 26px;color:var(--ink2);font-size:13.5px}
+h2{font-size:18px;font-weight:600;margin:36px 0 12px;padding-top:16px;border-top:1px solid var(--line)}
+h3{font-size:15.5px;font-weight:600;margin:24px 0 8px;color:var(--teal)}
+p{margin:10px 0}
+ul,ol{margin:10px 0;padding-left:22px}
+li{margin:5px 0}
+strong{font-weight:600}
+code{background:var(--sunken);border-radius:5px;padding:1px 5px;font-size:12.8px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-word}
+pre{background:#2E2620;color:#F0E7E0;border-radius:12px;padding:14px 16px;overflow-x:auto;
+  font-size:12.2px;line-height:1.65}
+pre code{background:none;padding:0;color:inherit;font-size:12.2px}
+blockquote{margin:14px 0;padding:10px 14px;border-left:3px solid var(--teal);
+  background:var(--tealWeak);border-radius:0 10px 10px 0;color:var(--ink2);font-size:14px}
+blockquote p{margin:2px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13px;
+  background:var(--card);border-radius:12px;overflow:hidden}
+th,td{padding:9px 11px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--sunken);font-weight:600;font-size:12.5px;color:var(--ink2)}
+tr:last-child td{border-bottom:none}
+a{color:var(--teal);text-decoration:none;border-bottom:1px solid rgba(14,93,107,.3)}
+hr{border:none;border-top:1px solid var(--line);margin:30px 0}
+.tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.foot{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);
+  color:var(--ink3);font-size:12.5px}
+@media (max-width:520px){
+  body{font-size:14.5px;padding:26px 15px 70px}
+  h1{font-size:22px}
+  /* 手机上没有横向滚动条，表格挤成两列只会把右半边截掉：
+     改成「每条记录一块」，首列当小标题、其余按行铺开。 */
+  table,tbody,tr,td{display:block;width:100%}
+  thead{display:none}
+  table{background:none}
+  tr{background:var(--card);border-radius:12px;padding:8px 0 6px;margin:0 0 9px;
+    border:1px solid var(--line)}
+  td{border-bottom:none;padding:4px 13px;font-size:13.2px}
+  td:first-child{font-weight:600;color:var(--teal);font-size:12.5px;letter-spacing:.01em}
+  .tblwrap{overflow:visible}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<span class="badge">修复纪实</span>
+<h1>北辰修复纪实 · 1.911 → 1.922</h1>
+<p class="sub">2026-11-26 ~ 11-27 · 六个问题、12 次构建、一条思考链</p>
+
+<blockquote>
+<p>这段时间全部工作的记录：从「装不上、进不去」一路修到「思考与工具同一条线」。<br />
+写给后来的自己：<strong>当时看到什么现象、查到哪一行、为什么这么改、怎么证明改对了</strong>。<br />
+版本跨度 1.911 → 1.922，12 次构建，6 个独立问题。</p>
+</blockquote>
+<hr />
+<h2>一、一句话结论</h2>
+<p>这一轮里报的每一个「玄学」，最后都落在一行具体的判据上：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>现象</th>
+<th>真因（一行）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>进不去、有时能进有时不能</td>
+<td><code>take(4000)</code> 把工具参数截成半截 JSON，每次启动解析必炸</td>
+</tr>
+<tr>
+<td>复制导出按钮没了</td>
+<td>崩溃区块默认展开，把底部操作行顶出屏幕</td>
+</tr>
+<tr>
+<td>崩溃记录删不掉</td>
+<td>「清空」藏在折叠区里，折叠态根本没有这个入口</td>
+</tr>
+<tr>
+<td>生图 404</td>
+<td>媒体借用对话的 baseUrl（deepseek），打到了不存在的接口</td>
+</tr>
+<tr>
+<td>思考与工具两层，跑完才合</td>
+<td>流式期间的思考只活在草稿变量里，不在消息列表里</td>
+</tr>
+<tr>
+<td>思考只剩最后一条</td>
+<td>中间步（只想没答）content 为空被整条跳过，且一律被当「变体」</td>
+</tr>
+</tbody>
+</table></div>
+<p>共同点：<strong>都不是「功能没写」，而是「判据写错了」。</strong> 判据错了，代码越写越对不上现象。</p>
+<hr />
+<h2>二、版本时间线</h2>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>版本</th>
+<th>提交</th>
+<th>内容</th>
+<th>构建</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1.911</td>
+<td><code>0cb363b</code></td>
+<td>启动自救：连续 3 次起不来就把带病状态挪开（日志与会话都不删）</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.912</td>
+<td><code>7748386</code></td>
+<td>崩溃报告复制不出来 → 「复制」搬到看得见的地方、崩溃区块默认折叠</td>
+<td><strong>红</strong>（G3 断言误判）</td>
+</tr>
+<tr>
+<td>1.913</td>
+<td><code>6aff11a</code></td>
+<td>G3 判据修正：只认「有没有创建 VM」，不认写法</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.914</td>
+<td><code>819ce84</code></td>
+<td>诊断包补 Java 崩溃全文；启动失败改走救援页 + 无损重试</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.915</td>
+<td><code>c0d75c1</code></td>
+<td>toolArgs 不再按字符截断（真根因）</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.916</td>
+<td><code>d2ffcc3</code></td>
+<td>出图端点独立；崩溃「清空」入口搬到折叠行</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.917</td>
+<td><code>76cb482</code> <code>cd22076</code></td>
+<td>过程流：段由唯一函数推算；「墙」从正文改成用户消息</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.918</td>
+<td><code>c345ec1</code></td>
+<td>流式草稿并入段（<code>withLiveDraft</code>）</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.919</td>
+<td><code>26fd042</code></td>
+<td>中间步思考实时落库并进 <code>trace</code>，不再当变体</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.920</td>
+<td><code>240afa8</code></td>
+<td>中间正文也进 <code>trace</code>（<code>asTrace</code>）</td>
+<td><strong>红</strong>（断言基线）</td>
+</tr>
+<tr>
+<td>1.921</td>
+<td><code>bbbd437</code></td>
+<td>同 1.920 + 三处断言跟随新签名</td>
+<td>绿，<strong>已发</strong></td>
+</tr>
+<tr>
+<td>1.922</td>
+<td><code>aae5801</code></td>
+<td>只加一条护栏断言（K1），行为与 1.921 完全一致</td>
+<td>绿</td>
+</tr>
+</tbody>
+</table></div>
+<blockquote>
+<p>行数冻结全程没破：<code>ChatScreen</code> 2747 / <code>ChatViewModel</code> 3244 / <code>RealAgentLoop</code> 1387。</p>
+</blockquote>
+<hr />
+<h2>三、六个问题，逐个说清</h2>
+<h3>A. 「装上了，但进不去」</h3>
+<p><strong>最初看到的现象</strong>：用户发来视频——打开就是闪退，或者进去一瞬间又回桌面；偶尔能进，进去后会话全没了。</p>
+<p><strong>第一轮判断错了</strong>：以为是启动期某个 IO 出错，加了 <code>StartupGuard</code>（1.911）做兜底——连续 3 次启动失败就把 <code>agent_run_state.json</code> / <code>drafts.json</code> / <code>run-journal</code> 挪开重试。这一层现在仍然有用，但它只是<strong>止血</strong>，不是根因。</p>
+<p><strong>第二步：证据不足</strong>。诊断包里「最近崩溃报告（Java）」是空的，写着「本机还没发生过 Java 崩溃」——但应用明明刚崩过。于是 1.914 补了 <code>javaCrashSection</code>：读最近 3 份 Java 崩溃全文（每份限 6000 字符），过一遍脱敏再进包。同时把「启动失败直接死」改成 <code>StartupRescueScreen</code>：异常原文可复制，给两条自救路（清运行态 / 导出日志）。</p>
+<p><strong>拿到崩溃报告后，根因一目了然</strong>：</p>
+<pre><code>JsonDecodingException: Unexpected EOF at path: $
+JSON input: .....&quot; width=&quot;7&quot; height=&quot;11&quot;/&gt;\n    &lt;rect x=&quot;322&quot; y=&quot;215&quot;
+  at ConversationStoreKt.parseToolArgs(ConversationStore.kt:376)
+  at ConversationProjection.&lt;init&gt;(...)
+  at ChatViewModel.&lt;init&gt;(ChatViewModel.kt:990)
+</code></pre>
+<p>十次 <code>Caused by</code> 一模一样。某次绘图工具的参数带了一大段 SVG，超过 4000 字符，被 <code>take(MAX_FIELD_CHARS)</code> 切断 → <strong>半截 JSON 落盘</strong>。文件本身是合法 JSON 字符串，所有校验都过得去，所以看不出问题；但每次启动读会话时 <code>parseToolArgs</code> 必炸，而它跑在 ViewModel 的构造里 → 组合期抛异常 → 直接闪退。</p>
+<p>「有时能进」的解释也在日志里：<code>store.write conversations bytes=235</code>——读失败后会话被重建，代价是<strong>会话说没就没了</strong>。</p>
+<p><strong>修法（1.915）</strong>：</p>
+<ul>
+<li>写：<code>encodeToolArgs</code> 超长不再切字符串，改存<strong>合法占位</strong> <code>{"__note":"参数过长，已省略（原文 N 字符）","__chars":N,"__keys":"..."}</code>；</li>
+<li>读：<code>parseToolArgs</code> 补上「解析本身失败」这道门——<code>runCatching { Json.parseToJsonElement(raw) }.getOrNull() ?: JsonObject(emptyMap())</code>。</li>
+</ul>
+<p>原来注释写着「容错」，实际只挡了第三道（类型不对），第一道（解析失败）根本没有门。这类「注释比代码善良」的地方最危险。</p>
+<h3>B. 「连复制导出那个键都没了」</h3>
+<p>现象是一条报错接一条报错，用户想复制都复制不到。</p>
+<p>真因不在按钮被删了：<strong>崩溃区块默认是展开的</strong>，一块就能吃掉大半屏，底部那行「复制 / 导出 / 重试」被顶到屏幕外。改法（1.912）：崩溃区块默认折叠，折叠行里常驻「复制全部」，横幅上也补一个复制入口——<strong>报错的第一需求是能把它拿出来</strong>。</p>
+<h3>C. 「崩溃记录删不掉」</h3>
+<p>两个原因叠在一起：</p>
+<ol>
+<li>「清空崩溃记录」写在 <code>if (blockOpen)</code> 里面，还排在 10 条记录之后——折叠态根本不存在这个按钮；</li>
+<li>操作行的「删除」只删日志文件，不动崩溃记录。</li>
+</ol>
+<p>改法（1.916）：折叠行常驻 <code>复制全部 | 清空 | 展开（10）</code>，清空加二次确认；操作行文案改成「删除日志」，名实相符。</p>
+<h3>D. 生图 404</h3>
+<p><code>MediaRegistry</code> 原来构造 <code>OpenAIMediaProvider(store.loadMediaKey("openai"), store.load().baseUrl)</code>——<strong>媒体借用了主对话的 baseUrl</strong>。用户主对话配的是 deepseek，于是出图请求打到 <code>api.deepseek.com/v1/images/generations</code>，404。</p>
+<p>改法（1.916）：</p>
+<ul>
+<li><code>ConfigStore</code> 加 <code>KEY_MEDIA_BASE_PREFIX = "media_base_"</code>，<code>saveMediaBaseUrl/loadMediaBaseUrl</code>（空串走 <code>remove</code>，不留空串，否则会拼出相对路径）；</li>
+<li>Provider 加 <code>DEFAULT_BASE_URL</code>、统一去尾斜杠；404/401 的错误信息里写出<strong>当前端点</strong>，下次一眼能看出打错了地方；</li>
+<li>MediaScreen 只在选 openai 时显示 Base URL 输入框，切换供应商时用 <code>LaunchedEffect(selected?.id)</code> 同步。</li>
+</ul>
+<blockquote>
+<p>这块<strong>只改了端点归属，没在真机上验证过出图</strong>。用户当时说「生图先不管」，优先级让给了思考链。留待下一轮。</p>
+</blockquote>
+<h3>E. 主线：思考与工具为什么总是两层</h3>
+<p>这是花时间最多的一件事，前后改了 5 次，前 4 次都只修到一半——值得完整记下来。</p>
+<p><strong>现象</strong>（用户三次拍照对比）：别的产品是 <code>思考 → 调工具 → 思考 → 调工具 → 回答</code> 交替的一条链；北辰是<strong>上面一堆工具卡，下面单独挂一个「思考中」</strong>，只有一轮结束、落库之后才合成一条，而且合成的结果里思考永远在最下面。</p>
+<h4>E1. 段被三处各自推算（1.917 前半）</h4>
+<p>原来「属于同一次 run 的条目」这个判断散在三个地方：渲染、折叠状态、正文归属。三处各算一遍，边界永远对不齐——一处认为「到工具为止」，另一处认为「含后续工具」，视觉上就是断成两块。</p>
+<p>改法：<code>segmentAt</code> 成为<strong>唯一区间来源</strong>，<code>TraceSlot(run, ownership)</code> 一次问全（画不画流 + 正文归谁）。分成两个函数问过一次，后果是段首的思考被两边都判成「别人负责」，整段消失。</p>
+<h4>E2. 「墙」判错了三次（1.917 后半）</h4>
+<p>段靠什么断开？三次尝试：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>判据</th>
+<th>后果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>while (next is Tool)</code> 只收相邻</td>
+<td>正文一插进来就断成两块</td>
+</tr>
+<tr>
+<td>收所有过程条目，但把「有正文的助手」当墙</td>
+<td>误伤同轮「正文 + tool_call」（模型先说一句再调工具，很常见）</td>
+</tr>
+<tr>
+<td><strong>墙只有用户消息</strong>（现在）</td>
+<td><code>isProcessEntry(User) == false</code>，天然断开，其余全归一段</td>
+</tr>
+</tbody>
+</table></div>
+<p>同时 <code>traceOwnership</code> 的 TAIL 规则从「必须在段尾」放宽为「有正文就是 TAIL」——段中间的正文也自己渲染，否则「再查一次」这种中途汇报会消失。</p>
+<h4>E3. 真正的原因：<strong>输入</strong>里没有它（1.918）</h4>
+<p>E1/E2 修完，现象还在。因为段算的是 <code>List&lt;UiItem&gt;</code>，而<strong>流式期间的思考根本不在这个列表里</strong>——它活在 <code>reasoningDraft</code> 这个临时变量，正文活在 <code>streamDraft</code>。落库那一刻才写进 <code>messages</code>，段这才「看见」它。</p>
+<p>所以「跑的时候两层、跑完才合」不是渲染 bug，是<strong>数据不同源</strong>。</p>
+<p>改法：<code>withLiveDraft(messages, streamDraft, reasoningDraft)</code> 把草稿作为<strong>虚拟末项</strong>接在列表末尾，一起参与段计算。草稿那一步于是自然落在流尾（<code>state=RUNNING</code>、标题「思考中」），草稿本身只留正文；落库只是「虚拟项换成真实项」，位置不动。</p>
+<h4>E4. 思考只剩最后一条（1.919）</h4>
+<p>E3 之后仍是「跑完只剩一条思考，且排在所有工具之后」。根因在<strong>存储与事件两层</strong>：</p>
+<ol>
+<li>回合收尾那句 <code>if (msg.content.isNotBlank())</code> 才落库——中间步是「只想没答」，content 是空的，<strong>连 reasoning 一起被丢掉</strong>；</li>
+<li>即便落了，<code>appendToTurns</code> 对 <code>ROLE_ASSISTANT</code> 一律收进 <code>variants</code>（变体），于是一轮 N 个变体，界面只显示选中的那条。</li>
+</ol>
+<p>正确的去处是 <code>TurnRecord.trace</code>——它的定义本来就是「最终回答之前的过程，保序」。</p>
+<p>改法：</p>
+<ul>
+<li>新增 <code>AgentEvent.AssistantStep</code>：loop 在<strong>派发工具之前</strong>把这一步的思考交出去（顺序反了，思考永远排在工具后面，链就是断的）；</li>
+<li><code>appendToTurns</code>：content 空、有 reasoning 的 assistant 进 <code>trace</code>；空到底的照旧丢弃（不凭空多一条）；</li>
+<li><code>ChatViewModel</code> 收到就投影 + 落盘。</li>
+</ul>
+<h4>E5. 中间那段正文被当变体（1.920/1.921）</h4>
+<p>还剩一种形态：「说一句 → 接着调工具 → 再说」。那句中间正文有内容，于是走了「变体」分支 → 界面消失、<code>flatten</code> 不带它 → <strong>下一轮模型读不到自己说过的话</strong>。</p>
+<p>根因还是判据：<code>content.isBlank()</code> 判的是「有没有文字」，可我们要判的是「是不是本轮最终回答」。这件事只有调用方知道（收尾时手里有 <code>lastAnswer</code>），存储层猜不出来。</p>
+<p>改法：<code>appendMessage(..., asTrace: Boolean = false)</code> 显式声明「这条是过程」，有正文也进 <code>trace</code>，停在它发生的位置；收尾循环按 <code>msg !== lastAnswer</code> 判定；默认值 <code>false</code>，旧调用点（含 5 个 harness）零改动。</p>
+<blockquote>
+<p>1.920 就是在这一步把 CI 判红的：<code>Hotfix11Verification</code> 里 P11/P12/Y3 是<strong>字面串匹配</strong>，<code>append(...)</code> 多了参数后锚点对不上，整条 harness 判 FAIL（PASS=169 &lt; 基线 170）→ 无产物。1.921 把三处断言改成「跟随新签名，但仍守原语义」才放行。</p>
+</blockquote>
+<hr />
+<h2>四、业界依据：我们对着什么改的</h2>
+<p>结论只有一条，三家说的其实是同一件事：<strong>思考、工具、正文必须是同一条有序序列里的同级项</strong>，不是「消息一个桶、工具一个桶」。</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>来源</th>
+<th>它说什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="https://platform.claude.com/cookbook/extended-thinking-extended-thinking-with-tool-use">Anthropic · extended thinking + tool use</a></td>
+<td><code>thinking</code> / <code>text</code> / <code>tool_use</code> / <code>tool_result</code> 是同级内容块，「按生成顺序拼接后回传」</td>
+</tr>
+<tr>
+<td><a href="https://feinterview.poetries.top/ai-monitor/news/interleaved-thinking-and-tool-use-in-claude">Anthropic · interleaved thinking</a></td>
+<td>官方给了对照：无交错是 <code>[thinking]+[tool_use]</code> → <code>[text]</code>；有交错是每段工具结果之后再想一次</td>
+</tr>
+<tr>
+<td><a href="https://developers.openai.com/zh-Hans/api/docs/guides/reasoning?api-mode=responses">OpenAI · Responses 推理指南</a></td>
+<td><code>output</code> 是 items 数组，reasoning 与 function_call 同级，「请保留这些项的原始顺序」</td>
+</tr>
+<tr>
+<td><a href="https://skillmd.ai/zh/skills/vercel-ai-sdk-3">Vercel AI SDK v6</a></td>
+<td><code>UIMessage.parts</code> = <code>TextPart</code> / <code>ReasoningPart</code> / <code>ToolPart</code> / <code>StepStartPart</code> 一条有序数组</td>
+</tr>
+<tr>
+<td><a href="https://gitmemories.com/NousResearch/hermes-agent/issues/41266">NousResearch/hermes-agent #41266</a></td>
+<td><strong>反例</strong>：thinking 塞 <code>reasoning_details</code>、tool 塞 <code>tool_calls</code>，丢了相对位置，重组后变 <code>[所有 thinking][text][所有 tool]</code> → 每轮 400</td>
+</tr>
+</tbody>
+</table></div>
+<p>我们原来的做法（<code>variants</code> + <code>trace</code> 两个桶、按 <code>content.isBlank()</code> 分流）正是那个反例的形状。</p>
+<p><strong>没有抄代码</strong>：<code>grep "AI SDK|UIMessage" --include=*.kt app/ core/</code> → 0 处；依赖表里只有 Compose、OkHttp、kotlinx.serialization、Shizuku、MLKit、Rhino；<code>Anthropic</code> 这个词全仓只出现在 <code>ModelListFetcher</code> 的 <code>anthropic-version</code> 请求头（连 Claude 端点必须带的协议头）。</p>
+<p>取的是<strong>约束</strong>（顺序必须保、块必须同级），没取实现。北辰自己的东西一个没动：<code>variants</code> + <code>selectedIndex</code> 的变体切换三家都没有；<code>TraceRun</code> + <code>TraceOwnership</code> 的段归属、9330 条序列穷举验证，别人没有对应物。</p>
+<hr />
+<h2>五、怎么证明改对了</h2>
+<p>只有一条纪律：<strong>每条断言都要能被变异杀死</strong>，杀不死的断言等于没写。</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>资产</th>
+<th>内容</th>
+<th>数字</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R06Verification.kt</code></td>
+<td>过程流：段边界、归属、草稿并入、交替顺序、空步不落、K1 空白步骤</td>
+<td><strong>41 / 0</strong></td>
+</tr>
+<tr>
+<td>H6 穷举</td>
+<td>9330 条合法序列钉 I1/I2/I3 三条不变式</td>
+<td>全通</td>
+</tr>
+<tr>
+<td><code>Hotfix11Verification.kt</code></td>
+<td>存储/投影契约（P11/P12/Y3 跟随新签名）</td>
+<td><strong>174 / 0</strong></td>
+</tr>
+<tr>
+<td>变异测试</td>
+<td>「草稿不并入」2 红 · 「段不算思考在跑」1 红 · 「中间思考当变体」3 红 · 「忽略 asTrace」1 红 · 「退回正文当墙」5 红</td>
+<td>全部按预期红</td>
+</tr>
+<tr>
+<td>CI</td>
+<td>打包 → QA gate（PASS 必须 ≥ 基线）→ 上传发布</td>
+<td>1.912、1.920 各红一次，都不是代码问题而是断言写法</td>
+</tr>
+</tbody>
+</table></div>
+<p>这一轮抓到的两个真实教训：</p>
+<ol>
+<li><strong>变异测试抓到了判据本身写错</strong>。M1 的正则 <code>[^)]*</code> 会在第一个右括号处截断，断言看着绿，其实匹配的是半句。</li>
+<li><strong><code>grep -q</code> 撞 SIGPIPE 导致假红</strong>（1周前的老账，这两天才清完 155 处）：管道喂 <code>grep -q</code>，grep 提前退出，上游写端收到 SIGPIPE，<code>set -o pipefail</code> 下整条判负。两次全量各红一次，都不是代码问题。</li>
+</ol>
+<hr />
+<h2>六、还没做的</h2>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>项</th>
+<th>状态</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>生图 404</td>
+<td>已改端点归属，<strong>未真机验证</strong></td>
+<td>需要在媒体页给 openai 单独填 Base URL</td>
+</tr>
+<tr>
+<td>1.922</td>
+<td>只加断言，行为同 1.921</td>
+<td>不必重装</td>
+</tr>
+<tr>
+<td>通知正文</td>
+<td>只拿到「来源 + 条数」</td>
+<td>设备上下文里表现为「没有正文」。可能是权限/系统限制，待查</td>
+</tr>
+<tr>
+<td>GitHub 工具</td>
+<td><code>github_not_configured</code></td>
+<td>属预期：需要在「构建」页填 owner/repo/PAT</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2>七、装哪个</h2>
+<p><strong>1.921</strong>（当前最新产物，48 MB）：</p>
+<pre><code>https://ghfast.top/https://github.com/Kdkdmwnwdkd/Polaris/releases/download/latest/app-release.apk
+</code></pre>
+<p>直连慢时用加速前缀；备用 <code>https://gh-proxy.com/</code> + 同一路径。</p>
+<p><strong>真机该看的三处</strong>：</p>
+<ol>
+<li>一轮里有多次工具调用时，思考与工具卡应当<strong>交替</strong>出现在同一条竖线上；</li>
+<li>正在想的那一步在<strong>流尾</strong>打着转（不是另起一块挂在下面）；</li>
+<li>「我先看一下配置」这类中途说的话，停在它说出的位置；退出重进顺序不变。</li>
+</ol>
+<hr />
+<h2>八、关键代码索引</h2>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>想改什么</th>
+<th>去哪</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>段怎么切、正文归谁</td>
+<td><code>ui/TraceFlow.kt</code>（<code>segmentAt</code> / <code>traceOwnership</code> / <code>withLiveDraft</code>）</td>
+</tr>
+<tr>
+<td>过程流长什么样</td>
+<td><code>ui/ChatToolTrace.kt</code></td>
+</tr>
+<tr>
+<td>事件从哪来</td>
+<td><code>core/AgentLoop.kt</code>（<code>AgentEvent.AssistantStep</code>）、<code>core/agent/RealAgentLoop.kt</code></td>
+</tr>
+<tr>
+<td>落库怎么分类</td>
+<td><code>core/ConversationStore.kt</code>（<code>appendToTurns</code> / <code>asTrace</code> / <code>encodeToolArgs</code> / <code>parseToolArgs</code>）</td>
+</tr>
+<tr>
+<td>投影（列表从哪重建）</td>
+<td><code>ui/ConversationProjection.kt</code>（<code>appendMessage</code> / <code>appendToStore</code>）</td>
+</tr>
+<tr>
+<td>媒体端点</td>
+<td><code>ConfigStore</code>（<code>media_base_*</code>）、<code>MediaRegistry</code></td>
+</tr>
+<tr>
+<td>诊断包</td>
+<td><code>DiagnosticsRedaction</code> + <code>javaCrashSection</code></td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2>九、三条教训</h2>
+<ol>
+<li><strong>注释说「容错」的地方，去数一数到底有几道门。</strong> <code>parseToolArgs</code> 注释写了容错，实际只挡类型不对，解析失败直接抛——一个应用就这么被一条 4 KB 的 SVG 锁死了。</li>
+<li><strong>判据要判「语义」，不要判「写法」。</strong> G3 把 <code>viewModel&lt;ChatViewModel&gt;()</code> 当唯一正确写法，带参数的创建被判成「没创建」；<code>content.isBlank()</code> 判「有没有字」却被用来判「是不是回答」。两次都是判据错，不是代码错。</li>
+<li><strong>界面上的「合在一起」，先问数据是不是同一份。</strong> 渲染层改了三轮都不对，因为流式期间的数据根本不在被渲染的那个列表里。同一份输入，才谈得上同一个形状。</li>
+</ol>
+<p class="foot">北辰 · Polaris · 这份文件由仓库内 markdown 生成，源文件：<code>修复纪实-2026-11-26_27.md</code></p>
+</div>
+</body>
+</html>

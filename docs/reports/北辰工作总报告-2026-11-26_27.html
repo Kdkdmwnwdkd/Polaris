@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>北辰工作总报告 · 1.911 → 1.926</title>
+<style>
+:root{
+  --paper:#EDE3DC; --bg:#F8EFE9; --card:#FFFFFF; --sunken:#F4E9E2;
+  --ink:#2E2620; --ink2:#6B5B4E; --ink3:#756450;
+  --teal:#0E5D6B; --tealWeak:rgba(14,93,107,.08);
+  --line:rgba(46,38,32,.09);
+}
+*{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+body{margin:0;padding:34px 20px 90px;background:var(--paper);color:var(--ink);
+  font-family:"PingFang SC","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  font-size:15px;line-height:1.78}
+.wrap{max-width:680px;margin:0 auto}
+.badge{display:inline-block;padding:5px 12px;border-radius:999px;background:var(--tealWeak);
+  color:var(--teal);font-size:12px;font-weight:600;letter-spacing:.03em}
+h1{font-size:25px;line-height:1.32;font-weight:600;margin:14px 0 8px;letter-spacing:-.01em}
+.sub{margin:0 0 26px;color:var(--ink2);font-size:13.5px}
+h2{font-size:18px;font-weight:600;margin:36px 0 12px;padding-top:16px;border-top:1px solid var(--line)}
+h3{font-size:15.5px;font-weight:600;margin:24px 0 8px;color:var(--teal)}
+p{margin:10px 0}
+ul,ol{margin:10px 0;padding-left:22px}
+li{margin:5px 0}
+strong{font-weight:600}
+code{background:var(--sunken);border-radius:5px;padding:1px 5px;font-size:12.8px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-word}
+pre{background:#2E2620;color:#F0E7E0;border-radius:12px;padding:14px 16px;overflow-x:auto;
+  font-size:12.2px;line-height:1.65}
+pre code{background:none;padding:0;color:inherit;font-size:12.2px}
+blockquote{margin:14px 0;padding:10px 14px;border-left:3px solid var(--teal);
+  background:var(--tealWeak);border-radius:0 10px 10px 0;color:var(--ink2);font-size:14px}
+blockquote p{margin:2px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13px;
+  background:var(--card);border-radius:12px;overflow:hidden}
+th,td{padding:9px 11px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--sunken);font-weight:600;font-size:12.5px;color:var(--ink2)}
+tr:last-child td{border-bottom:none}
+a{color:var(--teal);text-decoration:none;border-bottom:1px solid rgba(14,93,107,.3)}
+hr{border:none;border-top:1px solid var(--line);margin:30px 0}
+.tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.foot{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);
+  color:var(--ink3);font-size:12.5px}
+@media (max-width:520px){
+  body{font-size:14.5px;padding:26px 15px 70px}
+  h1{font-size:22px}
+  /* 手机上没有横向滚动条，表格挤成两列只会把右半边截掉：
+     改成「每条记录一块」，首列当小标题、其余按行铺开。 */
+  table,tbody,tr,td{display:block;width:100%}
+  thead{display:none}
+  table{background:none}
+  tr{background:var(--card);border-radius:12px;padding:8px 0 6px;margin:0 0 9px;
+    border:1px solid var(--line)}
+  td{border-bottom:none;padding:4px 13px;font-size:13.2px}
+  td:first-child{font-weight:600;color:var(--teal);font-size:12.5px;letter-spacing:.01em}
+  .tblwrap{overflow:visible}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<span class="badge">工作总报告</span>
+<h1>北辰工作总报告 · 1.911 → 1.926</h1>
+<p class="sub">三天两夜 / 29 个提交 / 16 次构建：干了什么、错在哪、现在到哪</p>
+
+<blockquote>
+<p>三天两夜，29 个提交，16 次构建。修的全是同一类东西：<strong>判据写错了</strong>——不是功能没写。<br />
+这份报告写四件事：干了什么、错在哪、现在到哪、下一步。<br />
+给没跟过这条线的人看也能看懂，不需要先读上一份纪实。</p>
+</blockquote>
+<hr />
+<h2>零、现在是什么状态（30 秒版）</h2>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>状态</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>能用</strong></td>
+<td>1.926（<code>4d2ff77</code>），50.9 MB，CI 全绿：<code>PASS=170 SKIP=0 FAIL=0</code>，门禁 6/6</td>
+</tr>
+<tr>
+<td><strong>这一版的主线</strong></td>
+<td>运行中「思考 → 工具 → 思考 → 工具」交替成<strong>一条链</strong>，跑完不折回，回答只有一条</td>
+</tr>
+<tr>
+<td><strong>刚修、未发版</strong></td>
+<td><code>c95b187</code>：正文开始往外走之后，「思考中」不再继续转圈</td>
+</tr>
+<tr>
+<td><strong>没验证</strong></td>
+<td>出图 404 的端点改动（只改了归属，没在真机出过图）；通知正文只拿到「来源 + 条数」</td>
+</tr>
+<tr>
+<td><strong>待用户定</strong></td>
+<td>视频里 10 秒之后的走向（继续出字 / 停住不动）；段头「正在执行」这一行要不要去掉</td>
+</tr>
+<tr>
+<td><strong>没破的规矩</strong></td>
+<td>行数冻结：<code>ChatScreen</code> 2747 / <code>ChatViewModel</code> 3244 / <code>RealAgentLoop</code> 1387</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2>一、这几天在修的，其实只有六件事</h2>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>用户看到的现象</th>
+<th>真因（一行）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>装上了，但进不去，进去还会话全没</td>
+<td><code>take(4000)</code> 把工具参数切成半截 JSON，启动时解析必炸</td>
+</tr>
+<tr>
+<td>报错了却复制不出来</td>
+<td>崩溃区块默认展开，把底部「复制 / 导出」顶出屏幕</td>
+</tr>
+<tr>
+<td>崩溃记录删不掉</td>
+<td>「清空」写在折叠区里，折叠态根本没有这个入口</td>
+</tr>
+<tr>
+<td>生图 404</td>
+<td>媒体借用了对话的 <code>baseUrl</code>（deepseek），打到了不存在的接口</td>
+</tr>
+<tr>
+<td>跑的时候思考与工具是两层，跑完才合</td>
+<td>流式期间的思考只活在草稿变量里，不在被渲染的列表里</td>
+</tr>
+<tr>
+<td>思考只剩最后一条、永远在最下面</td>
+<td>中间步 content 为空被整条丢弃，且一律被当成「变体」</td>
+</tr>
+</tbody>
+</table></div>
+<p>后两条占了 70% 的时间，也是这份报告的主线。</p>
+<hr />
+<h2>二、版本账</h2>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>版本</th>
+<th>提交</th>
+<th>改了什么</th>
+<th>构建</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1.911</td>
+<td><code>0cb363b</code></td>
+<td>启动自救：连 3 次起不来就把带病状态挪开（日志、会话都不删）</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.912</td>
+<td><code>7748386</code></td>
+<td>崩溃报告「复制」搬到看得见的地方</td>
+<td><strong>红</strong>（G3 断言误判）</td>
+</tr>
+<tr>
+<td>1.913</td>
+<td><code>6aff11a</code></td>
+<td>G3 判据修正：只认「有没有创建 VM」，不认写法</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.914</td>
+<td><code>819ce84</code></td>
+<td>诊断包补 Java 崩溃全文；启动失败改走救援页</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.915</td>
+<td><code>c0d75c1</code></td>
+<td>工具参数不再按字符截断（真根因）</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.916</td>
+<td><code>d2ffcc3</code></td>
+<td>出图端点独立；崩溃「清空」入口搬到折叠行</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.917</td>
+<td><code>76cb482</code> <code>cd22076</code></td>
+<td>段由唯一函数推算；「墙」从正文改成用户消息</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.918</td>
+<td><code>c345ec1</code></td>
+<td>流式草稿并入段（<code>withLiveDraft</code>）</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.919</td>
+<td><code>26fd042</code></td>
+<td>中间步思考实时落库并进 <code>trace</code></td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.920</td>
+<td><code>240afa8</code></td>
+<td>中间正文也进 <code>trace</code>（<code>asTrace</code>）</td>
+<td><strong>红</strong>（断言基线）</td>
+</tr>
+<tr>
+<td>1.921</td>
+<td><code>bbbd437</code></td>
+<td>同 1.920 + 三处断言跟随新签名</td>
+<td>绿，<strong>已发</strong></td>
+</tr>
+<tr>
+<td>1.922</td>
+<td><code>aae5801</code></td>
+<td>只加一条护栏断言（K1）</td>
+<td>绿</td>
+</tr>
+<tr>
+<td>1.923</td>
+<td><code>ee28255</code></td>
+<td>途中说的话不再被当「回答」；一轮只一个过程块、一段回答</td>
+<td><strong>红</strong>（编译错）</td>
+</tr>
+<tr>
+<td>1.924</td>
+<td><code>7d2ed46</code></td>
+<td>修 1.923 的跨模块 smart cast</td>
+<td><strong>红</strong>（U10 断言）</td>
+</tr>
+<tr>
+<td>1.925</td>
+<td><code>7389eca</code></td>
+<td>U10 断言跟随「带思考的流跑完不折回」</td>
+<td>取消（census 重复）</td>
+</tr>
+<tr>
+<td>1.926</td>
+<td><code>4d2ff77</code></td>
+<td>删掉与 1066 行重复的折回断言</td>
+<td>绿，50.9 MB</td>
+</tr>
+<tr>
+<td>—</td>
+<td><code>c95b187</code></td>
+<td>正文开流后「思考中」不再转圈</td>
+<td>本地绿，<strong>未推</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>三次红的根因没有一次是功能写错，全在「本地看不见的那一层」——第三节的第 4、5 条专门讲这个。</p>
+<hr />
+<h2>三、主线：为什么「思考与工具」总是分成两层</h2>
+<p>用户前后发了六七次截图和视频，说法一次比一次具体：</p>
+<blockquote>
+<p>「思考还有工具的调度，在运行的时候还是分为两层的，只有在最后才合在一起。」<br />
+「思考完之后调度工具，再自己思考——图 1 图 2 都是这样，不像我们。」</p>
+</blockquote>
+<p>前四次修改都只修到一半。真正的原因一层包一层。</p>
+<h3>第 1 次：段被三处各自推算（1.917 前半）</h3>
+<p>「哪些条目属于同一次 run」这个判断散在三个地方：渲染、折叠状态、正文归属。三处各算一遍，边界永远对不齐。</p>
+<p>→ 改法：<code>segmentAt</code> 成为<strong>唯一区间来源</strong>，<code>traceAt</code> 一次返回 <code>(run, ownership, drawBody)</code>，调用方没法只问一半。</p>
+<blockquote>
+<p>分成两个函数问过一次，后果是段首的思考被两边都判成「别人负责」，<strong>整段过程在界面上凭空消失</strong>。</p>
+</blockquote>
+<h3>第 2 次：「墙」判错了两次（1.917 后半）</h3>
+<p>段靠什么断开？</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>判据</th>
+<th>后果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>只收相邻的 <code>Tool</code></td>
+<td>正文一插进来就断成两块</td>
+</tr>
+<tr>
+<td>把「有正文的助手」当墙</td>
+<td>误伤同一条消息里的「先说一句 + 调工具」——这是最常见的真实形态</td>
+</tr>
+<tr>
+<td><strong>墙只有用户消息</strong>（现在）</td>
+<td>天然断开，其余全归一段</td>
+</tr>
+</tbody>
+</table></div>
+<h3>第 3 次：真正的原因不在渲染，在<strong>输入</strong>（1.918）</h3>
+<p>前两次修完，现象还在。因为段算的是 <code>List&lt;UiItem&gt;</code>，而流式期间的思考<strong>根本不在这个列表里</strong>——它活在 <code>reasoningDraft</code> 这个临时变量，正文活在 <code>streamDraft</code>，落库那一刻才写进去。</p>
+<p>所以「跑的时候两层、跑完才合」不是渲染 bug，是<strong>数据不同源</strong>。</p>
+<p>→ 改法：<code>withLiveDraft(messages, streamDraft, reasoningDraft)</code> 把草稿作为虚拟末项接在列表末尾，一起参与段计算。落库只是「虚拟项换成真实项」，位置不动。</p>
+<h3>第 4 次：思考只剩最后一条（1.919）</h3>
+<p>根因在存储与事件两层：</p>
+<ol>
+<li>收尾那句 <code>if (msg.content.isNotBlank())</code> 才落库——中间步「只想没答」，content 是空的，<strong>连 reasoning 一起被丢掉</strong>；</li>
+<li>就算落了，<code>appendToTurns</code> 对助手消息一律收进 <code>variants</code>（变体），一轮 N 个变体，界面只显示选中的那条。</li>
+</ol>
+<p>→ 改法：新增 <code>AgentEvent.AssistantStep</code>，loop 在<strong>派发工具之前</strong>把这一步交出去；<code>trace</code> 才是它的正确去处（定义本来就是「回答之前的过程，保序」）。</p>
+<blockquote>
+<p>顺序很关键：先派工具再发事件，思考就永远排在工具后面，链是断的。</p>
+</blockquote>
+<h3>第 5 次：中间那段正文被当变体（1.920 / 1.921）</h3>
+<p>「说一句 → 接着调工具 → 再说」——那句中间正文有内容，于是走了「变体」分支 → 界面消失，<strong>下一轮模型也读不到自己说过的话</strong>。</p>
+<p>判据还是错的：<code>content.isBlank()</code> 判的是「有没有文字」，我们要判的是「是不是本轮最终回答」。这件事只有调用方知道。</p>
+<p>→ 改法：<code>appendMessage(..., asTrace: Boolean = false)</code>，由收尾循环按 <code>msg !== lastAnswer</code> 显式声明；默认值 <code>false</code>，5 个 harness 零改动。</p>
+<h3>第 6 次：一轮里出现了两个「回答」（1.923）</h3>
+<p>1.921 之后，用户看到的最后一种错形态是：一轮里两个气泡、中间夹着思考——「我说了一句进展，它把这句当成了最终回答」。</p>
+<p>→ 改法：<code>answerAt()</code> 定义唯一化 = <strong>本轮最后一条有正文的助手</strong>；其余有正文的步一律变成流里的「说明」（标题「说明」、摘要首行、全文进详情），正文不进变体。</p>
+<blockquote>
+<p>这就是 1.923 那一版。它编译失败，故事见下一节。</p>
+</blockquote>
+<hr />
+<h2>四、做错了什么</h2>
+<p>这一段是这份报告里最该被记住的部分。</p>
+<h3>1. 我把「跑完自动折回」当成了正确行为</h3>
+<p>1.92x 之前，一段过程跑完会自动折成「2 次工具调用」一行。我以为这是「清爽」，写完还写进注释。</p>
+<p>用户的原话是：<strong>「合起来就看不见了。」</strong></p>
+<p>代价：一整轮返工，改判据、改断言、改文案。现在的规则是——<strong>带思考的流跑完保持展开</strong>（那正是他要看的东西，一步一行并不长），只有「全是工具、一句思考都没有」的流才自动收起。</p>
+<blockquote>
+<p>教训：折叠的价值是「不打扰」，但过程透明才是这个产品的卖点。默认收起等于把卖点藏起来。</p>
+</blockquote>
+<h3>2. 本地绿，不等于能编译</h3>
+<p>1.923 推上去，CI 第一件事就挂了：</p>
+<pre><code>e: TraceFlow.kt:263:43 Smart cast to 'String' is impossible, because
+   'm.reasoning' is a public API property declared in different module
+</code></pre>
+<p><code>TraceFlow.kt</code> 在 <code>:app</code>，<code>UiItem</code> 在 <code>:core</code>。R06 harness 是把 <code>core</code> 和 <code>app</code> <strong>合成一次编译</strong>跑的，跨模块的可见性规则根本没生效——本地 43 条全绿，CI 一行就红。</p>
+<p>代价：一次构建（约 21 分钟）+ 一次重推。</p>
+<blockquote>
+<p>现在的规矩：<strong>改了跨模块属性访问，本地 R06 绿不算数，必须过一遍 AGP 编译</strong>。</p>
+</blockquote>
+<h3>3. 断言写死了旧行为，把门禁顶红</h3>
+<p>1.924 修完编译，QA 门禁红：<code>PASS=169</code>，基线 170。</p>
+<p>原因：<code>Hotfix11Verification</code> 的 U10 断言写的是 <code>if (!active &amp;&amp; !touchedByUser)</code>——这是<strong>旧折回规则</strong>的字面复刻。代码按新意图改了，断言没跟。</p>
+<blockquote>
+<p>这里有个取舍：不能为了让门禁变绿去删断言（那是掩盖），也不能让代码迁就断言（那是倒退）。正确做法是<strong>断言跟随意图重写，守同一条语义</strong>。1.924 就是这么过的。</p>
+</blockquote>
+<h3>4. 同一件事断言了两遍</h3>
+<p>1.925 加「单行思考也要折回」的守卫，写完发现和 1066 行那条重复——census 从 632 变 633，而 census 的规矩是<strong>只减不增</strong>。</p>
+<p>代价：这一版直接取消，重来。</p>
+<blockquote>
+<p>教训：加断言之前先 grep 一遍语义，别只 grep 字面。</p>
+</blockquote>
+<h3>5. 我把用户的参照系认错了三次</h3>
+<p>用户发三张图对比，说「图 1 图 2 是对的，图 3 是错的」。我花了两轮去猜「图 2 是谁家产品」，还问「这是你们的产品吗」。</p>
+<p>用户的回答一次比一次重：</p>
+<blockquote>
+<p>「我说的，你是你自己这个应用 WorkBuddy。」<br />
+「是你脑子有问题吗？图 2 是 WorkBuddy，是你自己，不是我们的。」</p>
+</blockquote>
+<p>我把「用户拿什么当标准」当成了需要澄清的问题，其实他就是说：<strong>别人都长这样，我们不长这样。</strong></p>
+<blockquote>
+<p>教训：用户给参照物时，不要先考证参照物是谁，先看<strong>形状差在哪</strong>。</p>
+</blockquote>
+<h3>6. 文献是用户催了才去查的</h3>
+<p>改到第四轮，用户说：「看一下网上找一下资料啊，文献啊，特别是开源社区这些地方。」</p>
+<p>查完才发现方向一直是对的，但<strong>因为没有依据，每一轮都只能靠猜</strong>，猜一次改一次。查证花了不到半小时，省下的返工至少两轮。</p>
+<blockquote>
+<p>现在的规矩：形态类问题（「别人怎么排的」）<strong>先查再做</strong>，别拿自己的审美当共识。</p>
+</blockquote>
+<h3>7. 优先级判断错过一次</h3>
+<p>中途用户让我「把做过什么写成文档发到摊位」，我埋头写文档，用户下一句是：「先别管这个仓库文档了……你正文思考都夹在正文的回复里面了。」</p>
+<blockquote>
+<p>教训：界面还错着的时候，写文档是逃避。</p>
+</blockquote>
+<hr />
+<h2>五、做对了什么（可以复用的）</h2>
+<ol>
+<li><strong>只取约束，不抄实现。</strong> 查完 Anthropic / OpenAI / Vercel / Hermes 四家，结论只有一条：思考、工具、正文必须是<strong>同一条有序序列里的同级项</strong>。<code>grep "AI SDK|UIMessage" --include=*.kt app/ core/</code> → 0 处；依赖表里没有 agent 或 chat-UI 库。北辰自己的东西（<code>variants</code> + <code>selectedIndex</code>、<code>TraceRun</code> 段归属）一个没动。</li>
+<li><strong>一个判据只有一处定义。</strong> 段= <code>segmentAt</code>，回答= <code>answerAt</code>，归属= <code>traceOwnership</code>，三者全是派生。三处各算一次，是这一轮所有「整段消失」的根。</li>
+<li><strong>变异测试。</strong> 每条断言都要能被一句代码改动杀死：草稿不并入 → 2 红；段不算思考在跑 → 1 红；中间思考当变体 → 3 红；忽略 <code>asTrace</code> → 1 红；退回正文当墙 → 5 红。杀不死的断言等于没写。</li>
+<li><strong>帧级取证。</strong> 用户发视频说「挂了」，我不看缩略图，拉原文件按时间点抽帧：<code>640×1422 / 10.11s / 302 帧</code>。结论是「没崩、没白屏、链在长」——这才排除掉「闪退」这个方向。</li>
+<li><strong>行数冻结。</strong> 三个巨型文件全程没破线，新逻辑一律进新文件（<code>TraceFlow.kt</code> 372 行、<code>ChatToolTrace.kt</code> 434 行）。</li>
+</ol>
+<hr />
+<h2>六、加了什么</h2>
+<h3>代码</h3>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>东西</th>
+<th>在哪</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TraceFlow.kt</code>（372 行）</td>
+<td><code>ui/</code></td>
+<td>段的唯一定义：<code>segmentAt</code> / <code>answerAt</code> / <code>traceOwnership</code> / <code>withLiveDraft</code></td>
+</tr>
+<tr>
+<td><code>TraceSlot(run, ownership, drawBody)</code></td>
+<td><code>ui/TraceFlow.kt</code></td>
+<td>一次问全「画不画流 / 正文归谁 / 正文画不画」，调用方拿不到一半</td>
+</tr>
+<tr>
+<td><code>TraceStep.isThinking</code> + <code>note</code></td>
+<td><code>ui/TraceFlow.kt</code></td>
+<td>思考与工具同一套渲染；「已中断 / 已拒绝」在收起态也说得清</td>
+</tr>
+<tr>
+<td><code>AgentEvent.AssistantStep</code></td>
+<td><code>core/AgentLoop.kt</code></td>
+<td>派发工具<strong>之前</strong>把「只想没答」的步交给 UI</td>
+</tr>
+<tr>
+<td><code>appendMessage(..., asTrace)</code></td>
+<td><code>ui/ConversationProjection.kt</code></td>
+<td>显式声明「这条是过程」，有正文也进 <code>trace</code> 并保序</td>
+</tr>
+<tr>
+<td><code>encodeToolArgs</code> / <code>parseToolArgs</code></td>
+<td><code>core/ConversationStore.kt</code></td>
+<td>超长参数存合法占位；读侧补「解析失败」这道门</td>
+</tr>
+<tr>
+<td>思维链渲染</td>
+<td><code>ui/ChatToolTrace.kt</code></td>
+<td>一条竖线串起所有步骤；运行中的思考默认摊开，跑完不折回</td>
+</tr>
+</tbody>
+</table></div>
+<h3>行为</h3>
+<ul>
+<li>思考与工具<strong>按发生顺序交替</strong>在同一条竖线上；</li>
+<li>跑完<strong>不折回</strong>（带思考的流），过程一直可见；</li>
+<li>一轮<strong>只有一个回答气泡</strong>，途中说的话变成流里的一步；</li>
+<li>流式中草稿并入段，<strong>不再出现「上面一叠工具、下面单挂思考」</strong>；</li>
+<li>普通问答（1 条助手、无工具）不折流，思考仍是正文上方一行，与 ChatGPT 的 <code>Thought for 5s</code> 同形。</li>
+</ul>
+<hr />
+<h2>七、怎么证明</h2>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>资产</th>
+<th>内容</th>
+<th>数字</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>R06Verification.kt</code></td>
+<td>段边界、归属、草稿并入、交替顺序、空步不落、K1 空白步骤</td>
+<td><strong>43 / 0</strong></td>
+</tr>
+<tr>
+<td>H6 穷举</td>
+<td>9330 条合法序列钉 I1 / I2 / I3 三条不变式</td>
+<td>全通</td>
+</tr>
+<tr>
+<td><code>Hotfix11Verification.kt</code></td>
+<td>存储 / 投影契约</td>
+<td><strong>174 / 0</strong></td>
+</tr>
+<tr>
+<td>CI 门禁</td>
+<td>打包 → QA gate（PASS ≥ 基线 170）→ 上传</td>
+<td>1.926：<code>PASS=170 SKIP=0 FAIL=0</code>，6/6</td>
+</tr>
+<tr>
+<td>断言 census</td>
+<td>文本断言只减不增</td>
+<td>1746 条</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2>八、下一步</h2>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>优先级</th>
+<th>事</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>卡住无反馈</td>
+<td>视频里正文停在半句、停止按钮还在。若确认是断连（readTimeout 180s + 重试，最坏 9 分钟），加看门狗：无新字 30 秒显示「已 30 秒无响应 · 重试」</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>段头「正在执行」</td>
+<td>参考实现没有这层壳，直接从第一步开始。要不要去掉，等一句话</td>
+</tr>
+<tr>
+<td>P2</td>
+<td>出图真机验证</td>
+<td>端点归属已改，没出过图</td>
+</tr>
+<tr>
+<td>P3</td>
+<td>通知正文</td>
+<td>目前只有「来源 + 条数」</td>
+</tr>
+<tr>
+<td>—</td>
+<td><code>c95b187</code> 发版</td>
+<td>本地绿，等确认后推 CI</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2>九、装哪个</h2>
+<p><strong>1.926</strong>（50,897,982 字节，包内 versionCode 926）：</p>
+<pre><code>https://ghfast.top/https://github.com/Kdkdmwnwdkd/Polaris/releases/download/latest/app-release.apk
+</code></pre>
+<p>直连慢时用加速前缀；备用 <code>https://gh-proxy.com/</code> + 同一路径。</p>
+<p><strong>真机该看四处</strong>：</p>
+<ol>
+<li>一轮里多次工具调用时，思考与工具应<strong>交替</strong>出现在同一条竖线上；</li>
+<li>正在想的那一步在<strong>流尾</strong>打转，不是另起一块挂在下面；</li>
+<li>「我先看一下配置」这类中途说的话，停在它说出的位置；</li>
+<li>跑完之后整条链<strong>还在</strong>，不会缩成一行。</li>
+</ol>
+<p class="foot">北辰 · Polaris · 这份文件由仓库内 markdown 生成，源文件：<code>北辰工作总报告-2026-11-26_27.md</code></p>
+</div>
+</body>
+</html>
