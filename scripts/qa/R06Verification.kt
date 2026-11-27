@@ -32,6 +32,7 @@ import com.beichen.polaris.core.toMsgRecord
 import com.beichen.polaris.ui.ConversationProjection
 import com.beichen.polaris.ui.GenerationRunController
 import com.beichen.polaris.ui.TraceOwnership
+import com.beichen.polaris.ui.traceAt
 import com.beichen.polaris.ui.traceOwnership
 import com.beichen.polaris.ui.traceRunAt
 import kotlinx.coroutines.CoroutineScope
@@ -471,8 +472,10 @@ fun main() {
         )
         eq(flow.toolCount, 2, "工具数")
         eq(flow.failedCount, 1, "失败数")
-        eq(flow.absorbed, setOf(1, 3), "两条无正文的思考整条吸收")
-        eq(flow.tailIndex, 5, "交出正文的那条是段尾")
+        eq(flow.range, 1..5, "段区间")
+        eq(flow.bodyIndex, 5, "交出正文的那条是段尾")
+        // 「两条无正文的思考整条吸收」由 H2 的 ownership 断言：从区间 + 正文有无就能
+        // 现算谁被吸收，不再需要一份独立的下标集合（那种第二份状态正是 902 的错误来源）。
     }
 
     check("H2 段内非首条不重复渲染") {
@@ -497,7 +500,7 @@ fun main() {
         val second = traceRunAt(msgs, 2)
         expect(second != null, "它后面的工具应当自成一（新）段")
         eq(second!!.steps.size, 1, "新段里只有它自己")
-        eq(second.tailIndex, -1, "新段没有正文尾巴")
+        eq(second.bodyIndex, -1, "新段没有正文尾巴")
     }
 
     check("H5 中断的步骤带文字说明") {
@@ -507,6 +510,95 @@ fun main() {
         eq(flow!!.steps[0].note, "已中断", "中断态要有文案，不能只给一个灰点")
         eq(flow.interruptedCount, 1, "中断计数")
         eq(flow.running, false, "中断不是运行中")
+    }
+
+    // ── [H6/H7] 不变量：穷举所有条目组合 ──────────────────────────
+    //
+    // 前面 H1~H5 是「我记得的几种排布」。可这类 bug 的共同点是**不报错**：
+    // 界面少一张卡、少一段回答，日志里什么都不留。真正能兜住的是一个对任意
+    // 序列都必须成立的命题。五种条目穷举到长度 5（3905 条），把下列三条钉死：
+    //
+    //   I1 每条工具都必须被**某一段**覆盖（否则那张卡谁都不画）
+    //   I2 任意两段的区间不重叠（否则同一段画两遍）
+    //   I3 一次问全 == 分开问两次（否则调用方只问一半就重现 902 的消失）
+    //
+    // 另加 H7：带正文的助手消息永远不被吸收（回答消失是最贵的一种错）。
+
+    val atoms = listOf(hUser, hThink1, hTool1, hAnswer, hTool2, hThink2)
+
+    fun eachSequence(body: (List<UiItem>) -> Unit) {
+        var n = 0
+        fun gen(prefix: List<UiItem>, depth: Int) {
+            if (depth == 0) return
+            for (a in atoms) {
+                val next = prefix + a
+                n++
+                body(next)
+                gen(next, depth - 1)
+            }
+        }
+        gen(emptyList(), 5)
+        expect(n > 9_000, "穷举条数太少（$n），不变量没覆盖到")
+    }
+
+    check("H6 不变量：每条工具都被一段覆盖、区间不重叠、一次问全等于分开问") {
+        var tools = 0
+        eachSequence { msgs ->
+            val runs = msgs.indices.mapNotNull { traceRunAt(msgs, it) }
+
+            // I1 每条工具都有人画
+            msgs.forEachIndexed { i, m ->
+                if (m is UiItem.Tool) {
+                    tools++
+                    expect(runs.any { i in it.range }, "下标 $i 的工具谁都没画（界面上会少一张卡）：$msgs")
+                }
+            }
+            // I2 区间不重叠
+            for (a in runs.indices) {
+                for (b in a + 1 until runs.size) {
+                    val x = runs[a].range
+                    val y = runs[b].range
+                    expect(
+                        x.last < y.first || y.last < x.first,
+                        "两段区间重叠：$x 与 $y（同一段会画两遍）：$msgs"
+                    )
+                }
+            }
+            // I2b 段里必须真有工具
+            //
+            // 「只有思考、没有工具」是流式中的常见中间态（模型刚开始想、还没调工具）。
+            // 这种段落若成流，界面会从「正文上方的思考一行」跳变成「一步的过程流」，
+            // 等工具出现再跳回来。H3 只测了「思考+正文」，漏了这条纯思考的情形，
+            // 所以补在这里——变异测试把它改坏时，H3 是绿的。
+            for (r in runs) {
+                expect(r.toolCount > 0, "这一段一个工具都没有，不该成流：${r.range} @ $msgs")
+            }
+            // I3 一次问全 == 分开问（只有段首拿得到流）
+            for (i in msgs.indices) {
+                val slot = traceAt(msgs, i)
+                eq(slot.run, traceRunAt(msgs, i), "traceAt.run @ $i")
+                eq(slot.ownership, traceOwnership(msgs, i), "traceAt.ownership @ $i")
+                if (slot.run != null) eq(slot.run.range.first, i, "拿到流的必须是段首 @ $i")
+            }
+        }
+        expect(tools > 3_000, "穷举里工具出现次数太少（$tools）")
+    }
+
+    check("H7 正文永远不会被吸收（回答消失是最贵的错）") {
+        var withBody = 0
+        eachSequence { msgs ->
+            msgs.forEachIndexed { i, m ->
+                if (m is UiItem.Assistant && m.text.isNotBlank()) {
+                    withBody++
+                    val own = traceOwnership(msgs, i)
+                    expect(
+                        own != TraceOwnership.ABSORBED,
+                        "下标 $i 的回答被判成「已并入流」，界面上会直接消失：$msgs"
+                    )
+                }
+            }
+        }
+        expect(withBody > 1_000, "穷举里带正文的消息太少（$withBody）")
     }
 
     // ── 汇总 ────────────────────────────────────────────────────

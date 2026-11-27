@@ -384,13 +384,12 @@ fun ChatScreen(
                 // F17 兜底：messageKeys 由 remember(messages) 算，key lambda 却在测量阶段调用，
                 // 此时 messages 可能已是下一帧的（刚插入工具卡）——直接索引会越界崩页（模拟器实测）。
                 itemsIndexed(messages, key = { index, _ -> messageKeys.getOrNull(index) ?: "fallback-$index" }) { index, item ->
-                    // 2026-11-26：工具与思考收成一条「过程流」。这里算两件事——
-                    // ① 本条的流（只有段首拿得到，段内其余返回 null）；
-                    // ② 助手消息的归属：整条被吸收 / 只留正文 / 自己全渲染。
+                    // 2026-11-26：工具与思考收成一条「过程流」。一次问全：本条的流
+                    //（只有段首拿得到）+ 正文归属（整条跳过 / 只留正文 / 自己全渲染）。
+                    // 分成两个函数问过，后果是段首的思考被两边都判成「别人负责」，整段消失。
                     // 跳过的只是不渲染，数据一条没删：落盘与模型上下文都与改前一致。
-                    val trace = traceRunAt(messages, index)
-                    val own = if (item is UiItem.Assistant) traceOwnership(messages, index) else TraceOwnership.NONE
-                    if ((item is UiItem.Tool && trace == null) || own == TraceOwnership.ABSORBED) {
+                    val slot = traceAt(messages, index)
+                    if ((item is UiItem.Tool && slot.run == null) || slot.ownership == TraceOwnership.ABSORBED) {
                         return@itemsIndexed
                     }
                     val prev = messages.getOrNull(index - 1)
@@ -404,10 +403,10 @@ fun ChatScreen(
                             item,
                             // 流式光标只在「末尾且无草稿气泡」时显示；有草稿时草稿自己带光标
                             streaming = running && index == messages.lastIndex && streamDraft == null,
-                            trace = trace,
+                            trace = slot.run,
                             // 思考已进上方过程流：段首自己画流，段尾只画正文；段末还在长时保持展开
-                            thinkingInFlow = trace != null || own == TraceOwnership.TAIL,
-                            traceLive = running && trace != null && trace.lastIndex == messages.lastIndex
+                            thinkingInFlow = slot.run != null || slot.ownership == TraceOwnership.TAIL,
+                            traceLive = running && slot.run != null && slot.run.lastIndex == messages.lastIndex
                         )
                         // W-30：翻译结果（按消息下标缓存；只显示、不写入会话内容）
                         translations[index]?.let { tr ->
