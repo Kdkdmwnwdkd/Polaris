@@ -10,6 +10,8 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import java.io.File
 import java.util.UUID
@@ -256,8 +258,9 @@ fun UiItem.toMsgRecord(): MsgRecord = when (this) {
         role = ROLE_TOOL,
         content = result.take(MAX_FIELD_CHARS),
         toolName = call.name,
-        // arguments 是 JsonObject，toString() 即标准 JSON 文本，直接存
-        toolArgs = call.arguments.toString().take(MAX_FIELD_CHARS),
+        // arguments 是 JsonObject，toString() 即标准 JSON 文本，直接存。
+        // 超预算时**不能**像正文那样 take()——见 encodeToolArgs 的注释。
+        toolArgs = encodeToolArgs(call.arguments),
         isError = isError,
         // R-06：只有「执行中」这一段落 pending=true；终态落盘时一并清掉
         pending = running && !interrupted,
@@ -368,12 +371,51 @@ fun ConversationRecord.toUiItems(): List<UiItem> = buildList {
     }
 }
 
-/** 解析落盘的 toolArgs；损坏/为空时退回空 object（工具卡入参块显示空白而非崩溃）。 */
+/**
+ * toolArgs 落盘编码。
+ *
+ * 2026-11-27 真机，十次闪退的根因就在这里。
+ *
+ * 修前与正文共用一条截断：`call.arguments.toString().take(MAX_FIELD_CHARS)`。
+ * 正文是纯文本，切一半只是显示不全；参数是**结构化 JSON**，切一半就是非法 JSON。
+ * 真机上的那条被切在 `<rect x="322" y="215"` 中间——一次生图/绘图工具的入参里
+ * 带了几十字节的 SVG，超过 4000 就断在那儿。落盘后下次启动：
+ *
+ *   ConversationProjection.<init> → loadOf → toUiItems → toUiItem → parseToolArgs
+ *     → Json.parseToJsonElement → JsonDecodingException: Unexpected EOF at path: $
+ *   → ChatViewModel.<init> 抛 → 「Cannot create an instance of ChatViewModel」→ 闪退
+ *
+ * 一条消息就这么把整个应用锁在门外，而且**每次启动都复现**（坏数据一直在盘上）。
+ *
+ * 超预算时改存一个**合法**的占位对象：告诉读的人「省了多少、有哪些字段」，
+ * 而不是留半截让解析器去猜。断言在 run-conversation-toolargs-verification.sh。
+ */
+private fun encodeToolArgs(args: JsonObject): String {
+    val raw = args.toString()
+    if (raw.length <= MAX_FIELD_CHARS) return raw
+    return buildJsonObject {
+        put("__note", JsonPrimitive("参数过长，已省略（原文 ${raw.length} 字符）"))
+        put("__chars", JsonPrimitive(raw.length))
+        put("__keys", JsonPrimitive(args.keys.joinToString(",")))
+    }.toString()
+}
+
+/**
+ * 解析落盘的 toolArgs；损坏/为空时退回空 object（工具卡入参块显示空白而非崩溃）。
+ *
+ * 三道门，缺一道就是线上逃逸：
+ *  ① 空值；
+ *  ② **解析本身失败**——1.911 及更早写下的截断参数就落在这里（见 [encodeToolArgs]）。
+ *     原来没有这道：`Json.parseToJsonElement` 直接抛 JsonDecodingException。
+ *  ③ 解析成功但不是对象（历史脏数据 / 手工编辑）——W-47 加的那次软转换。
+ *
+ * 注释早就写着「损坏时退回空 object」，但代码只挡了第三道。承诺和实现对不上，
+ * 而这一种对不上恰好落在启动路径上——这是本轮最贵的一个教训。
+ */
 private fun parseToolArgs(raw: String?): JsonObject {
     if (raw.isNullOrBlank()) return JsonObject(emptyMap())
-    // W-47：改用软转换——落盘里若出现 null/非对象（历史脏数据、手工编辑），
-    // 硬转换会抛 IllegalArgumentException，工具卡整块渲染失败；这里退化为空对象。
-    return Json.parseToJsonElement(raw).objOrNull() ?: JsonObject(emptyMap())
+    return runCatching { Json.parseToJsonElement(raw).objOrNull() }
+        .getOrNull() ?: JsonObject(emptyMap())
 }
 
 /**

@@ -477,7 +477,11 @@
 #   依据是 run 45319884795：PASS=167 SKIP=0 XFAIL=0 FAIL=0，GATE PASS。
 #   （任务书里写的 168 是手数 runner 文件得到的，与 gate 汇总的 PASS 口径差 1；
 #     这里以 gate 实际读到的那个数为准，否则门禁 5 会对不上。）
-168
+169
+# 2026-11-27：168 → 169（toolArgs 截断导致整应用打不开）。
+#   新增 run-conversation-toolargs-verification.sh（7 条断言，两组变异各自被精确抓住：
+#   改回 take → 2 红；去掉 runCatching → 2 红）。
+#   这条是 1.911 那十次闪退的根因，值得单独钉一个 runner，否则改回去没人会发现。
 # 2026-11-26：167 → 168（StartupGuard 启动自救）。
 #   新增 run-startup-guard-verification.sh（纯 JVM 跑判定与隔离，4 组变异全部靶向精确）。
 #   依据是 run 911（提交 0cb363b）：PASS=168 SKIP=0 XFAIL=0 FAIL=0，GATE PASS。
