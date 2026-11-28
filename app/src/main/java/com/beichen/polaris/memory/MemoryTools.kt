@@ -69,6 +69,12 @@ class MemoryWriteTool(private val store: MemoryStore) : AgentTool {
             val salience = args["salience"]?.primOrNull()?.contentOrNull?.trim()
                 ?.toIntOrNull()?.coerceIn(1, 7) ?: 5
 
+            // 为什么 memory_write **故意**不暴露 pinned：
+            // pinned 免于衰减与淘汰，等价于「永久驻留且每轮必进提示词」。上面刚把 salience
+            // 压到 7 才堵住「模型给自己置顶」，再开一个 pinned 参数就等于把那个口子以更彻底
+            // 的形式还回去——被注入的一段文字只要带 pinned=true，就能永久占据上下文，
+            // 且用户在任何衰减/淘汰里都看不到它被清掉。
+            // 所以 pinned 只有两个合法入口：用户手动标记（UI）、系统写入硬约束（负知识）。
             val item = store.add(content, kind, tags, salience)
             val tagText = if (item.tags.isEmpty()) "无" else item.tags.joinToString(",")
             ToolResult.ok(

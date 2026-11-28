@@ -26,6 +26,7 @@ import com.beichen.polaris.core.runtime.AgentLoopFactory
 import com.beichen.polaris.core.runtime.AgentRuntime
 import com.beichen.polaris.core.runtime.RunSource
 import com.beichen.polaris.core.runtime.RuntimeSessions
+import com.beichen.polaris.core.pit.PitBook
 import com.beichen.polaris.core.agent.TurnObservers
 import com.beichen.polaris.core.agent.HistoryCompactor
 import com.beichen.polaris.core.agent.toPriorTurn
@@ -1274,7 +1275,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         viewModelScope.launch(Dispatchers.IO) {
             val candidates = MemoryAutoCapture.extract(userText)
             if (candidates.isEmpty()) return@launch
-            val existing = memoryStore.snapshot().map { it.content }
+            val existing = memoryStore.activeContents()
             var added = 0
             candidates.forEach { c ->
                 if (MemoryAutoCapture.isDuplicate(c.content, existing)) return@forEach
@@ -1702,7 +1703,7 @@ class ChatViewModel(private val app: Application) : AndroidViewModel(app),
         seams = productionSeams(toolGuards = listOf(egressGuard)),
         // R1：回合日志——崩溃恢复的唯一依据。原来 checkpoint 恒为 null（四个断点全是空调用），
         // 进程在「工具已执行、结果未落盘」时被杀，重进会重放写操作。
-        journal = turnJournal,
+        journal = turnJournal, pits = PitBook(File(app.filesDir, "pits/pits.json")),
         // L9：每轮运行都把当前记忆摘要注入系统提示
         memoryProvider = { memoryStore.summaryForPrompt(12, 1200) },
         // Hotfix2：工具调用过程实时上屏（执行中卡 → 终态卡），

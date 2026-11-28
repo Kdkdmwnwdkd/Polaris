@@ -526,7 +526,13 @@ class RegistryToolExecutor(
             failureGuard.onExecuted(
                 fingerprint,
                 failed = result.isError,
-                transient = result.isError && isTransientFailureCode(result.code)
+                transient = result.isError && isTransientFailureCode(result.code),
+                // 坑图输入（§11.21.2）：工具名 + 结果码 + 参数摘要。
+                // 摘要用**原始** arguments 而不是归一化后的——归一化是给指纹去重用的，
+                // 给人看的那份得保留原文，否则「点的是哪个按钮」看不出来。
+                tool = call.name,
+                code = result.code,
+                sample = call.arguments.toString().take(160)
             )
             // T02 + T06：统一契约格式化 + 单结果截断（UI 与模型历史共用同一份文本）
             val text = truncateToolResult(formatToolResult(result), maxResultChars)
@@ -541,7 +547,11 @@ class RegistryToolExecutor(
             // 取消不是失败：不上计数、不造假结果，直接上抛由树尾闭合补全
             throw cancel
         } catch (e: Throwable) {
-            failureGuard.onExecuted(fingerprint, failed = true)
+            failureGuard.onExecuted(
+                fingerprint, failed = true,
+                tool = call.name, code = "exception",
+                sample = call.arguments.toString().take(160)
+            )
             AgentLogger.e("Tool", "${call.name} 执行异常", e)
             ToolCallOutcome.Completed(
                 toolMessageOf(
@@ -579,7 +589,12 @@ class RegistryToolExecutor(
         val seconds = budgetMs / 1000
         // 只读超时是环境性的（服务没起、网络卡住），与 service_not_ready 同类：不计入熔断。
         // 写超时相反——同一个写调用连续超时还让它重试，就是在拿数据赌运气。
-        failureGuard.onExecuted(fingerprint, failed = true, transient = readOnly)
+        failureGuard.onExecuted(
+            fingerprint, failed = true, transient = readOnly,
+            // 只读超时被 transient 挡在坑图之外（环境问题不是坑）；写超时会记进来。
+            tool = toolName, code = "timeout",
+            sample = call.arguments.toString().take(160)
+        )
         AgentLogger.w(
             "Tool",
             "工具超时 $toolName：${seconds}s（${if (readOnly) "只读" else "写操作"}，实际等待 ${costMs}ms）"

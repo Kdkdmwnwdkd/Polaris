@@ -30,6 +30,11 @@ if [ -z "${KOTLINC_JAR:-}" ] || [ -z "${STDLIB:-}" ] || [ -z "${SERIALIZATION:-}
   if [ -x "$KC_HOME/bin/kotlinc" ]; then
     KOTLINC_BIN="$KC_HOME/bin/kotlinc"
     STDLIB=${STDLIB:-$KC_HOME/lib/kotlin-stdlib.jar}
+    # 发行版自带序列化插件，必须显式挂上：否则 @Serializable 不生成序列化器，
+    # persist() 里的 runCatching 会把 "Serializer not found" 吞成「没写盘」，
+    # 于是所有只查内存态的断言照样全绿——本文件开头注释警告过这个坑，
+    # 但原来只堵了「Gradle 缓存缺失」那一支，没堵「有 kotlinc 发行版」这一支。
+    SER_PLUGIN=${SER_PLUGIN:-$KC_HOME/lib/kotlinx-serialization-compiler-plugin.jar}
     SERIALIZATION=${SERIALIZATION:-$(qa_find_jar "$QA_GRADLE_CACHE/org.jetbrains.kotlinx/kotlinx-serialization-json-jvm/1.6.3" "*.jar")}
     # 历史遗留路径：只有缓存完全没有时才用（沙箱里手工放的一次性产物）
     [ -n "${SERIALIZATION:-}" ] || SERIALIZATION=/tmp/w7-jars/kotlinx-serialization-json-jvm-1.6.3.jar

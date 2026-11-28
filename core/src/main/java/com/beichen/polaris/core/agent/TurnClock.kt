@@ -117,26 +117,88 @@ internal class TurnClock(
 }
 
 /**
+ * 回合结束原因（R8）。
+ *
+ * **为什么收成枚举**：改造前 8 个出口散在 `RealAgentLoop` 里写裸字符串，拼错一个
+ * （`max_step`）不报任何错——只会让日志里出现一个没人认识的值，而排障恰恰依赖
+ * 「这个值一定在已知集合里」这个前提。收成枚举后，拼错变成编译错误。
+ *
+ * **另一个更要紧的原因**：改造前 `turnClosed(reason)` 用的是另一个局部变量 `reason`，
+ * 它只有 completed / cancelled / failed 三种取值。于是 `max_steps`、`budget_exceeded`、
+ * `stopped` 这三个「没做完」的出口，在**回合日志**里全被记成 `completed`——事件通道
+ * 说的是实话，日志通道在撒谎，两条记录互相打架。现在两边共用同一个 [TurnEndStatus]，
+ * 结构上就没有「说两套话」的可能。
+ *
+ * [wire] 是写进日志 / NDJSON 的字符串，**必须与历史值逐字一致**：既有日志解析、
+ * harness 断言、用户手里的历史文件都认这些字面值。可以改枚举名，不能改 wire。
+ */
+internal enum class TurnExit(val wire: String) {
+    /** 模型正常给完了回答。 */
+    Completed("completed"),
+
+    /** 用户点了停止，或协程被取消。 */
+    Cancelled("cancelled"),
+
+    /** 异常：模型调用失败、executor 违约等。 */
+    Failed("failed"),
+
+    /** 模型直接回答、没派发任何工具（一条消息就结束的轻回合）。 */
+    InlineReply("inline_reply"),
+
+    /** 超出回合总预算，优雅收尾。 */
+    BudgetExceeded("budget_exceeded"),
+
+    /** 用满步数上限——**没做完**，不是完成。 */
+    MaxSteps("max_steps"),
+
+    /** 中途收到停止请求（优雅停止通道）。 */
+    Stopped("stopped"),
+
+    /**
+     * 没有任何出口认领这一回合——**这是缺陷信号，不是正常状态**。
+     *
+     * 默认值故意设成它，而不是 `completed`：改造前默认 `completed` 属于 fail-open，
+     * 将来谁新加一个 return 出口忘了 `set`，日志里就静默多出一条「完成」，
+     * 而「完成」是最不该被伪造的状态。设成 Unknown 之后，同样的疏漏会在日志里
+     * 留下 `status=unknown`——不优雅，但一眼能看见，且不会污染完成率统计。
+     *
+     * 正常回合永远不该出现它；出现了就说明 `runTurnBody` 的某个出口漏了 `set`。
+     */
+    Unknown("unknown");
+
+    /**
+     * 是否算「这一回合把用户交代的事做完了」。
+     *
+     * 只有 [Completed] 与 [InlineReply] 算：前者走到模型主动收尾，后者本来就不需要动手。
+     * [MaxSteps] / [BudgetExceeded] 是**做到一半被制度性截断**——它们要是被当成「完成」，
+     * 任何按状态算完成率的报表都会系统性高估，且高估的恰好是最该被看见的那一端
+     * （停下来的那些，正是用户觉得「它没干完」的那些）。
+     *
+     * 今天没有业务代码读它（自动续跑靠 orphan 判定，见 `AutoResumePolicy`），
+     * 但它是「诚实记录」这层的判据；等 §11.18.9 的 `Exit` 真需要时有现成依据可用。
+     */
+    val isCompleted: Boolean get() = this == Completed || this == InlineReply
+}
+
+/**
  * 回合结束状态（R5）。
  *
  * 为什么不用一个局部 `var`：`runTurn` 的 finally 与 `runTurnBody` 的多个 return
  * 出口都要写它，跨方法用局部变量需要传出参数，啰嗦且容易漏。封成一个小对象后，
  * 每个出口只调 [set]，最后由 finally 统一发事件。
  *
- * 状态值的意义（排障时能直接看出回合是怎么结束的）：
- * - `completed`：模型正常给完了回答；
- * - `cancelled`：用户点了停止，或协程被取消；
- * - `failed`：异常（模型调用失败、executor 违约等）；
- * - `budget_exceeded`：超出回合总预算，优雅收尾；
- * - `max_steps`：用满步数上限；
- * - `stopped`：中途收到停止请求（优雅停止通道）。
+ * 状态值的意义见 [TurnExit]。
  */
 internal class TurnEndStatus {
+    /**
+     * 初值是 [TurnExit.Unknown] 而**不是** `Completed`：默认值是最危险的代码，
+     * 它在所有「忘了写」的路径上生效。默认「完成」等于让疏漏伪装成好消息。
+     */
     @Volatile
-    var value: String = "completed"
+    var value: TurnExit = TurnExit.Unknown
         private set
 
-    fun set(status: String) {
-        value = status
+    fun set(exit: TurnExit) {
+        value = exit
     }
 }

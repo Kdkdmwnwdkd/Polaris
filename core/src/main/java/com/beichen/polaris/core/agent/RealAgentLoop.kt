@@ -267,7 +267,9 @@ class RealAgentLoop(
      * 那是 `CancellationException` 的子类，会被当成「用户点停止」走树尾闭合，
      * 用户看到的是一堆「已取消」而不是一句人话。
      */
-    private val turnBudgetMs: Long = LoopDefaults.TURN_BUDGET_MS
+    private val turnBudgetMs: Long = LoopDefaults.TURN_BUDGET_MS,
+    /** 坑图（§11.21.2）：跨会话失败位置表；null = 不记。**只用于预警，绝不回流熔断**（见 `PitBook` 类注释）。 */
+    private val pits: com.beichen.polaris.core.pit.PitBook? = null
 ) : AgentLoop {
 
     /**
@@ -279,7 +281,7 @@ class RealAgentLoop(
      * 两次 service_not_ready（瞬时故障）把恒定指纹的失败计数永久留下，下个回合服务
      * 就绪后 ui_tree 仍被 requires_changed_call 挡死，模型「有眼无手」任务必败。
      */
-    private val failureGuard = FailureGuard()
+    private val failureGuard = FailureGuard(pits)
 
     /**
      * 本步已尝试的请求次数（P5-1）。
@@ -365,16 +367,15 @@ class RealAgentLoop(
             try {
                 return runTurnBody(userInput, images, priorMessages, null, clock, status)
             } catch (cancel: CancellationException) {
-                status.set("cancelled")
+                status.set(TurnExit.Cancelled)
                 throw cancel
             } catch (e: Throwable) {
-                status.set("failed")
+                status.set(TurnExit.Failed)
                 throw e
             } finally {
-                clock.emitTurnEnd(status.value)
+                clock.emitTurnEnd(status.value.wire)
             }
         }
-        var reason = TurnJournal.REASON_COMPLETED
         // R7：把执行域挂进协程上下文。
         //
         // 技能脚本与子代理都在**别人的调用栈里**执行（脚本在 Rhino 线程、工具在
@@ -387,19 +388,17 @@ class RealAgentLoop(
                 runTurnBody(userInput, images, priorMessages, turn, clock, status)
             }
         } catch (cancel: CancellationException) {
-            reason = TurnJournal.REASON_CANCELLED
-            status.set("cancelled")
+            status.set(TurnExit.Cancelled)
             throw cancel
         } catch (e: Throwable) {
-            reason = TurnJournal.REASON_FAILED
-            status.set("failed")
+            status.set(TurnExit.Failed)
             throw e
         } finally {
             // NonCancellable：取消路径上直接写会立刻再抛一次，日志就断在最后一步。
             // 收尾本身很快（一次 fsync），代价可以接受。
             withContext(NonCancellable) {
-                clock.emitTurnEnd(status.value)
-                turn.turnClosed(reason)
+                clock.emitTurnEnd(status.value.wire)
+                turn.turnClosed(status.value.wire)
                 // R7：prune 归 journal 管——注入的句柄（子代理）不该替主回合清理文件。
                 journal?.prune()
             }
@@ -466,7 +465,7 @@ class RealAgentLoop(
             checkpoint?.invoke(messages)
             clock.turnStarted(seamInput.text.length, exposure0.visible.size)
             hooks.beforeStop()
-            status.set("inline_reply")
+            status.set(TurnExit.InlineReply)
             return turnResult()
         }
 
@@ -493,7 +492,7 @@ class RealAgentLoop(
                     "回合超时：已运行 ${elapsed}ms（预算 ${turnBudgetMs}ms），在第 $step 步前优雅收尾"
                 )
                 hooks.beforeStop()
-                status.set("budget_exceeded")
+                status.set(TurnExit.BudgetExceeded)
                 messages.add(
                     AssistantMessage(
                         "⏱ 本次任务已连续运行 ${turnBudgetMs / 60_000} 分钟，先停在这里（防止一直占着设备）。\n" +
@@ -585,7 +584,7 @@ class RealAgentLoop(
                     "运行结束：${clock.elapsed()}ms，消息数=${messages.size}"
                 )
                 hooks.beforeStop()
-                status.set("completed")
+                status.set(TurnExit.Completed)
                 return turnResult()
             }
 
@@ -641,7 +640,7 @@ class RealAgentLoop(
             if (!shouldContinueNow()) {
                 AgentLogger.i("AgentLoop", "shouldContinue 返回 false，本轮中途收尾")
                 hooks.beforeStop()
-                status.set("stopped")
+                status.set(TurnExit.Stopped)
                 messages.add(AssistantMessage("⏹ 已根据请求停止。"))
                 return turnResult()
             }
@@ -649,7 +648,7 @@ class RealAgentLoop(
 
         AgentLogger.w("AgentLoop", "达到最大步数 $maxSteps，任务可能未完成")
         hooks.beforeStop()
-        status.set("max_steps")
+        status.set(TurnExit.MaxSteps)
         messages.add(
             AssistantMessage(
                 "⚠️ 本次任务已用满 $maxSteps 步（防止无限打转的硬上限），不是字数或 token 用完。\n" +

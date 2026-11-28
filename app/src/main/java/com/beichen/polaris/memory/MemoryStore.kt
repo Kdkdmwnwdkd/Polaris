@@ -16,6 +16,18 @@ import kotlin.math.ln
  * @param kind 语义分类：fact（事实）/ preference（偏好）/ event（事件）/ note（随手记）。
  * @param tags 检索用标签，辅助关键词命中。
  * @param salience 重要度 1..10，越高越不容易被淘汰，也越容易被摘进提示词。
+ * @param pinned 写入即钉住：不进衰减、不被容量淘汰。负知识与硬约束用它——
+ *   总表 §11.5 的反向结论：该永久保留的东西**不能**靠「重要度够高所以活下来」，
+ *   因为淘汰与衰减都在压力下才生效，而压力来的时候它已经没了。
+ * @param invalidAt 失效时刻（epoch 毫秒）。0 = 仍有效；> 0 = 自该时刻起不再参与
+ *   检索与提示词注入，但**记录本身留着**。
+ *
+ *   为什么不是直接删（总表 §11.13-6，Zep 双时态）：记忆冲突时「新事实覆盖旧事实」
+ *   如果靠物理删除，就永久失去了「它曾经认为 X，后来改成 Y」这段。而这段恰恰是
+ *   排障与追责唯一能用的证据——用户问「你什么时候开始搞错的」，只有旧记录能回答。
+ *
+ *   向后兼容：两个字段都有默认值，旧 `memory.json`（无此二字段）读回即
+ *   `pinned=false / invalidAt=0`，不需要迁移，也不需要版本号。
  */
 @Serializable
 data class MemoryItem(
@@ -25,8 +37,13 @@ data class MemoryItem(
     val tags: List<String> = emptyList(),
     val createdAt: Long,
     val updatedAt: Long,
-    val salience: Int = 5
-)
+    val salience: Int = 5,
+    val pinned: Boolean = false,
+    val invalidAt: Long = 0
+) {
+    /** 是否还能被检索到 / 注入提示词。 */
+    val isActive: Boolean get() = invalidAt <= 0
+}
 
 /**
  * 记忆库：让 Agent 拥有跨会话的长期记忆。
@@ -70,7 +87,8 @@ class MemoryStore(private val dir: File) {
         content: String,
         kind: String = "note",
         tags: List<String> = emptyList(),
-        salience: Int = 5
+        salience: Int = 5,
+        pinned: Boolean = false
     ): MemoryItem {
         val now = System.currentTimeMillis()
         val normalized = content.trim().take(MAX_CONTENT_CHARS)
@@ -83,7 +101,8 @@ class MemoryStore(private val dir: File) {
                 tags = emptyList(),
                 createdAt = now,
                 updatedAt = now,
-                salience = salience.coerceIn(MIN_SALIENCE, MAX_SALIENCE)
+                salience = salience.coerceIn(MIN_SALIENCE, MAX_SALIENCE),
+                pinned = pinned
             )
         }
         val item = MemoryItem(
@@ -93,7 +112,8 @@ class MemoryStore(private val dir: File) {
             tags = tags.map { it.trim() }.filter { it.isNotBlank() }.distinct(),
             createdAt = now,
             updatedAt = now,
-            salience = salience.coerceIn(MIN_SALIENCE, MAX_SALIENCE)
+            salience = salience.coerceIn(MIN_SALIENCE, MAX_SALIENCE),
+            pinned = pinned
         )
         synchronized(lock) {
             items.add(item)
@@ -111,7 +131,9 @@ class MemoryStore(private val dir: File) {
      */
     fun search(query: String, topK: Int = 10): List<MemoryItem> {
         val keywords = tokenize(query)
-        val snapshot = synchronized(lock) { items.toList() }
+        // 失效条目先剔掉再算 BM25：让它们留在库里当证据，但不许再影响 IDF 与排序——
+        // 否则一条已作废的旧事实会把「现在这个才对」的那条压下去。
+        val snapshot = synchronized(lock) { items.filter { it.isActive } }
         if (keywords.isEmpty()) return snapshot.sortedByDescending { it.updatedAt }.take(topK.coerceAtLeast(1))
         val now = System.currentTimeMillis()
         val scores = bm25Scores(snapshot, keywords)
@@ -123,10 +145,41 @@ class MemoryStore(private val dir: File) {
             .map { it.item }
     }
 
-    /** 最近记忆列表（按 updatedAt 降序）。 */
+    /** 最近记忆列表（按 updatedAt 降序）。失效留档的不出现。 */
     fun list(limit: Int = 50): List<MemoryItem> {
-        val snapshot = synchronized(lock) { items.toList() }
+        val snapshot = synchronized(lock) { items.filter { it.isActive } }
         return snapshot.sortedByDescending { it.updatedAt }.take(limit.coerceAtLeast(0))
+    }
+
+    /**
+     * 标记失效（**不删**）：从此刻起不再参与检索与提示词注入，记录留档。
+     *
+     * 与 [forget] 的分工：
+     *  - [forget] = 用户主动「这条我不要了」，物理删除，不可恢复；
+     *  - [invalidate] = 事实被新事实取代 / 判断被推翻，留档可追溯。
+     *
+     * 已经失效过的再标记一次是无操作（幂等）：重复调用不该刷新失效时刻，
+     * 否则「失效于何时」会随调用次数漂移，时间线就不可信了。
+     *
+     * @return 是否命中一条**有效**记忆（未命中或已失效都返回 false）。
+     */
+    fun invalidate(id: String, at: Long = System.currentTimeMillis()): Boolean {
+        return synchronized(lock) {
+            val idx = items.indexOfFirst { it.id == id }
+            if (idx < 0 || !items[idx].isActive) {
+                false
+            } else {
+                items[idx] = items[idx].copy(invalidAt = at, updatedAt = at)
+                persist()
+                true
+            }
+        }
+    }
+
+    /** 只取失效留档（排障 / 追溯用：「它以前认为什么」）。 */
+    fun invalidated(): List<MemoryItem> {
+        val snapshot = synchronized(lock) { items.filter { !it.isActive } }
+        return snapshot.sortedByDescending { it.invalidAt }
     }
 
     /** 按 id 遗忘；返回是否真的删掉了。 */
@@ -167,6 +220,9 @@ class MemoryStore(private val dir: File) {
                     content = normalized,
                     tags = cleanTags,
                     salience = clamped,
+                    // 用户手动改一条记忆 = 他重新确认了这条是对的，所以顺手解除失效。
+                    // 否则会出现「我明明改好了，它还是不用」——编辑后仍是失效态是最难解释的一种哑。
+                    invalidAt = 0,
                     updatedAt = System.currentTimeMillis()
                 )
                 persist()
@@ -183,7 +239,20 @@ class MemoryStore(private val dir: File) {
         }
     }
 
-    fun size(): Int = synchronized(lock) { items.size }
+    /** 有效记忆条数。失效留档的**不算**——它已经不是记忆，是证据。 */
+    fun size(): Int = synchronized(lock) { items.count { it.isActive } }
+
+    /** 物理条数（含失效留档）。备份 / 诊断 / 「库有多大」用它，别用 [size]。 */
+    fun totalSize(): Int = synchronized(lock) { items.size }
+
+    /**
+     * 有效条目的内容列表（去重用的便捷入口）。
+     *
+     * 为什么不让调用方自己 `snapshot().filter{...}.map{...}`：那样每个调用点都要记得过滤，
+     * 忘一处的后果是「旧事实挡住了新事实」，而从用户角度完全无法解释（他看不到失效条目）。
+     * 把过滤收进 store 里，调用方就没有忘的机会。
+     */
+    fun activeContents(): List<String> = synchronized(lock) { items.filter { it.isActive }.map { it.content } }
 
     /**
      * 功能五（P1-4b）：全量快照（备份用）。拷贝列表，调用方改不动内部状态。
@@ -209,7 +278,9 @@ class MemoryStore(private val dir: File) {
      * 且总长不超过 maxChars（宁少勿超），NUL/ < / & 等字符做 XML 转义避免破坏注入结构。
      */
     fun summaryForPrompt(maxItems: Int = 12, maxChars: Int = 1200): String {
-        val snapshot = synchronized(lock) { items.toList() }
+        // 失效条目绝不进提示词：把一条已经被推翻的旧事实喂给模型，
+        // 等于亲手制造「它明明知道却做错」的那类事故，而且事后无从解释。
+        val snapshot = synchronized(lock) { items.filter { it.isActive } }
         if (snapshot.isEmpty()) return ""
         val picked = snapshot
             .sortedWith(compareByDescending<MemoryItem> { it.salience }.thenByDescending { it.updatedAt })
@@ -272,14 +343,29 @@ class MemoryStore(private val dir: File) {
         }
     }
 
-    /** 容量上限保护：优先淘汰「salience 最低且最旧」的条目。 */
+    /**
+     * 容量上限保护。牺牲顺序（先牺牲最不痛的）：
+     *  1. 已失效的留档（它们本来就不参与检索，只是证据）；
+     *  2. 重要度最低且最旧、且**未被钉住**的有效条目；
+     *  3. 若剩下的全被钉住 —— 宁可变超限，也不动它们。
+     *
+     * 第 3 条是刻意留的：钉住是对用户的承诺（「这条我永远不会忘」），
+     * 为了守住一个容量常量去偷偷违反承诺，比涨 200 条 JSON 严重得多。
+     * 也正因为不能无限循环，这里没有 `while (overflow > 0 && items.isNotEmpty())`
+     * 那种写法 —— 全钉住时会空转成死循环。
+     */
     private fun trimToLimit() {
         var overflow = items.size - MAX_ITEMS
-        while (overflow > 0 && items.isNotEmpty()) {
-            val victim = items
-                .mapIndexed { index, item -> index to item }
-                .minWith(compareBy<Pair<Int, MemoryItem>> { it.second.salience }.thenBy { it.second.updatedAt })
-                .first
+        while (overflow > 0) {
+            val victim = items.indexOfFirst { !it.isActive }.takeIf { it >= 0 }
+                ?: items.withIndex()
+                    .filter { !it.value.pinned }
+                    .minWithOrNull(
+                        compareBy<IndexedValue<MemoryItem>> { it.value.salience }
+                            .thenBy { it.value.updatedAt }
+                    )
+                    ?.index
+                ?: return
             items.removeAt(victim)
             overflow--
         }

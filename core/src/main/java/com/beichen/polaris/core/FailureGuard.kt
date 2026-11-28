@@ -64,6 +64,15 @@ internal val TRANSIENT_FAILURE_CODES: Set<String> = setOf(
 internal fun isTransientFailureCode(code: String): Boolean = code in TRANSIENT_FAILURE_CODES
 
 /**
+ * 拦截文案里引用参数摘要的长度上限。
+ *
+ * 坑图存的是完整摘要（[com.beichen.polaris.core.pit.PitBook] 截 160 字符），但回喂给
+ * 模型的 hint 不该占那么多——它只需要认出「是哪个参数」，不需要全文。60 字符够放下一
+ * 个短 JSON 或一条输入文本的开头，再长就变成噪音，反而把真正的指引挤到看不见。
+ */
+private const val PIT_SAMPLE_IN_HINT = 60
+
+/**
  * 失败熔断 + 调用指纹去重（T04）。
  *
  * 判据（命中任一即 [GuardVerdict.Blocked]，不走真实执行）：
@@ -80,7 +89,7 @@ internal fun isTransientFailureCode(code: String): Boolean = code in TRANSIENT_F
  *    三不（不计数、不清除、不拦截）。
  * 被拦截的调用不更新状态：模型必须改参数/换工具才能解锁。
  */
-class FailureGuard {
+class FailureGuard(private val pits: com.beichen.polaris.core.pit.PitSink? = null) {
 
     // T03 并行批：多个只读工具在 async 内并发 check/onExecuted（不同指纹键），
     // 裸 HashMap 并发 put 会丢键/resize 损坏（QA 已复现 199/200、166/200）。
@@ -117,10 +126,35 @@ class FailureGuard {
             return GuardVerdict.Blocked(
                 code = "requires_changed_call",
                 message = "同一调用已失败 ${st.failures} 次，请修改参数。",
-                hint = "上次相同参数以失败告终，请改变参数或换一个工具后重试。"
+                hint = changedCallHint(fingerprint, st.failures)
             )
         }
         return GuardVerdict.Allow
+    }
+
+    /**
+     * 拦截文案：把坑图里「上次错在哪」带给模型。
+     *
+     * 修前只有一句「请改变参数或换一个工具后重试」——模型知道要改，但不知道改什么，
+     * 只能微调参数再撞一次。而坑图里明明存着结果码和参数摘要，却**一个字都没到过
+     * 模型眼前**（只落了盘）。这里把它接上。
+     *
+     * 边界：**只补文案，不碰判定**。是否拦截仍只看 [FailureState]，坑图永不回流
+     * （见 `resetForTurn` 记的 W-8：坑图一旦参与判定，就等于把「跨会话永久毒化」装回来）。
+     *
+     * 两个数字都留着是有意的：「本轮 3 次」说明模型刚才在打转，「历史 47 次」说明
+     * 这不是它今天手气差，而是这条路本来就不通——后者才是让它换路的理由。
+     */
+    private fun changedCallHint(fingerprint: String, failures: Int): String {
+        val pit = pits?.pitAt(fingerprint) ?: return "上次相同参数以失败告终，请改变参数或换一个工具后重试。"
+        return buildString {
+            append("上次相同参数以失败告终。本轮已失败 $failures 次，这个位置历史累计失败 ${pit.hits} 次")
+            if (pit.code.isNotEmpty()) append("，最近一次结果码 ${pit.code}")
+            if (pit.sample.isNotEmpty()) {
+                append("，参数为 ${pit.sample.take(PIT_SAMPLE_IN_HINT)}")
+            }
+            append("。同一位置反复失败通常意味着这条路走不通——换一条路，而不是微调参数。")
+        }
     }
 
     /**
@@ -132,8 +166,20 @@ class FailureGuard {
      *   true 时**三不**：不计数、不清指纹、不影响后续判定——环境就绪后原样重试应被放行。
      *   修前形态把 service_not_ready 等计入失败，恒定指纹（如无参 ui_tree）被毒化后
      *   跨回合永久拦截（真机日志 23:58：服务 23:57:47 已就绪，ui_tree 仍被挡死）。
+     * @param tool 工具名（可选）。给了才写坑图——坑图要的是「哪个工具、哪个参数」，
+     *   只给一个哈希过去没法给人看。**默认空串**：存量调用点（含 harness）不必改，
+     *   不给就只是不记坑，熔断行为完全不变。
+     * @param code 归一化结果码（可选），写进坑图的「最近一次长什么样」。
+     * @param sample 参数摘要（可选），同上。
      */
-    fun onExecuted(fingerprint: String, failed: Boolean, transient: Boolean = false) {
+    fun onExecuted(
+        fingerprint: String,
+        failed: Boolean,
+        transient: Boolean = false,
+        tool: String = "",
+        code: String = "",
+        sample: String = ""
+    ) {
         if (transient) return
         val cur = states[fingerprint] ?: FailureState()
         if (failed) {
@@ -141,6 +187,10 @@ class FailureGuard {
                 executions = cur.executions + 1,
                 failures = cur.failures + 1
             )
+            // 坑图：只在「真的失败」时记，且瞬时故障已在上面 return 掉。
+            // 注意这是**单向**的——坑图绝不会回流影响 [check] 的判定，
+            // 否则就等于把 W-8 修掉的那个「跨会话永久毒化」原样装回来。
+            if (tool.isNotEmpty()) pits?.onFailed(tool, fingerprint, code, sample)
         } else {
             // 成功清指纹：调用已被证明可工作，允许后续原样重试
             states.remove(fingerprint)

@@ -256,7 +256,11 @@ class TurnJournal(
         /**
          * 回合结束。重复调用只生效一次（取消路径与正常路径可能都想收尾）。
          *
-         * @param reason `completed` / `cancelled` / `failed` / `blocked`。
+         * @param reason 取值来自 `TurnExit.wire`（completed / cancelled / failed /
+         *   inline_reply / budget_exceeded / max_steps / stopped / unknown），
+         *   外加修复路径专用的 `interrupted`（见 `RunJournalRepair`）。
+         *   **必须是 `status.value.wire` 的直传**，不要再引入第二个 reason 变量——
+         *   R8 之前就是这么错的：事件通道发 `max_steps`，日志通道同一回合写 `completed`。
          */
         suspend fun turnClosed(reason: String): Boolean {
             if (!owner) return true
@@ -288,7 +292,16 @@ class TurnJournal(
     companion object {
         private const val TAG = "TurnJournal"
 
-        /** 回合结束原因：正常给出最终回答或走满步数。 */
+        /**
+         * 回合结束原因：**模型主动收尾**（给了最终回答，或明确不再调工具）。
+         *
+         * 改造前这里写的是「正常给出最终回答**或走满步数**」——一句话把两件事并成一个值，
+         * 代码就照着这个错误定义执行了：用满步数、超预算、被停止的回合，在日志里全写成
+         * `completed`。而「走满步数」恰恰是**没做完**。
+         *
+         * 现在回合结束用 `TurnExit`（`core/agent/TurnClock.kt`），这个常量只保留给
+         * 仍按三态工作的调用方（如 journal 自检 harness），**不要**再用它表达回合结束。
+         */
         const val REASON_COMPLETED = "completed"
 
         /** 回合结束原因：用户点「停止」或协程被取消。 */

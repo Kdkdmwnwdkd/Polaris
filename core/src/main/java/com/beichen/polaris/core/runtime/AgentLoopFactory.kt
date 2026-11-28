@@ -125,6 +125,8 @@ object AgentLoopFactory {
             RetryBackoffPolicy.networkAware(backoffPlan, networkRecovery),
         llmCallTimeoutMs: Long = LoopDefaults.LLM_CALL_TIMEOUT_MS,
         turnBudgetMs: Long = LoopDefaults.TURN_BUDGET_MS,
+        /** 坑图（§11.21.2）：跨会话失败位置表；null = 不记。 */
+        pits: com.beichen.polaris.core.pit.PitBook? = null,
     ): AgentLoop {
         // 事件闸门必须先于 loop 存在：RealAgentLoop 的 onEvent 是构造参数，
         // 而闸门要用「send 期间才存在的租约」做判断——所以闸门是共享的可变单元，
@@ -168,6 +170,7 @@ object AgentLoopFactory {
             retryBackoff = retryBackoff,
             llmCallTimeoutMs = llmCallTimeoutMs,
             turnBudgetMs = limits.deadlineMs,
+            pits = pits,
         )
         return RuntimeBoundAgentLoop(delegate, runtime, gate, session, source)
     }
