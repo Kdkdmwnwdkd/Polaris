@@ -69,7 +69,7 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-28 18:35</strong>（§11.22 完成度盘点 · 三种证据不能混着算）<br />
+<p>最后更新：<strong>2026-11-28 18:52</strong>（§11.22 更正 · 真机验过，是证据没入库）<br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -4759,8 +4759,114 @@ commit(action = &quot;退款&quot;)
 </tbody>
 </table></div>
 <p>手机上最容易坏事的三件（后台被 ROM 杀、悬浮窗要二次授权、键盘把按钮挡住），<strong>只有 L3 给得出答案</strong>，而且恰好是用户投诉最多的三件。</p>
-<h4>11.22.3 真实的 L3 证据只有两条，而且都是"发现问题"，不是"确认修好"</h4>
-<p>翻遍仓库，带"真机截图"字样的只有 2026-11-22 那两条：</p>
+<h4>11.22.3 上一版的判断错了，错在取证方法</h4>
+<p>这一节第一版写的是"物理真机 ≈ 5%，零条确认通过"。<strong>这是错的，而且是个低级错误。</strong></p>
+<p>错在哪：我只 <code>grep -l "真机"</code> 取了前 15 个文件，看到 <code>P1-冻结令</code> 那句"沙箱无真机"就下了结论，<br />
+<strong>从没打开过 <code>docs/ops/DEVICE-VERIFICATION-PENDING.md</code></strong>——那是一份 <strong>2268 行</strong>的真机台账，<br />
+里面 <strong>23 项 ✅、6 项 ❗</strong>，逐条记着"怎么验的、验到哪一步"：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>已验</th>
+<th>证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P7 发布包不可调试</td>
+<td>✅ 模拟器验完（<code>run-as</code> 报 <code>not debuggable</code>）</td>
+</tr>
+<tr>
+<td>P8 长命令不被 30 秒掐断</td>
+<td>✅ 模拟器验完（90 秒命令退出码 0，整轮 126 秒 <code>completed</code>）</td>
+</tr>
+<tr>
+<td>P10 应用内更新</td>
+<td>✅ <strong>真机已验</strong>（2026-11-13，710 → 711 覆盖升级，全程未跳浏览器）</td>
+</tr>
+<tr>
+<td>P11 桌面助手悬浮窗</td>
+<td>⚠️ 9/10（模拟器）</td>
+</tr>
+<tr>
+<td>P12 桌宠语音闭环</td>
+<td>⚠️ 8/9（模拟器 + 桩）</td>
+</tr>
+<tr>
+<td>P13 一键唤起</td>
+<td>⚠️ 9/9 有结论（3 条带保留）</td>
+</tr>
+</tbody>
+</table></div>
+<p>再加上 <code>/root/uploads</code> 里 <strong>39 个真机附件</strong>（13 份诊断包、9 份回合日志、9 份事件流，<br />
+时间从 11-23 到 11-25，版本 <code>1.861 → 1.881</code>）——<strong>真机一直在跑，而且跑的是 MEIZU 20 / Android 16</strong>，<br />
+正好是 <code>真机矩阵-v1.md</code> 里最缺的国产 ROM 槽位。</p>
+<p>所以准确的说法是三层，不是两层：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>说法</th>
+<th>对不对</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"没做真机验证"</td>
+<td>❌ 错，台账 2268 行、附件 39 个</td>
+</tr>
+<tr>
+<td>"真机验了很多，但<strong>没形成闭环</strong>"</td>
+<td>✅ 对</td>
+</tr>
+<tr>
+<td>"验过的证据<strong>没入库</strong>，只在沙箱里"</td>
+<td>✅ 对，这才是真问题</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>"没形成闭环"具体长什么样</strong>：39 个附件里能读出 7 条真机发现（见<br />
+<code>docs/ops/真机证据索引-2026-11.md</code>），其中只有 2 条有明确"已修"，而<strong>复验（打勾）一条都没有</strong>。<br />
+例如"待发照片跟着话题跑"那条，清单上标着 ★、写着"今天修的正是这个，重点看它有没有复发"——<br />
+<strong>至今没人回去看过它复发了没有</strong>。</p>
+<h4>11.22.3b 真正会丢的那部分</h4>
+<p>我上一轮说"没有验过没传"，这句话也得修正。准确的是：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>东西</th>
+<th>在哪</th>
+<th>会不会丢</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>验证台账（2268 行）</td>
+<td>git 里</td>
+<td>不会</td>
+</tr>
+<tr>
+<td>10 分钟自测清单</td>
+<td><code>/root/uploads</code> + 已进 git</td>
+<td>清单进过仓库，勾选结果没进来</td>
+</tr>
+<tr>
+<td><strong>13 份诊断包 / 18 份回合与事件日志</strong></td>
+<td><strong>只在 <code>/root/uploads</code></strong></td>
+<td><strong>会。沙箱回收就没了</strong></td>
+</tr>
+<tr>
+<td>用户口头反馈（"文件不能单独发""照片跟着话题跑"）</td>
+<td>只在会话 jsonl 里</td>
+<td>会。jsonl 不在 git，也不保证长期留</td>
+</tr>
+</tbody>
+</table></div>
+<p>这就是他问的那件事，答案是有可能，<strong>而且已经发生了一部分</strong>：这些日志里有 5 条发现是<br />
+模拟器和 CI 结构上抓不到的（租约回收空转、每轮打 base URL、<code>http_request</code> 卡 30 秒……），<br />
+如果沙箱先被回收，这些就只能靠记忆复述了。</p>
+<p>补救已经做了：把 39 个附件的结论抄成 <code>docs/ops/真机证据索引-2026-11.md</code> 入库，<strong>原件不入库</strong><br />
+（含设备信息与会话片段，不适合公开仓库）。</p>
+<h4>11.22.3c 但"修了没复验"这条仍然成立</h4>
 <div class="tblwrap"><table>
 <thead>
 <tr>
@@ -4780,18 +4886,16 @@ commit(action = &quot;退款&quot;)
 <td><strong>已修，1.848 已出包</strong></td>
 <td>同上</td>
 </tr>
+<tr>
+<td>待发照片跟着话题跑</td>
+<td>已修（★ 项）</td>
+<td>勾没打</td>
+</tr>
 </tbody>
 </table></div>
-<p>这是本次盘点最重要的一个纠正：</p>
-<blockquote>
-<p><strong>不是"待真机 6 天"，是"修了没复验"。</strong></p>
-</blockquote>
-<p>两句话差别很大：</p>
-<ul>
-<li>"待真机"——听起来是没条件，可以等。</li>
-<li>"修了没复验"——闭环只差最后一格，而最后一格<strong>只需要用户点一下</strong>。</li>
-</ul>
-<p>而文档里"已修""已出包"这两个词，读起来跟"已验证"几乎一样。这就是状态被高估的根源。</p>
+<p>"待真机"听起来是没条件、可以等；"修了没复验"是已经改完、装了包，就差有人回去看一眼。<br />
+后者更该催，因为成本低到十分钟。</p>
+<p>而文档里"已修""已出包"这两个词，读起来跟"已验证"几乎一样。<strong>这才是完成度被高估的真正根源。</strong></p>
 <h4>11.22.4 状态应该分四档，不是两档</h4>
 <p>现在的写法只有"改完了 / 没改"。应该四档：</p>
 <div class="tblwrap"><table>
@@ -4900,14 +5004,19 @@ commit(action = &quot;退款&quot;)
 <td>门禁实跑 <code>21 通过 / 0 失败 / 0 待收口</code>；52 处工具装配、四入口收口都有守卫钉着</td>
 </tr>
 <tr>
-<td>云机可证</td>
+<td>云机/模拟器可证</td>
 <td><strong>≈ 40%</strong></td>
-<td>能验的都验了，但云机给不出 ROM/硬件结论</td>
+<td>P7/P8/P11–P13 多数在这层拿的结论</td>
 </tr>
 <tr>
-<td><strong>物理真机可证</strong></td>
-<td><strong>≈ 5%</strong></td>
-<td>只有两条"发现问题"的截图，<strong>零条"确认通过"</strong></td>
+<td>物理真机</td>
+<td><strong>跑过，但覆盖不均</strong></td>
+<td>台账 23 项 ✅ / 6 项 ❗；P10 真机通过；P1–P3 容器、P14–P17 语音、P18 审批卡仍未验</td>
+</tr>
+<tr>
+<td><strong>闭环比</strong></td>
+<td><strong>≈ 30%</strong></td>
+<td>7 条真机发现里 2 条有"已修"、<strong>0 条有复验打勾</strong></td>
 </tr>
 </tbody>
 </table></div>
@@ -4939,12 +5048,13 @@ commit(action = &quot;退款&quot;)
 <p>如果只做十分钟的版本：装上 1.848，把 §11.22.5 里那五项"一眼就能确认"的过一遍，AUTO 项让脚本自己出结论。</p>
 <h4>11.22.9 净结论</h4>
 <ul>
-<li><strong>没有"验过没传"这回事</strong>——沙箱里没有真机，这一点仓库自己写着。</li>
-<li>真正的病是<strong>状态词混用</strong>："已修/已出包"被读成了"已验证"。</li>
-<li>更准的描述不是"待真机 6 天"，是"<strong>修了没复验</strong>"——闭环差最后一格。</li>
-<li>修法很便宜：<strong>状态加第四档 <code>真机通过</code>，前三档不许写成"能用"。</strong></li>
+<li>真机<strong>验过</strong>（台账 2268 行 / 23 项 ✅ / 39 个附件 / MEIZU 20 · Android 16），上一版说"≈5%"是错的。</li>
+<li>但<strong>证据没入库</strong>：18 份回合与事件日志只在沙箱里，沙箱一回收就没了。<code>docs/ops/真机证据索引-2026-11.md</code> 是为这个建的。</li>
+<li>真机的病不是"没验"，是<strong>没闭环</strong>：7 条发现 2 条"已修"，复验打勾 <strong>0 条</strong>。</li>
+<li>状态词必须分四档：<code>已修</code> / <code>已出包</code> / <code>云机通过</code> / <code>真机通过</code>，前三档不许写成"能用"。</li>
+<li>取证也有纪律：<strong>别拿 grep 命中数代替读主台账</strong>。这次就是栽在这上面。</li>
 </ul>
-<p>一句话：<strong>沙箱能证"它没错"，云机能证"它跑得动"，只有你的手能证"它好用"。前两个我都给你了，第三个我给不了。</strong></p>
+<p>一句话：<strong>沙箱能证"它没错"，云机能证"它跑得动"，真机能证"它到底行不行"——第三件事你做过了，只是没留档。</strong></p>
 <h3>11.23 这一章的来源（故意跨出 Agent 圈）</h3>
 <div class="tblwrap"><table>
 <thead>
@@ -5071,6 +5181,11 @@ commit(action = &quot;退款&quot;)
 <td>两段式一次解三件事；坑地图是唯一抄不走的资产；弹窗越多越无脑点是；能后悔才敢开始</td>
 </tr>
 <tr>
+<td><strong>真机证据（§11.22.3b）</strong></td>
+<td><code>/root/uploads</code> 39 个附件（13 诊断包 / 9 turns / 9 events / 1 视频 / 5 文档，11-23→11-25，版本 1.861→1.881，MEIZU 20 · Android 16 SDK 36）；<code>docs/ops/DEVICE-VERIFICATION-PENDING.md</code> 2268 行（23 ✅ / 6 ❗）</td>
+<td>真机一直在跑；证据只在沙箱；闭环 0 条打勾</td>
+</tr>
+<tr>
 <td><strong>完成度盘点（§11.22）</strong></td>
 <td><strong>仓库自证，无外部来源</strong>。<code>P1-冻结令-2026-11-17.md</code> 第 9 行「沙箱无真机，无法满足」；<code>docs/qa/真机矩阵-v1.md</code> 41 条 0 打勾；<code>docs/review/真机验证-审批弹窗-2026-11-11.md</code> 正文自述「云端 x86_64 模拟器」；HANDOFF 两条 2026-11-22 真机截图（余额 null / 审批又弹一条）均止于「已修，1.848 已出包」；门禁实跑 21 通过</td>
 <td>三层证据不可混算；不是「待真机」是「修了没复验」；状态要分四档</td>
@@ -5174,6 +5289,10 @@ commit(action = &quot;退款&quot;)
 <tr>
 <td>2026-11-28 18:35</td>
 <td><strong>新增 §11.22「完成度盘点：三种证据不能混着算」</strong>（来源表顺延 §11.23）。回答「是不是真机验过没传」——<strong>没有，沙箱无真机</strong>（<code>P1-冻结令</code> 第 9 行原文「真机矩阵跑过一轮——未做（沙箱无真机，无法满足）」）。① <strong>发现一份误命名</strong>：<code>docs/review/真机验证-审批弹窗-2026-11-11.md</code> 标题写「真机」，正文自述「云端 x86_64 模拟器 API 30」→ 已加命名更正；② <strong>三层证据分列</strong>：L1 沙箱（逻辑对）/ L2 云机（跑得动）/ L3 物理手机（<strong>用户能不能用</strong>），手机上最容易坏事的三件（ROM 杀后台、悬浮窗二次授权、键盘遮挡）只有 L3 给得出；③ <strong>真实 L3 证据只有两条</strong>，都是 11-22 用户自己截的图（余额 null、审批又弹一条），状态栏都止于「已修，1.848 已出包」，<strong>没有一条写「真机复验通过」</strong> → 纠正为「<strong>不是待真机 6 天，是修了没复验</strong>」，闭环差最后一格且只需用户点一下；④ <strong>状态分四档</strong>：<code>已修</code>/<code>已出包</code>/<code>云机通过</code>/<strong><code>真机通过</code></strong>，前三档不许写成「能用」；⑤ <strong>九项待真机逐项列缺哪条判据</strong>，其中五项的缺口小到十分钟可确认（版本号显示、三态文案、第三态一眼、二维码扫一次、审批卡画在哪）；⑥ 完成度三视角：沙箱 ≈90%（门禁实跑 <strong>21 通过/0 失败/0 待收口</strong>）、云机 ≈40%、<strong>物理真机 ≈5%（零条确认通过）</strong>；⑦ <strong>顺手修两处</strong>：HANDOFF 文档地图「当前 14 通过/1 待收口」→ 实跑 21/0/0（脚本加了 E 段 6 条 + F 段 4 条未回填），并在第六轮那句旁标「第六轮当时的数字」；11-11 文档加命名更正；⑧ 只能用户做的两件：撤销三个泄漏 PAT、跑真机矩阵。净结论：<strong>沙箱能证「它没错」，云机能证「它跑得动」，只有手能证「它好用」</strong>。本轮改 <code>HANDOFF.md</code> + <code>docs/review/</code> 命名更正 + 本文档，<strong>代码零改动</strong></td>
+</tr>
+<tr>
+<td>2026-11-28 18:52</td>
+<td><strong>§11.22 自我更正：真机验过，是证据没入库</strong>。上一版"物理真机 ≈5%、零条确认通过"<strong>是错的</strong>，错在只 <code>grep -l "真机"</code> 取前 15 个文件、没打开 <code>docs/ops/DEVICE-VERIFICATION-PENDING.md</code>（<strong>2268 行、23 项 ✅、6 项 ❗</strong>）就下结论。① 真机实测存在：<code>/root/uploads</code> <strong>39 个附件</strong>（13 诊断包 / 9 回合日志 / 9 事件流 / 1 视频），11-23→11-25，版本 <strong>1.861→1.881</strong>，机型 <strong>MEIZU 20 · Android 16 (SDK 36)</strong>——正是矩阵最缺的国产 ROM 槽位；② 从附件读出 <strong>7 条真机发现</strong>（见 <code>docs/ops/真机证据索引-2026-11.md</code>）：租约回收每 30 秒空转 174 次且空闲时长只涨不回落（B-8 标过 ✔ 但症状还在）、每轮打 provider/model/base URL、<code>http_request</code> 卡 30433ms、单独发文件/图、有字时麦克风消失（<strong>用户明确判定不改</strong>）、待发照片跟话题跑、诊断包三合一；③ <strong>真正会丢的部分</strong>：18 份 turns/events 只在沙箱，用户口头反馈只在会话 jsonl——沙箱回收即消失，已把结论抄成索引入库、原件不入库；④ <strong>仍然成立的一条</strong>：7 条里 2 条"已修"、<strong>复验打勾 0 条</strong>（★ 项写着"重点看它有没有复发"至今没人看）；⑤ 完成度表改为四行（沙箱 ~90% / 云机 ~40% / 真机跑过但覆盖不均 / <strong>闭环比 ~30%</strong>）；⑥ 新增取证纪律：<strong>别拿 grep 命中数代替读主台账</strong>。<strong>代码零改动</strong></td>
 </tr>
 </tbody>
 </table></div>
