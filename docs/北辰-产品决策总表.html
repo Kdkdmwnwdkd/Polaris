@@ -69,7 +69,7 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-28 15:10</strong>（§11.19 想法池 · 六条，标注为非结论）<br />
+<p>最后更新：<strong>2026-11-28 15:42</strong>（§11.20 可逆性由边界决定 · 修正三处旧表述）<br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -135,7 +135,7 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 </tr>
 <tr>
 <td>§11 脑子</td>
-<td><strong>主线</strong>：上下文 / 记忆 / 问人 / 收尾 / 推理预算 / 评测 / 插件圈 / 四平台 / 开源地图 / 同路人 / <strong>运行层解剖</strong> / <strong>想法池</strong>——官方入口之上剩什么</td>
+<td><strong>主线</strong>：上下文 / 记忆 / 问人 / 收尾 / 推理预算 / 评测 / 插件圈 / 四平台 / 开源地图 / 同路人 / <strong>运行层解剖</strong> / <strong>想法池</strong> / <strong>可逆性判据</strong>——官方入口之上剩什么</td>
 <td>定方向时先读这一章</td>
 </tr>
 <tr>
@@ -477,7 +477,7 @@ else   -&gt; 组级危险(group)      -&gt; 问
 <tr>
 <td>应用安装 / 卸载 / 停止</td>
 <td><strong>问</strong></td>
-<td>不可逆，数据会没</td>
+<td><strong>可逆一半</strong>：程序能重装，数据不能（§11.20.3）。所以不是"一律问"，是问 + 先给备份选项</td>
 </tr>
 <tr>
 <td>GitHub 写入（push）</td>
@@ -690,9 +690,9 @@ else   -&gt; 组级危险(group)      -&gt; 问
 </tr>
 </tbody>
 </table></div>
-<p><strong>补偿机制（手机没有回收站，所以要补两样）</strong>：</p>
+<p><strong>补偿机制（回收站只在设备内有效，所以要补两样）</strong>：</p>
 <p><strong>第一样：全程可见、随时能掐。</strong> 这正好接着 §2 的"过程链实时展开"。第三档不是闭眼放权——它每点一下你都看得见，觉得不对随时按停止。<strong>电脑上你也不知道它点了哪个按钮，我们知道。这是手机端唯一比电脑强的地方，也正是第三档成立的前提。</strong></p>
-<p><strong>第二样：事后一份清单，不可撤的标红。</strong> 跑完给一张"这轮做了什么"的表，能撤的给撤销入口（文件写入有 <code>FileBackupStore</code>），撤不了的（卸载、push、发消息）明确标出来。</p>
+<p><strong>第二样：事后一份清单，边界外的标红并给补偿路径。</strong> 跑完给一张"这轮做了什么"的表，能撤的给撤销入口（文件写入有 <code>FileBackupStore</code>），<strong>出了设备边界的（付款、发消息、下单、push）标出来，并写上"还能怎么撤、多久内、找谁"</strong>。清单里"不可撤"是一个不准确的说法——准确的是"可逆性不由我们掌握"（§11.20.4）。</p>
 <h3>3.7 文案要改</h3>
 <ul>
 <li>第二档副标题：~~"危险操作弹窗确认，勾选后同类不再问"~~ → <strong>"不危险的我直接做，危险的问你"</strong></li>
@@ -4124,7 +4124,7 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 </tr>
 </tbody>
 </table></div>
-<p>为什么这是刚需：<strong>手机上的错误不可逆。</strong> 电脑上点错 Ctrl+Z，手机上钱付出去了、消息发出去了。</p>
+<p>为什么这是刚需：<strong>出了设备边界的错误不可逆，跟设备无关。</strong> 电脑上删错文件有回收站，可一旦钱付出去、消息发出去、单子下了，电脑同样撤不回（详见 §11.20）。手机只是<strong>更常</strong>走到那一步——支付、社交、验证码都在这台机器上。</p>
 <p>为什么没人做：怕"显得笨"。但"显得笨"和"闯祸"，用户只会卸载闯祸的那个。</p>
 <p>而且这个性格<strong>无法靠 prompt 实现</strong>——没有账本、没有完成判据、没有 Unknown 状态，你想诚实都诚实不了。<strong>这就是异化的技术落点。</strong></p>
 <h4>11.18.9 运行层要补的五个部件</h4>
@@ -4343,7 +4343,174 @@ commit(action = &quot;退款&quot;)
 </code></pre>
 <p><strong>每往上一层，都要下面那层已经跑够久。</strong> 这条不是保守，是这六条想法全都建立在"有历史"之上。</p>
 <hr />
-<h3>11.20 这一章的来源（故意跨出 Agent 圈）</h3>
+<h3>11.20 可逆性：由边界决定，不由设备决定</h3>
+<p>这一节是修正。上一轮我说"手机不可逆、电脑有回收站"，说错了，用户当场顶回来：</p>
+<blockquote>
+<p>删文件、卸载应用，手机是退不了，但能重下；电脑有回收站能退回。<strong>可只要它出了沙箱、真的操作了，付钱出去，不管手机还是电脑都退不回来——因为已经从你账号扣了。</strong></p>
+</blockquote>
+<p>这个纠正比原来那句准得多，而且把结论从"态度"变成了"判据"。</p>
+<h4>11.20.1 先把两件事分开</h4>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>动作</th>
+<th>手机</th>
+<th>电脑</th>
+<th>差别在哪</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>删文件</td>
+<td>相册/文件管理有回收站，第三方 App 的数据没有</td>
+<td>回收站 / 版本控制</td>
+<td><strong>只在"有没有人替你留副本"</strong></td>
+</tr>
+<tr>
+<td>卸载 App</td>
+<td>能重装，但数据没了</td>
+<td>能重装</td>
+<td>程序可逆，<strong>状态不可逆</strong></td>
+</tr>
+<tr>
+<td>改设置</td>
+<td>改得回来</td>
+<td>改得回来</td>
+<td>无差别</td>
+</tr>
+<tr>
+<td><strong>付款 / 转账</strong></td>
+<td><strong>撤不回</strong></td>
+<td><strong>撤不回</strong></td>
+<td>钱已从账号扣，到了对方账上</td>
+</tr>
+<tr>
+<td><strong>发消息 / 发朋友圈</strong></td>
+<td>2 分钟内可撤回，之后不行</td>
+<td>同</td>
+<td>由<strong>接收方规则</strong>决定</td>
+</tr>
+<tr>
+<td><strong>下单 / 提交表单</strong></td>
+<td>未发货可取消，已发货不行</td>
+<td>同</td>
+<td>由<strong>商家规则</strong>决定</td>
+</tr>
+<tr>
+<td><strong>push / 提交简历 / 授权登录</strong></td>
+<td>撤不回</td>
+<td>撤不回</td>
+<td>由<strong>平台规则</strong>决定</td>
+</tr>
+</tbody>
+</table></div>
+<p>上半张表，手机电脑的差别是"有没有副本"；<strong>下半张表，两边一模一样。</strong></p>
+<p>所以正确的说法不是"手机不可逆"，是：</p>
+<blockquote>
+<p><strong>可逆性取决于动作有没有出设备边界，跟设备无关。</strong></p>
+</blockquote>
+<h4>11.20.2 那手机到底难在哪：不是更不可逆，是更常不可逆</h4>
+<p>手机是账号的入口——支付、社交、验证码、外卖、打车、银行全在这。所以日常任务里<strong>出边界的动作占比高</strong>。电脑上大部分活儿是本地文件、代码、编译、查询，出边界的少（push 一天也就几次）。</p>
+<p>这个区别看着小，结论完全不同：</p>
+<ul>
+<li>如果信"手机不可逆" → 结论是"手机要更谨慎"。<strong>这是态度，写不进代码。</strong></li>
+<li>如果信"出边界不可逆" → 结论是"<strong>识别边界在哪</strong>"。<strong>这是判据，能写成代码。</strong></li>
+</ul>
+<h4>11.20.3 三分法：边界内 / 边界内损耗 / 边界外</h4>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>层</th>
+<th>判据</th>
+<th>例子</th>
+<th>处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>边界内</strong></td>
+<td>改了自己能改回来</td>
+<td>点开页面、切 tab、改设置、写工作区文件</td>
+<td>放行，顺手留副本</td>
+</tr>
+<tr>
+<td><strong>边界内·损耗</strong></td>
+<td>程序可逆、<strong>状态不可逆</strong></td>
+<td>卸载 App、清缓存、删照片、清聊天记录</td>
+<td>问，且优先给"先备份"这一项</td>
+</tr>
+<tr>
+<td><strong>边界外</strong></td>
+<td>一旦发出，<strong>主动权在对方</strong></td>
+<td>付款、发消息、下单、push、授权登录、提交表单</td>
+<td>做之前确认；做完<strong>记补偿路径</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>这跟 §3.3 那三把尺子（不威胁隐私、不触碰财产、不损害财产）是同一件事，但更可执行：三把尺子说"别碰财产"，这条说"<strong>边界外的动作，技术手段一律无效</strong>"。</p>
+<p>顺带把 §3.3 那张组级表里"应用安装/卸载/停止 → 不可逆"那句校正一下：它不是"不可逆"，是"<strong>可逆一半</strong>"——程序能重装，数据不能。所以处理方式不是"一律问"，是"问，并且先给备份选项"。</p>
+<h4>11.20.4 最有用的一条：边界外不是"绝对不可逆"，是"可逆性不由我们掌握"</h4>
+<p>这条把我上一轮那个偏悲观的结论翻过来了。</p>
+<p>出了边界的动作，事后还有三条路：</p>
+<ol>
+<li><strong>平台给的撤回窗口</strong>（微信 2 分钟、部分 App 的"取消订单"）</li>
+<li><strong>对方的退款/取消规则</strong>（未发货可取消、七天无理由）</li>
+<li><strong>人工客服</strong>（最后手段，成本最高）</li>
+</ol>
+<p>所以正确的做法不是"尽量别做"，是<strong>做的时候挑那条留了回头路的通道</strong>：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>要做的事</th>
+<th>别这么走</th>
+<th>这么走</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>付钱</td>
+<td>直接转账</td>
+<td>走订单（可取消、可退款、有凭证）</td>
+</tr>
+<tr>
+<td>通知人</td>
+<td>直接发出去</td>
+<td>存草稿先给人看 / 用能撤回的渠道</td>
+</tr>
+<tr>
+<td>提交表单</td>
+<td>直接提交</td>
+<td>先存草稿，确认后再提交</td>
+</tr>
+<tr>
+<td>改远端代码</td>
+<td>直接 push</td>
+<td>开分支 / draft PR</td>
+</tr>
+</tbody>
+</table></div>
+<p>落到代码上就是一句话：<strong><code>commit()</code> 之前问一句——这个通道，事后还有没有回来的路？没有，就换成有的。</strong></p>
+<p>这是一条很便宜的实现：<code>HandProvider</code> 里给每个能力标一个 <code>compensable: Boolean</code>，编排时优先选 <code>compensable = true</code> 的那个实现（能走官方退款 API 就别走 UI 点"确认支付"）。</p>
+<h4>11.20.5 记账要记"补偿路径"，而且它带 TTL</h4>
+<p>现在账本记"做了什么"。边界外的动作要多记三个字段：<strong>怎么撤、多久内能撤、找谁</strong>。</p>
+<p>出事故的时候，用户要的不是"对不起我错了"，是"<strong>现在还能怎么办</strong>"。这一条正好落在"记性"和"良心"两个外设上，不新增部件。</p>
+<p>有个副产品值得注意：<strong>补偿路径会过期。</strong> "24 小时内可取消"这句话，过了 24 小时就是错的——所以它必须是<strong>带 TTL 的记忆</strong>，直接接 §11.5 那套失效机制，而不是普通日志。</p>
+<h4>11.20.6 对第三档（全放权）的影响</h4>
+<p>§3.6 里我写第三档成立的前提是"全程可见、随时能掐"。加了这条，得再加一句：</p>
+<blockquote>
+<p><strong>边界外的动作，即使在第三档，也要留下补偿路径。</strong></p>
+</blockquote>
+<p>因为"看得见"解决的是"发现得早"，不解决"撤不回来"。这两件事常被混为一谈。</p>
+<p>§3.6 那句"手机没有回收站"，应改成"<strong>回收站只在设备内有效</strong>"——更准，也更能解释为什么第三档敢放：设备内的错误我们有副本，边界外的错误我们有清单和补偿记录。</p>
+<h4>11.20.7 净结论</h4>
+<ul>
+<li>撤销不是设备问题，是<strong>边界问题</strong>。</li>
+<li>手机不是更不可逆，是<strong>更常不可逆</strong>（账号入口，出边界动作占比高）。</li>
+<li>出边界的动作，<strong>技术上一律撤不回</strong>，只能靠通道选择 + 补偿记录。</li>
+<li>所以"识别边界"必须写进判据，不能停在"我们要谨慎"。</li>
+</ul>
+<p>一句话：<strong>设备内靠副本，边界外靠通道。副本是技术，通道是选择——技术能兜底，选择才救命。</strong></p>
+<h3>11.21 这一章的来源（故意跨出 Agent 圈）</h3>
 <div class="tblwrap"><table>
 <thead>
 <tr>
@@ -4459,6 +4626,11 @@ commit(action = &quot;退款&quot;)
 <td>筛选标准：别人没做 + 我们做得了 + 越用越值钱；依赖链：钩子→账本→IR→技能→前推</td>
 </tr>
 <tr>
+<td><strong>可逆性判据（§11.20）</strong></td>
+<td><strong>无外部来源，用户一句质询逼出来的修正</strong>："付钱出去不管手机还是电脑都退不回来，因为已经从你账号扣了"。推翻了 §3.6 / §11.18.8 里"手机不可逆、电脑有回收站"的对比</td>
+<td>可逆性取决于动作有没有出设备边界；手机不是更不可逆是更常不可逆；边界外靠通道不靠技术</td>
+</tr>
+<tr>
 <td>四平台对照（§11.15）</td>
 <td>iOS：WWDC 2026 App Intents（<code>EntityCollection</code> / <code>LongRunningIntent</code> / <code>IntentExecutionTargets</code>）＋ Apple 文档「can't enforce deterministic behavior」；鸿蒙：Intents Kit 文档（仅企业开发者）＋ 小艺智能体平台（50+ 插件、A2A）；Android：Opposable 45 台机 3324 次实测、无障碍注入检测（<code>FLAG_IS_ACCESSIBILITY_EVENT</code>）；桌面：Raycast 扩展 API（manifest / 版本协商）</td>
 <td>四个平台都只做"手"；失败在"在线与焦点"不在"看屏幕"；藏不住就不该藏；版本协商；任务时长要改判</td>
@@ -4545,6 +4717,10 @@ commit(action = &quot;退款&quot;)
 <tr>
 <td>2026-11-28 15:10</td>
 <td><strong>新增 §11.19「还能做什么：六条想法池」</strong>（来源表顺延 §11.20，二十二类）。<strong>整节标注为设想非结论</strong>，开头就写"别把设想当规格"。筛选标准三条：别人没做 + 我们做得了 + 越用越值钱。① <strong>Action IR</strong>（动作语义化，<code>select(订单号)</code> 而非 <code>tap(x,y)</code>）——编译器都有 IR、agent 没有，一个改动解四个问题（坐标不稳/技能失效/<code>Unknown</code> 太多/回放读不懂），且<strong>语义动作自带验证</strong>；② <strong>可回放三衍生</strong>：路口预警（任务指纹=包名+目标动词+栈深序列，全是确定性特征）、<strong>人机接力</strong>（换执行者而非暂停，交接边界=结果已持久化+下一请求未开始）、标注入库；③ <strong>意图回声</strong>（动手前一行复述"我要退的是【订单…￥89】"）——不是问，是摊开，拦"顺利但错了"这一整类；④ <strong>权限人格化</strong>（看客/跑腿/守门），把权限边界变成可理解实体，<strong>责任要能落到具体角色上才叫责任</strong>；⑤ <strong>时间资源化</strong>（deadline/最早最晚/定时继续）——agent 现在没有时钟，只有下一步，而"代你等"是手机独有价值；⑥ <strong>否定性决策</strong>（记"为什么没做"），是良心外设的知识来源。⑦ <strong>什么会杀死这套架构</strong>四条，三条落在判断/完成判据/责任链——证明选层抗变。⑧ <strong>如果只做一件=Action IR</strong>。⑨ <strong>依赖链警告</strong>：钩子→账本→IR→技能→前推，<strong>顺序错了会死</strong>（没入口就造语言、没历史就做预测）。<strong>代码零改动</strong></td>
+</tr>
+<tr>
+<td>2026-11-28 15:42</td>
+<td><strong>新增 §11.20「可逆性：由边界决定，不由设备决定」</strong>（来源表顺延 §11.21）。<strong>用户一句质询推翻我上一轮的对比</strong>："付钱出去不管手机还是电脑都退不回来，因为已经从你账号扣了"。① <strong>两件事分开</strong>：删文件/卸载/改设置，手机与电脑只差"有没有人替你留副本"（卸载是<strong>可逆一半</strong>：程序能重装、数据不能）；付款/发消息/下单/push/授权登录，<strong>两台设备一模一样撤不回</strong>——可逆性取决于<strong>动作有没有出设备边界</strong>，与设备无关；② <strong>手机难在哪</strong>：不是更不可逆，是<strong>更常不可逆</strong>（账号入口，出边界动作占比高）→ 结论从"要更谨慎"（态度，写不进代码）变成"<strong>识别边界在哪</strong>"（判据，能写成代码）；③ <strong>三分法</strong>：边界内（放行+留副本）/ 边界内·损耗（问+先给备份）/ 边界外（做前确认+做完记补偿路径）；④ <strong>关键翻转</strong>：边界外不是"绝对不可逆"，是"<strong>可逆性不由我们掌握</strong>"——平台撤回窗口、对方退款规则、人工客服三条后路 → 做法不是"尽量别做"，是<strong>挑留了回头路的通道</strong>（走订单而非转账、存草稿而非直发、开分支而非直推），落代码即 <code>compensable: Boolean</code> + 编排优先选可补偿实现；⑤ <strong>记账多三字段</strong>（怎么撤/多久内/找谁），且<strong>补偿路径带 TTL</strong>（"24 小时内可取消"过期即失效，接 §11.5）；⑥ <strong>修正三处旧表述</strong>：§3.6"手机没有回收站"→"<strong>回收站只在设备内有效</strong>"、§3.3 卸载"不可逆"→"可逆一半"、§11.18.8"手机上的错误不可逆"→"<strong>出了设备边界的错误不可逆，跟设备无关</strong>"；⑦ 第三档补一句：<strong>边界外动作即使全放权也要留补偿路径</strong>——"看得见"解决发现得早，不解决撤不回来。净结论：<strong>设备内靠副本，边界外靠通道；副本是技术，通道是选择。代码零改动</strong></td>
 </tr>
 </tbody>
 </table></div>
