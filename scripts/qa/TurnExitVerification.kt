@@ -1,9 +1,16 @@
 /**
- * R8 回合结束原因 harness（纯 JVM，不加载 Android）。
+ * R8 回合结束原因 harness（纯 JVM，无 JUnit 依赖，沙箱/净机器一条命令就能跑）。
  *
- * 为什么这个文件到 R8 才有：`TurnClock.kt` 的注释从 R5 起就写着「`TurnClockTest`
- * 可在变异门禁里逐条打靶」，但仓里一直没有这个文件——注释承诺的东西没人验，
- * 等于没有。这一版把它补上，同时补 `TurnExit` 的语义。
+ * 与 `core/src/test/java/com/beichen/polaris/core/agent/TurnClockTest.kt` 的分工——
+ * **那份一直在，不是这里补的**：
+ *
+ * | | TurnClockTest（Gradle 跑） | 本文件（run-turn-exit-verification.sh 跑） |
+ * |---|---|---|
+ * | 管什么 | 时间线信封（turnId / step / elapsed）、T6 的默认值与 set | `TurnExit` 取值域、isCompleted 判据 |
+ * | 何时跑 | CI 的 unit test + 变异门禁的 trace 组 | 本地/沙箱，不需要 Android SDK |
+ *
+ * 两份都留着是有意的：CI 那份权威但本地要 Gradle，这份便宜到随手就能跑。
+ * 改 `TurnExit` 时两份都要看一眼——语义重复的代价是漏改一处，收益是两边都不会瞎。
  *
  * 断言口径（每条都要能被一句代码改动杀死）：
  *  - `wire` 必须与历史字面值逐字一致（改一个字，既有日志解析与既有断言全断）；
