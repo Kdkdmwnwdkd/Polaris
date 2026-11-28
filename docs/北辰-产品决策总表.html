@@ -69,7 +69,7 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-28 03:20</strong>（§11.17 同路人 · 六个项目逐个读文档）<br />
+<p>最后更新：<strong>2026-11-28 10:55</strong>（§11.18 运行层解剖 · 我们造的是外设）<br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -135,7 +135,7 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 </tr>
 <tr>
 <td>§11 脑子</td>
-<td><strong>主线</strong>：上下文 / 记忆 / 问人 / 收尾 / 推理预算 / 评测 / 插件圈 / 四平台 / 开源地图 / <strong>同路人</strong>——官方入口之上剩什么</td>
+<td><strong>主线</strong>：上下文 / 记忆 / 问人 / 收尾 / 推理预算 / 评测 / 插件圈 / 四平台 / 开源地图 / 同路人 / <strong>运行层解剖</strong>——官方入口之上剩什么</td>
 <td>定方向时先读这一章</td>
 </tr>
 <tr>
@@ -3846,7 +3846,349 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 </li>
 </ol>
 <hr />
-<h3>11.18 这一章的来源（故意跨出 Agent 圈）</h3>
+<h3>11.18 我们造的不是脑子，是脑子的工作台</h3>
+<blockquote>
+<p>这一节的结论被推翻过两次，两次都是用户用解剖学直觉顶回来的。记下来是因为<strong>推翻的过程本身有用</strong>——第一次画成"模型下面还有一层",第二次画成"先验在推理之前生效",都不对，第三次才对。</p>
+</blockquote>
+<h4>11.18.1 两种画法，前两种都是错的</h4>
+<p><strong>错法一（我最初的）</strong>：把运行层当成"脑子"。</p>
+<p>这等于说手之外的一切都是脑子。太粗，导致"运行层写得好"和"判断力好"混成一件事。</p>
+<p><strong>错法二（第一次修正）</strong>：画成分层栈——最上面是模型（推理），下面是先验（潜意识），再下面是身体，最下面是手脚。</p>
+<p>看起来清楚，但有三个说不通的地方：</p>
+<ol>
+<li>潜意识不是一个"层"，它在一次任务里会被反复读写，不是"先过一遍再交给上面"。</li>
+<li>按器官拆会无限往下分（大脑、小脑、左脑、右脑……），越拆越怪。</li>
+<li>它暗示"模型强弱决定一切，外壳只是包一层"，这正是用户反对的那句"推理差的小模型用不了，岂不是很拉"。</li>
+</ol>
+<p><strong>对法</strong>：不按器官拆，<strong>按时刻拆</strong>。</p>
+<pre><code>   ① 进来之前        ② 想的当时        ③ 出去之后
+ （决定它看见什么）   （模型自己）    （记账、评价、入库）
+      ↑ 我们改          ↑ 别人改         ↑ 我们改
+</code></pre>
+<blockquote>
+<p><strong>我们只能在模型的两端动手：进来之前，出去之后。中间那段是别人的。</strong></p>
+</blockquote>
+<p>这一句顺带解释了一件事：<strong>"提示词工程"为什么是伪差异</strong>——它想在中间动手，但中间不归我们。它真正能做的只有"进来之前"那一小段，也就是上下文工程。</p>
+<h4>11.18.2 外设：眼镜、笔记、工作台</h4>
+<p>按时刻拆之后，"我们造的那部分"就有了准确的名字：<strong>不是脑子的一部分，是脑子的外设。</strong></p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>人的器官</th>
+<th>对应</th>
+<th>谁提供</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>大脑（推理）</td>
+<td>云端 / 本地模型</td>
+<td>AI 厂商。改不了，也不用改</td>
+</tr>
+<tr>
+<td><strong>眼镜（看）</strong></td>
+<td>感知归一化</td>
+<td><strong>我们</strong></td>
+</tr>
+<tr>
+<td><strong>手（做）</strong></td>
+<td>动作归一化</td>
+<td><strong>我们</strong></td>
+</tr>
+<tr>
+<td><strong>笔记本（记）</strong></td>
+<td>账本 + 先验库</td>
+<td><strong>我们</strong></td>
+</tr>
+<tr>
+<td><strong>良心（拦）</strong></td>
+<td>危险判据</td>
+<td><strong>我们</strong></td>
+</tr>
+</tbody>
+</table></div>
+<blockquote>
+<p>我们不是在造一个更小的脑子，我们是在给别人的脑子配一副眼镜和一本笔记。</p>
+</blockquote>
+<p>这个说法立刻能解释用户担心的那件事：<strong>眼镜不是眼睛；但近视的人没眼镜寸步难行，好眼睛戴了更省力。外设的价值随本体能力下降而上升。</strong></p>
+<h4>11.18.3 三个 seam，一个哲学</h4>
+<p>用户举的例子是最准的切口：<em>"一个模型有视觉模块，你发图片给他，他识别不了，那我们要有自己的识别工具，之后再告诉 AI 识别到什么；但现在基本所有模型都有识别功能了。"</em></p>
+<p>同一件"看屏幕"，有五种实现：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>模型 / 场景</th>
+<th>怎么看</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>早期纯文本</td>
+<td>自己 OCR，把文字喂进去</td>
+</tr>
+<tr>
+<td>有视觉</td>
+<td>直接给截图</td>
+</tr>
+<tr>
+<td>有视觉但看不清小字</td>
+<td>截图 + 局部放大</td>
+</tr>
+<tr>
+<td>树读不到（WebView / 游戏 / Flutter）</td>
+<td>退回 OCR</td>
+</tr>
+<tr>
+<td>都不行</td>
+<td>问人</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>对外是同一个 <code>see()</code>，对内按模型能力选实现。</strong></p>
+<p>我们已经有这个模式的一半——<code>HandProvider</code> 吸收"手"的差异。缺的是另外两个：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>seam</th>
+<th>吸收什么差异</th>
+<th>现在</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Hand</strong></td>
+<td>手：无障碍 / ADB / 官方 AppFunctions</td>
+<td>只有接口，没有第二实现</td>
+</tr>
+<tr>
+<td><strong>Sense</strong></td>
+<td>眼：视觉 / 无障碍树 / OCR / 问人</td>
+<td>零</td>
+</tr>
+<tr>
+<td><strong>ModelProfile</strong></td>
+<td>脑：会什么、不会什么、能吃多少</td>
+<td>零（模型是硬编码的）</td>
+</tr>
+</tbody>
+</table></div>
+<p>三个 seam 是同一个哲学：<strong>能力差异在 seam 里消化，不让它往上冒。</strong></p>
+<p>如果脑子需要知道"是无障碍点不到还是 ADB 超时"，脑子就跟手耦合了；如果脑子需要知道"这个模型没有视觉"，脑子就跟模型耦合了。<strong>耦合一次，换什么都不行。</strong></p>
+<h4>11.18.4 结构一套，参数多套</h4>
+<p>"不同模型用同一套流程"成立，但参数必须不同。</p>
+<pre><code class="language-kotlin">data class ModelProfile(
+    val hasVision: Boolean,
+    val contextWindow: Int,
+    val reasoningBudget: Budget,          // 三档，弱模型默认最低
+    val toolGranularity: Coarse | Fine,   // 强模型给粗工具，弱模型拆细
+    val reliability: Float                // 决定&quot;多快退档&quot;
+)
+</code></pre>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>强模型</th>
+<th>弱模型</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>给多少原始信息</td>
+<td>整棵树</td>
+<td>40 行结构化摘要</td>
+</tr>
+<tr>
+<td>想多久</td>
+<td>可以想长</td>
+<td><strong>少想</strong>（峰值在 12K，16K 反降）</td>
+</tr>
+<tr>
+<td>工具粒度</td>
+<td>一个 <code>ui_action</code> 搞定</td>
+<td><code>tap</code> / <code>input</code> / <code>swipe</code> 拆开，减少选择难度</td>
+</tr>
+<tr>
+<td>失败之后</td>
+<td>自己重规划</td>
+<td>直接换路或问人</td>
+</tr>
+</tbody>
+</table></div>
+<p>关键一句：<strong>弱模型不是强模型的缩小版，是需要另一套脚手架的人。</strong> 教小孩不是把成人教材删一半。</p>
+<h4>11.18.5 外设的价值与模型能力成反比</h4>
+<p>这是解决用户焦虑的那一条。</p>
+<p>强模型自己就能想出"先点搜索框再输入"；弱模型想不出来，但你告诉它，它照做就行。</p>
+<blockquote>
+<p><strong>同一个外设，对弱模型的增益远大于对强模型的增益。模型越弱它越值钱，越强它越像"省事"。</strong></p>
+</blockquote>
+<p>而且这件事不会随模型进步失效——因为世界上永远有大量"不够强但足够便宜"的模型，而用户永远会用便宜的。</p>
+<p>配套的一个数字：同一个 AndroidWorld 榜单，纯视觉 3B 是 19.8%，套一层 harness 是 91.4%。<strong>差 4 倍。harness 是我们的，模型那 1 倍是别人的。</strong></p>
+<h4>11.18.6 蒸馏经验，不蒸馏模型</h4>
+<p>用户提到的那个案例（小模型 + 云端大模型"上课" + 遗忘 + 惩罚，像修仙）——那是<strong>改模型</strong>。权重层面的事，我们做不了，也不该做。</p>
+<p>但还有另一种蒸馏，<strong>我们该做</strong>：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>蒸馏模型</th>
+<th>蒸馏经验</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>改什么</td>
+<td>权重</td>
+<td>规则、技能、上下文</td>
+</tr>
+<tr>
+<td>要什么</td>
+<td>算力、数据、训练</td>
+<td>只要轨迹</td>
+</tr>
+<tr>
+<td>模型升级后</td>
+<td>全部作废</td>
+<td><strong>照样有效</strong></td>
+</tr>
+<tr>
+<td>产物</td>
+<td>一个小模型</td>
+<td>一个先验库</td>
+</tr>
+</tbody>
+</table></div>
+<p>经验蒸馏有个天然优势：<strong>能跨模型复用。</strong> 今天给 A 模型攒的"京东退单路径"，明天换 B 模型照样能用——因为路径是客观的，不是模型的语言习惯。</p>
+<p>"遗忘"和"惩罚"这两个机制本身是对的（§11.5 已记），只是<strong>去掉拟人包装</strong>：做成的路径加分，做砸的降权，全部<strong>确定性计数</strong>，不许模型打分——否则又回到 §3.2 那个坑（自报 70–75%，实际 20–35%）。</p>
+<h4>11.18.7 四个外设的共同属性</h4>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>外设</th>
+<th>干什么</th>
+<th>需要模型吗</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>眼</strong>（Sense）</td>
+<td>把屏幕归一成模型能吃的形式</td>
+<td>不需要</td>
+</tr>
+<tr>
+<td><strong>手</strong>（Hand）</td>
+<td>把动作归一成设备能执行的事件</td>
+<td>不需要</td>
+</tr>
+<tr>
+<td><strong>记性</strong>（Ledger + 先验库）</td>
+<td>记发生了什么、下次先试什么</td>
+<td>不需要</td>
+</tr>
+<tr>
+<td><strong>良心</strong>（判据）</td>
+<td>这一步该不该做</td>
+<td>不需要</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>四个都是确定性的，都能在没有模型的情况下工作，都能单独测。</strong></p>
+<p>模型的角色只有一个：<strong>决定用哪个外设、按什么顺序。</strong> 它不实现外设。</p>
+<p>这条是整个架构最重要的性质——<strong>模型换代时，外设不用重写</strong>；也意味着换模型不是重构，是换一个 <code>ModelProfile</code>。</p>
+<p>顺带解决一个工程问题：<strong>外设可以脱离模型做回归测试。</strong> 给一张树 dump 测 <code>see()</code>，给一组坐标测 <code>hand()</code>，给一条轨迹测判据。这是当前唯一能在"模型天天变"的情况下守住质量的部分。</p>
+<h4>11.18.8 于是"异化"是什么：不是更强，是有性格</h4>
+<p>功能多不叫异化，叫臃肿——RikkaHub（9,255 星，纯聊天客户端）加了两个 feature 就是 agent，说明功能列表根本不构成差异。</p>
+<p>运行层能异化的地方，是<strong>一种用户能感知到的性格</strong>。手机场景只有一种性格值得做，而且没人做：</p>
+<blockquote>
+<p><strong>一个会承认自己不知道的助手。</strong></p>
+</blockquote>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>它现在会说</th>
+<th>异化后会说</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"已完成"</td>
+<td>"我做了，但<strong>不能证明</strong>做成了"</td>
+</tr>
+<tr>
+<td>（直接点那个按钮）</td>
+<td>"这个按钮我<strong>不确定</strong>是不是付款，你看一眼"</td>
+</tr>
+<tr>
+<td>（第 4 次重试）</td>
+<td>"这一步失败三次了，<strong>我停下</strong>，你来决定"</td>
+</tr>
+</tbody>
+</table></div>
+<p>为什么这是刚需：<strong>手机上的错误不可逆。</strong> 电脑上点错 Ctrl+Z，手机上钱付出去了、消息发出去了。</p>
+<p>为什么没人做：怕"显得笨"。但"显得笨"和"闯祸"，用户只会卸载闯祸的那个。</p>
+<p>而且这个性格<strong>无法靠 prompt 实现</strong>——没有账本、没有完成判据、没有 Unknown 状态，你想诚实都诚实不了。<strong>这就是异化的技术落点。</strong></p>
+<h4>11.18.9 运行层要补的五个部件</h4>
+<p>现在的形状是 <code>Loop + ToolExecutor + ContextBudget + TurnJournal</code>。要承载外设，得补三样、改两样：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>部件</th>
+<th>是什么</th>
+<th>为什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>三个账本</strong>（补）</td>
+<td>意图 / 事实 / 授权，同 turn id，append-only</td>
+<td>事故分类。意图≠事实 = 理解偏差；有事实无授权 = 越权；有授权无事实 = 执行失败。现在只有"事实"一本，出了事只能说"它失败了"，说不出哪一类</td>
+</tr>
+<tr>
+<td><strong>不确定度预算</strong>（补）</td>
+<td>步数上限 + 连续无新信息计数</td>
+<td>让"跑偏"早死。信号必须确定性：树 hash 连续 3 步相同、页面栈深度不变、同一 <code>(工具,参数)</code> &gt;2 次、完成谓词没有任何一项翻真</td>
+</tr>
+<tr>
+<td><strong>Exit 枚举</strong>（改）</td>
+<td><code>Done(evidence)</code> / <code>NeedHuman(reason, options)</code> / <code>GiveUp(reason, lastKnown)</code> / <code>Stopped(by)</code></td>
+<td>现在"<code>toolCalls</code> 为空即完成"，比 <code>end_turn</code> 还弱一档。<code>Done</code> 必须带证据：任务开始时把"什么叫完成"写成谓词（<code>订单状态 == 已退款</code>），验不过不许说完成</td>
+</tr>
+<tr>
+<td><strong>退三档</strong>（补）</td>
+<td>收敛（只做只读）→ 问人（给选项+默认值）→ 放弃（说清做到哪）</td>
+<td>把"该停的时候停"变成机制，不靠模型自觉</td>
+</tr>
+<tr>
+<td><strong>三个钩子</strong>（补）</td>
+<td>组装前过滤 / 动作前直觉 / 动作后记账</td>
+<td>没有钩子，攒了一库经验也用不上——<strong>经验需要入口</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p><code>Unknown</code> 这一态是现在完全没有的，而它是手机场景最多的一态：Tasker 那条"超时不算错误，所以 <code>%err</code> 是空的"，DSH-Go 那条"结果不明的动作不许换通道重放"，说的都是它。</p>
+<p>动作语义归一成三种，不让上层知道底层：</p>
+<pre><code class="language-kotlin">ActionDone(evidence)        // 做成了，带证据
+ActionNotPerformed(reason)  // 没做成，知道原因
+ActionUnknown()             // 派出去了，不知道成没成 —— 先去核实，不许重试
+</code></pre>
+<h4>11.18.10 顺序</h4>
+<ol>
+<li><strong>先开钩子 + 加 <code>ModelProfile</code> 和 <code>Sense</code></strong>。哪怕钩子里先空着。这是"身体能不能承载外设"的分水岭，也顺手消掉"换模型要改代码"。</li>
+<li><strong>再攒负知识（③ 该不该）和手法（② 怎么做）</strong>。这两层最确定、最不依赖统计。做法照 DSH-Go 那套：模型起草 → 人收下 → 试用 → 三次两次不灵自动退役（§11.17.5）。</li>
+<li><strong>最后才是习惯（④ 先试啥）</strong>。它需要重复数据，急不来。</li>
+<li><strong>一直不做</strong>：蒸馏模型、做多 Agent 编队、让模型自评置信度。</li>
+</ol>
+<h4>11.18.11 净结论</h4>
+<ol>
+<li><strong>"手"是能力问题，"脑子"是责任问题。</strong> 能力会被平台解决（1–2 年），责任平台不愿接（接了就要担责）。所以手会商品化，脑子不会。</li>
+<li><strong>我们造的不是脑子的一部分，是脑子的外设</strong>：眼、手、记性、良心。四个都确定性、都能无模型测试、都能随模型换代而不改。</li>
+<li><strong>外设的价值与模型能力成反比。</strong> 这条同时回答了两个问题：为什么弱模型也能用（靠外设兜）、为什么模型进步不会让我们白干（永远有便宜模型）。</li>
+<li><strong>异化不是更强，是有性格</strong>——"会承认自己不知道"。这个性格买不来，只能靠 Unknown 态、完成判据、三个账本支撑。</li>
+<li><strong>窗口期在缩短，但资产是积累型的。</strong> 负知识、做法、历史轨迹都需要时间攒。晚一年入场不是少一年技术，是<strong>少一年的库</strong>，而库没法靠聪明补。</li>
+<li><strong>一句话</strong>：手会被收编，身体不会被收编，但身体本身不产生差异——<strong>差异是它装的那层先验，所以运行层的任务不是"更强"，是"留出能装经验的位置"。</strong></li>
+</ol>
+<hr />
+<h3>11.19 这一章的来源（故意跨出 Agent 圈）</h3>
 <div class="tblwrap"><table>
 <thead>
 <tr>
@@ -3952,6 +4294,11 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 <td>审批四层结构（档位/硬规则/App名单三态/确认卡）、按住一秒才生效、任务中禁止放宽、技能自动起草+试用+退役、光带、3 分钟终止、后台屏、打码、结果不明不许重放</td>
 </tr>
 <tr>
+<td><strong>运行层解剖（§11.18）</strong></td>
+<td><strong>没有外部来源，是三轮讨论 + 前面各节材料的汇合</strong>。被推翻两次：先当"脑子"、再画成"分层栈"，第三次改为"按时刻拆 + 外设"。用到的实证仍来自前文：AndroidWorld 19.8% vs 91.4%、自报置信度 70–75% vs 20–35%、推理预算峰值 12K、DSH-Go 技能起草、天使之魂衰减</td>
+<td>我们造的是外设不是器官；结构一套参数多套；外设价值与模型能力成反比；蒸经验不蒸模型</td>
+</tr>
+<tr>
 <td>四平台对照（§11.15）</td>
 <td>iOS：WWDC 2026 App Intents（<code>EntityCollection</code> / <code>LongRunningIntent</code> / <code>IntentExecutionTargets</code>）＋ Apple 文档「can't enforce deterministic behavior」；鸿蒙：Intents Kit 文档（仅企业开发者）＋ 小艺智能体平台（50+ 插件、A2A）；Android：Opposable 45 台机 3324 次实测、无障碍注入检测（<code>FLAG_IS_ACCESSIBILITY_EVENT</code>）；桌面：Raycast 扩展 API（manifest / 版本协商）</td>
 <td>四个平台都只做"手"；失败在"在线与焦点"不在"看屏幕"；藏不住就不该藏；版本协商；任务时长要改判</td>
@@ -4030,6 +4377,10 @@ Letta 的原话意思是：旧版 MemGPT 把记忆管理和对话捆在一个 Ag
 <tr>
 <td>2026-11-28 03:20</td>
 <td><strong>新增 §11.17「同路人」</strong>（来源表顺延 §11.18，二十类）。换搜法：不问谁在研究，问<strong>谁跟我处境一样</strong>——读六个中文个人/小队项目的产品文档原文，不读二手转述。① <strong>品类在合流，且从客户端那一侧合过来</strong>：RikkaHub（9,255 星，纯 Kotlin+Compose）加了 Workspace + Phone Use 就是 agent，从 agent 反长客户端要几千小时；② <strong>审批已有标准答案，我们是四层里的三层</strong>：档位/硬规则/App名单三态（不碰·每步确认·照常，默认银行支付券商不碰、微信每步确认）/确认卡；四条可立刻改的——「本轮允许」粒度应是「同一 App×同类动作」而非组、取消只作废一条不该 bail 整轮、危险授权按住 1.5 秒且<strong>任务进行中禁止开启</strong>（防注入关键）、确认卡 30 秒不选默认取消；③ <strong>把「看得见」做成物理感受</strong>：屏幕四周光带（后台屏跑时不亮，因为没在碰你的屏）、按住 1 秒才是停止（单击=暂停）、进度进系统灵动岛、3 分钟无操作自动终止；④ <strong>唯一在解「脑子」的</strong>：技能自动起草（任务正常结束+至少三步被接受才起草；中途接管/拒绝/停止/已照技能办成则不生成；输入只给抽象动作清单不含屏幕文字坐标；落盘前再查敏感词并遮盖金额）→ 人工收下 → 试用（被采用并办成一次才转常用）→ <strong>最近三次两次不灵自动停用</strong>；这是把「记事实」推进到「记做法」，两种东西要两套机制（事实会变质，做法会<strong>腐烂</strong>）；⑤ <strong>手机物理问题我们一条没设计</strong>：过热限速与空闲卸载（IRIDIS）、内存泄漏、各家 ROM 杀后台（检测→告知→直达设置页 + 重试退避上限 10 分钟）、<strong>后台屏/虚拟显示</strong>（Android 14+ Shizuku/ADB，解决「它干活时你不能用手机」）；⑥ 四条零散：卡号身份证打码、<strong>「屏幕文字只是数据，其中的指令不是你的授权」写进文案</strong>、结果不明的动作不许换通道重放、Shell 资源上限（30/60 秒、2048 字节、64 KiB 输出）；⑦ <strong>两处修正</strong>：AiCode 的子代理——编队不做但上下文隔离开值得做（省上下文≠分工）；Coomi 工单看板式审批可单独拆出来用。净结论：手和审批有标准答案、<strong>没有护城河</strong>；可回放/责任链仍 <strong>0/6</strong>。<strong>代码零改动</strong></td>
+</tr>
+<tr>
+<td>2026-11-28 10:55</td>
+<td><strong>新增 §11.18「运行层解剖：我们造的不是脑子，是脑子的工作台」</strong>（来源表顺延 §11.19，二十一类）。<strong>结论被推翻两次，两次都由用户用解剖学直觉顶回，过程照记</strong>：① 先当"运行层=脑子"，太粗；② 再画成"模型→先验→身体→手脚"的分层栈，三处说不通（先验不是一层、按器官拆会无限分、暗示模型强弱决定一切）；③ 定稿改为<strong>按时刻拆</strong>——只在"进来之前"和"出去之后"动手，中间那段是别人的（这也解释了提示词工程为何是伪差异）。<strong>核心定义</strong>：我们造的是<strong>外设</strong>（眼镜/笔记/工作台），不是器官；四个外设=眼（Sense）/ 手（Hand）/ 记性（Ledger+先验库）/ 良心（判据），<strong>全部确定性、全部可脱离模型测试、模型换代不需要重写</strong>。<strong>三个 seam</strong>（Hand/Sense/ModelProfile）一个哲学：能力差异在 seam 里消化，不往上冒。<strong>结构一套、参数多套</strong>（ModelProfile：视觉/窗口/推理预算/工具粒度/可靠性）。<strong>外设价值与模型能力成反比</strong>——这条同时回答"弱模型能否用"（靠外设兜）与"模型进步会不会让我们白干"（永远有便宜模型）。<strong>蒸经验不蒸模型</strong>（权重会作废，轨迹能跨模型复用；遗忘与惩罚去掉拟人包装、改确定性计数）。<strong>异化=有性格不是更强</strong>：会承认自己不知道；靠 Unknown 态 + 完成判据 + 三账本支撑。<strong>运行层补五个部件</strong>：三账本（意图/事实/授权，事故分类器）、不确定度预算（树hash不变/栈深不变/重复动作/谓词不翻真 → 退三档）、Exit 枚举（Done 必带 evidence）、退三档（收敛→问人→放弃）、三个钩子（组装前/动作前/动作后）。<strong>顺序</strong>：先开钩子+加 profile 和 sense，再攒负知识与手法，习惯最后；永不蒸馏模型、永不编队、永不信任自评。<strong>代码零改动</strong></td>
 </tr>
 </tbody>
 </table></div>
