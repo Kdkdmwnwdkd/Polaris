@@ -69,7 +69,7 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 <blockquote>
 <p><strong>这是一份活文档。</strong> 以后每次讨论完，只改这一份，不再新建文件。<br />
 仓库里不再出现 <code>xxx-2026-11-28.md</code>、<code>xxx-2026-11-29.md</code> 这种按天分裂的文档。</p>
-<p>最后更新：<strong>2026-11-28 10:55</strong>（§11.18 运行层解剖 · 我们造的是外设）<br />
+<p>最后更新：<strong>2026-11-28 15:10</strong>（§11.19 想法池 · 六条，标注为非结论）<br />
 文档位置：<code>docs/北辰-产品决策总表.md</code>（HTML 同名，随 md 一起重新生成）</p>
 </blockquote>
 <hr />
@@ -135,7 +135,7 @@ hr{border:none;border-top:1px solid var(--line);margin:30px 0}
 </tr>
 <tr>
 <td>§11 脑子</td>
-<td><strong>主线</strong>：上下文 / 记忆 / 问人 / 收尾 / 推理预算 / 评测 / 插件圈 / 四平台 / 开源地图 / 同路人 / <strong>运行层解剖</strong>——官方入口之上剩什么</td>
+<td><strong>主线</strong>：上下文 / 记忆 / 问人 / 收尾 / 推理预算 / 评测 / 插件圈 / 四平台 / 开源地图 / 同路人 / <strong>运行层解剖</strong> / <strong>想法池</strong>——官方入口之上剩什么</td>
 <td>定方向时先读这一章</td>
 </tr>
 <tr>
@@ -4188,7 +4188,162 @@ ActionUnknown()             // 派出去了，不知道成没成 —— 先去�
 <li><strong>一句话</strong>：手会被收编，身体不会被收编，但身体本身不产生差异——<strong>差异是它装的那层先验，所以运行层的任务不是"更强"，是"留出能装经验的位置"。</strong></li>
 </ol>
 <hr />
-<h3>11.19 这一章的来源（故意跨出 Agent 圈）</h3>
+<h3>11.19 还能做什么：六条想法池</h3>
+<blockquote>
+<p>⚠️ <strong>本节是想法池，不是结论。</strong> 上面 §11.18 是已经想清楚、可以照着做的；这一节是"如果继续往前推，还能长什么"。<strong>动手前请先区分两件事</strong>，别把设想当规格。</p>
+</blockquote>
+<p>筛选标准只有三条：<strong>别人没做 + 我们做得了 + 越用越值钱</strong>。三条缺一不列。</p>
+<h4>11.19.1 Action IR：动作不是坐标，是语义</h4>
+<p>现在：</p>
+<pre><code>tap(540, 1200)              // 换分辨率就废
+input(&quot;张三&quot;, 540, 800)     // 坐标 + 文本
+</code></pre>
+<p>应该：</p>
+<pre><code>select(item = &quot;订单 20261127001&quot;)
+fill(field = &quot;收件人&quot;, value = &quot;张三&quot;)
+commit(action = &quot;退款&quot;)
+</code></pre>
+<p>叫<strong>动作中间表示</strong>。编译器都有 IR，agent 没有——这是真空白。</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>收益</th>
+<th>为什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>模型不用算坐标</td>
+<td>§11.14"只输出索引"再往前一步</td>
+</tr>
+<tr>
+<td><strong>技能跨版本存活</strong></td>
+<td>技能存语义不存坐标，App 改版只要语义还在就能用</td>
+</tr>
+<tr>
+<td>回放可读</td>
+<td>"它选了订单 20261127001" &gt;&gt; "它点了 (540,1200)"</td>
+</tr>
+<tr>
+<td><strong>语义动作自带验证</strong></td>
+<td><code>tap</code> 后不知道点到了什么；<code>select</code> 后可以读回来确认</td>
+</tr>
+</tbody>
+</table></div>
+<p>最后一条最重要：<strong>它能把 <code>Unknown</code> 态砍掉一大半</strong>——"选没选中"可查，"点没点对"不可查。</p>
+<p>成本：中（要做一层语义 → 元素的映射，靠文案/资源 id/结构三者匹配，正好是 GKD 那套三层匹配）。</p>
+<h4>11.19.2 可回放的三个衍生：预警、接力、教学</h4>
+<p>三账本现在只被当成"事后能查"。其实能长出三样：</p>
+<p><strong>（1）路口预警（事前）</strong>：它要执行第 7 步，而历史上同类任务在第 7 步失败过三次 → 在第 7 步之前提醒或换路。不是重试，是"这条路我走过，是死路"。</p>
+<p>技术前提是<strong>任务指纹</strong>：包名 + 目标动词 + 页面栈深度序列，全是确定性特征，不用模型。</p>
+<p><strong>（2）人机接力（中途）</strong>：现在只有"暂停"（同一执行者停下）。长任务真正的需求是<strong>换执行者</strong>——任务要跑 20 分钟，你要回微信，它把"做到哪、什么是已完成、下一步、哪些不可逆"交给你，你做完再交回来。</p>
+<p>交接边界有现成答案（Operit2）：<strong>工具结果已持久化 + 下一次模型请求还没开始</strong>，这个瞬间是唯一安全的交接点。</p>
+<p><strong>（3）标注入库（事后）</strong>：用户看着回放点某一步"这步不该这么点"，标注变负知识入库。这条解决"经验从哪来"——不用等模型起草，用户本来就在看。</p>
+<p>成本：低到中，全部复用账本，不需要新数据源。</p>
+<h4>11.19.3 意图回声：最便宜的一道，拦一整类失败</h4>
+<p>有一类失败，不确定度预算抓不到：<strong>一路顺风，但目标理解错了。</strong> 用户说"退掉那个"，它退了另一个；每步界面都变了，谓词也在翻真，但对象错了。</p>
+<p>解法极轻：动手前让它用一句话复述——</p>
+<blockquote>
+<p>我要退的是【订单 20261127001，￥89，未发货】</p>
+</blockquote>
+<p>一行字，不打断，用户扫一眼就知道对不对。</p>
+<p>关键差别：<strong>这不是"问"，是"摊开"。</strong> 问要等回复，摊开只需要给一个停的机会。而且它天然产出"意图账本"的第一条。</p>
+<p>成本：极低（一次生成 + 一行 UI）。</p>
+<h4>11.19.4 权限人格化：产品辨识度最高的一条</h4>
+<p>同一套外设，配三个角色：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>角色</th>
+<th>能干什么</th>
+<th>默认档位</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>看客</strong></td>
+<td>只读：看屏、查、总结</td>
+<td>全放行</td>
+</tr>
+<tr>
+<td><strong>跑腿</strong></td>
+<td>执行：点、输、发、退</td>
+<td>智能审核</td>
+</tr>
+<tr>
+<td><strong>守门</strong></td>
+<td>审批、拦截、留痕</td>
+<td>—</td>
+</tr>
+</tbody>
+</table></div>
+<p>不是多 agent 编队（已否），是<strong>把权限边界变成可理解的实体</strong>。</p>
+<p>用户说"我不让跑腿碰支付"，比"我允许 <code>ui_tap</code> 但不允许危险组"清楚一万倍。而且授权授给的是<strong>角色</strong>不是"AI 整体"——出问题时责任也清楚：是跑腿干的。</p>
+<p><strong>责任要能落到一个具体角色上，才叫责任。</strong> 这条跟"敢留责任链"是一体的。</p>
+<p>成本：中（主要是 UI 和话术，逻辑上就是把三档挂到角色上）。</p>
+<h4>11.19.5 时间：一个被低估的资源维度</h4>
+<p>现在的运行层是"步"驱动的（step 1、2、3）。但手机任务有强时间性：验证码 60 秒过期、限时秒杀、"等我到家再做"、外卖 30 分钟中途要跟踪。</p>
+<p><strong>agent 现在没有"时钟"这个概念，它只有"下一步"。</strong></p>
+<p>应该把时间做成资源：任务有 <code>deadline</code>，动作有"最早/最晚执行"，还有"定时继续"。</p>
+<p>Android 天生支持（AlarmManager / WorkManager），而且在手机上特别自然——<strong>手机 agent 卖的很多场景就是"代你等"</strong>。等待是时间问题，不是推理问题。</p>
+<p>成本：中（要接 WorkManager + 账本里加时间字段）。</p>
+<h4>11.19.6 记"为什么没做"</h4>
+<p>现在的记忆全是"做了什么"。更有价值的是<strong>否定性决策</strong>：</p>
+<ul>
+<li>"没做，因为要验证码，验证码必须人来"</li>
+<li>"没点，因为那个按钮历史上有扣款记录"</li>
+<li>"放弃了，试了两次界面没变"</li>
+</ul>
+<p>作用：下次遇到同样情况<strong>不用重新纠结</strong>。而且它是"良心"外设的知识来源——判据不只是规则表，还有"上次这里我停过"。</p>
+<p>成本：低（数据结构同负知识，多一个字段）。</p>
+<h4>11.19.7 什么会杀死这套架构</h4>
+<p>想创新也得想什么会让它崩。四条，每条都指向"我们选的那层是对的"：</p>
+<div class="tblwrap"><table>
+<thead>
+<tr>
+<th>如果发生</th>
+<th>什么失效</th>
+<th>还剩什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>上下文窗口变得无限</td>
+<td>上下文工程</td>
+<td>记忆、判断</td>
+</tr>
+<tr>
+<td>厂商给了完整 App API</td>
+<td>手、部分 Sense</td>
+<td><strong>该做什么、做到没到、要不要问</strong></td>
+</tr>
+<tr>
+<td>端侧追平云端</td>
+<td>隐私优势</td>
+<td>本地经验库还是我们的</td>
+</tr>
+<tr>
+<td>用户不信任任何 agent</td>
+<td>全部</td>
+<td><strong>可回放是唯一能换信任的东西</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>四条里三条落在同一处：判断、完成判据、责任链。<strong>不是巧合，是这一层最抗变。</strong></p>
+<h4>11.19.8 如果只做一件</h4>
+<p><strong>Action IR。</strong> 一个改动同时解四个问题：坐标不稳、技能失效、<code>Unknown</code> 太多、回放读不懂。</p>
+<p>隐藏好处：<strong>它是唯一能让"技能"变成可移植资产的东西</strong>——语义动作换 App、换模型、换屏幕尺寸都还在。其他创新都建立在"我们有资产"之上，而资产得先有个稳定的形态。</p>
+<h4>11.19.9 一个必须先说清的风险</h4>
+<p>这六条全部是"加东西"。而 §11.18 的结论是"先开钩子、再攒经验"。</p>
+<p><strong>顺序错了会死</strong>：在钩子还没开的时候做 Action IR，等于给一个没有入口的系统造了一套新语言；在账本还没跑起来的时候做接口预警，等于用不存在的历史做预测。</p>
+<p>正确的依赖链是：</p>
+<pre><code>钩子（能记） → 账本（记得住） → Action IR（记得有意义）
+                              → 技能/负知识（能复用）
+                              → 预警/接力/教学（能前推）
+</code></pre>
+<p><strong>每往上一层，都要下面那层已经跑够久。</strong> 这条不是保守，是这六条想法全都建立在"有历史"之上。</p>
+<hr />
+<h3>11.20 这一章的来源（故意跨出 Agent 圈）</h3>
 <div class="tblwrap"><table>
 <thead>
 <tr>
@@ -4299,6 +4454,11 @@ ActionUnknown()             // 派出去了，不知道成没成 —— 先去�
 <td>我们造的是外设不是器官；结构一套参数多套；外设价值与模型能力成反比；蒸经验不蒸模型</td>
 </tr>
 <tr>
+<td><strong>想法池（§11.19）</strong></td>
+<td><strong>无外部来源，是前几节推出来的</strong>。六条：Action IR（动作语义化）、可回放三衍生（预警/接力/教学）、意图回声、权限人格化、时间资源化、否定性决策。全部标注为设想非结论</td>
+<td>筛选标准：别人没做 + 我们做得了 + 越用越值钱；依赖链：钩子→账本→IR→技能→前推</td>
+</tr>
+<tr>
 <td>四平台对照（§11.15）</td>
 <td>iOS：WWDC 2026 App Intents（<code>EntityCollection</code> / <code>LongRunningIntent</code> / <code>IntentExecutionTargets</code>）＋ Apple 文档「can't enforce deterministic behavior」；鸿蒙：Intents Kit 文档（仅企业开发者）＋ 小艺智能体平台（50+ 插件、A2A）；Android：Opposable 45 台机 3324 次实测、无障碍注入检测（<code>FLAG_IS_ACCESSIBILITY_EVENT</code>）；桌面：Raycast 扩展 API（manifest / 版本协商）</td>
 <td>四个平台都只做"手"；失败在"在线与焦点"不在"看屏幕"；藏不住就不该藏；版本协商；任务时长要改判</td>
@@ -4381,6 +4541,10 @@ ActionUnknown()             // 派出去了，不知道成没成 —— 先去�
 <tr>
 <td>2026-11-28 10:55</td>
 <td><strong>新增 §11.18「运行层解剖：我们造的不是脑子，是脑子的工作台」</strong>（来源表顺延 §11.19，二十一类）。<strong>结论被推翻两次，两次都由用户用解剖学直觉顶回，过程照记</strong>：① 先当"运行层=脑子"，太粗；② 再画成"模型→先验→身体→手脚"的分层栈，三处说不通（先验不是一层、按器官拆会无限分、暗示模型强弱决定一切）；③ 定稿改为<strong>按时刻拆</strong>——只在"进来之前"和"出去之后"动手，中间那段是别人的（这也解释了提示词工程为何是伪差异）。<strong>核心定义</strong>：我们造的是<strong>外设</strong>（眼镜/笔记/工作台），不是器官；四个外设=眼（Sense）/ 手（Hand）/ 记性（Ledger+先验库）/ 良心（判据），<strong>全部确定性、全部可脱离模型测试、模型换代不需要重写</strong>。<strong>三个 seam</strong>（Hand/Sense/ModelProfile）一个哲学：能力差异在 seam 里消化，不往上冒。<strong>结构一套、参数多套</strong>（ModelProfile：视觉/窗口/推理预算/工具粒度/可靠性）。<strong>外设价值与模型能力成反比</strong>——这条同时回答"弱模型能否用"（靠外设兜）与"模型进步会不会让我们白干"（永远有便宜模型）。<strong>蒸经验不蒸模型</strong>（权重会作废，轨迹能跨模型复用；遗忘与惩罚去掉拟人包装、改确定性计数）。<strong>异化=有性格不是更强</strong>：会承认自己不知道；靠 Unknown 态 + 完成判据 + 三账本支撑。<strong>运行层补五个部件</strong>：三账本（意图/事实/授权，事故分类器）、不确定度预算（树hash不变/栈深不变/重复动作/谓词不翻真 → 退三档）、Exit 枚举（Done 必带 evidence）、退三档（收敛→问人→放弃）、三个钩子（组装前/动作前/动作后）。<strong>顺序</strong>：先开钩子+加 profile 和 sense，再攒负知识与手法，习惯最后；永不蒸馏模型、永不编队、永不信任自评。<strong>代码零改动</strong></td>
+</tr>
+<tr>
+<td>2026-11-28 15:10</td>
+<td><strong>新增 §11.19「还能做什么：六条想法池」</strong>（来源表顺延 §11.20，二十二类）。<strong>整节标注为设想非结论</strong>，开头就写"别把设想当规格"。筛选标准三条：别人没做 + 我们做得了 + 越用越值钱。① <strong>Action IR</strong>（动作语义化，<code>select(订单号)</code> 而非 <code>tap(x,y)</code>）——编译器都有 IR、agent 没有，一个改动解四个问题（坐标不稳/技能失效/<code>Unknown</code> 太多/回放读不懂），且<strong>语义动作自带验证</strong>；② <strong>可回放三衍生</strong>：路口预警（任务指纹=包名+目标动词+栈深序列，全是确定性特征）、<strong>人机接力</strong>（换执行者而非暂停，交接边界=结果已持久化+下一请求未开始）、标注入库；③ <strong>意图回声</strong>（动手前一行复述"我要退的是【订单…￥89】"）——不是问，是摊开，拦"顺利但错了"这一整类；④ <strong>权限人格化</strong>（看客/跑腿/守门），把权限边界变成可理解实体，<strong>责任要能落到具体角色上才叫责任</strong>；⑤ <strong>时间资源化</strong>（deadline/最早最晚/定时继续）——agent 现在没有时钟，只有下一步，而"代你等"是手机独有价值；⑥ <strong>否定性决策</strong>（记"为什么没做"），是良心外设的知识来源。⑦ <strong>什么会杀死这套架构</strong>四条，三条落在判断/完成判据/责任链——证明选层抗变。⑧ <strong>如果只做一件=Action IR</strong>。⑨ <strong>依赖链警告</strong>：钩子→账本→IR→技能→前推，<strong>顺序错了会死</strong>（没入口就造语言、没历史就做预测）。<strong>代码零改动</strong></td>
 </tr>
 </tbody>
 </table></div>
