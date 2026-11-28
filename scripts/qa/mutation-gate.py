@@ -426,9 +426,10 @@ MUTATIONS = [
         "file": "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
         "group": "storage",
         # 09ef48b8 把 take() 换成 clipText()、droppedChars 改名 droppedText 后，
-        # 原片段失配（匹配 0 处）。这里锚在同一语义上：累加 → 赋值。
-        "old": "        truncatedChars = truncatedChars +\n            droppedText(text) + droppedText(reasoning.orEmpty()),",
-        "new": "        truncatedChars =\n            droppedText(text) + droppedText(reasoning.orEmpty()),",
+        # 原片段失配（匹配 0 处）。锚点必须落在 **User 分支**：ConversationTruncationTest
+        # 的「读回重写不清零截断计数」用的是 UiItem.User，锚到 Assistant 分支会 SURVIVED。
+        "old": "        truncatedChars = truncatedChars + droppedText(text)\n    )",
+        "new": "        truncatedChars = droppedText(text)\n    )",
         "expect": ["读回重写不清零"],
     },
     {
