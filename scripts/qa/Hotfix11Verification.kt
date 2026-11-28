@@ -1022,10 +1022,17 @@ private fun testReasoningFold() {
     }
     check("U8 落盘：MsgRecord.reasoning 截断存储，还原时空白不还原") {
         assertContains("U8", store, "val reasoning: String = \"\"")
-        assertContains("U8", store, "reasoning = reasoning.orEmpty().take(MAX_FIELD_CHARS)")
+        // 09ef48b8 把 take(MAX_FIELD_CHARS) 换成了 clipText(...) 并删掉了那个常量。
+        // 断言跟着实现走，但守的仍是同一件事：落盘那一刻必须被截断。
+        assertContains("U8", store, "reasoning = clipText(reasoning.orEmpty())")
         assertContains("U8", store, "reasoning = reasoning.takeIf { it.isNotBlank() }")
         // 多版本会话记录还原同样带 reasoning
         assertContains("U8", store, "reasoning = sel.reasoning.takeIf { it.isNotBlank() }")
+        // 截断必须安全：终点落在代理对中间要退一格。否则长回答会以半个 emoji 结尾，
+        // 而 JSON 里那个残字节能让整条记录还原失败——这正是换掉 take() 的原因。
+        assertContains("U8", store, "text.substring(0, safeEnd(text, max))")
+        // 上限不许退回 4000：退回等于「长回答重启后变半截」复发（用户可见症状）
+        assertContains("U8", store, "MAX_TEXT_CHARS = 40_000")
     }
     check("U9 VM：reasoningDraft 状态 + handleReasoningDelta 共享 streamDraftLock") {
         // P4-4：草稿锁随状态搬进 GenerationRunController；两条增量必须落在**同一把**锁上，
