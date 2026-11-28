@@ -19,7 +19,7 @@
 >   `ChatUiTypes` / `ToolGroupsFacade` / `ConnectionProbe`，压回 3413。
 > - **第六轮**：工具装配收口——52 个内联 `register(...)` 搬进 `tools/ToolAssembler`，
 >   `ui` / `pet` 只持有工具表、不再决定它（不变量 2 的 D1b），3413 → 3253。
->   四条硬不变量**全部 PASS、零 PENDING**（`15 通过 / 0 失败 / 0 待收口`）。
+>   四条硬不变量**全部 PASS、零 PENDING**（`15 通过 / 0 失败 / 0 待收口`，**第六轮当时的数字**；当前基线见文档地图）。
 > - **第七轮**：冷启动两条恢复路径合并——运行态对账与回合日志扫描从两个协程收成
 >   一条链（`TurnJournal.recoveryFor`），「有写操作可能已生效」第一次成为自动续跑的
 >   一等输入（`AutoResumeReason.UNKNOWN_WRITES`）。3253 → 3224。
@@ -1784,7 +1784,7 @@ JSON 往返、渲染还原），`HistoryCompactorVerification` 新增 B4/B5 源�
 | 参考了谁、借了什么 | `docs/architecture/AgentKit-参照谱系-2026-11-05.md` |
 | 开源项目机制调研 | `docs/research/10/11/12-*.md` |
 | QA 怎么跑、门禁有哪几条 | `scripts/qa/gate.sh` 头部注释、`docs/ops/QA-GATE-CHAIN-HARDENING.md` |
-| P1 四条硬不变量（grep 验收基线） | `scripts/qa/run-runtime-invariants-verification.sh`（PASS/PENDING 分层，当前 `14 通过 / 1 待收口`） |
+| P1 四条硬不变量（grep 验收基线） | `scripts/qa/run-runtime-invariants-verification.sh`（PASS/PENDING 分层，当前 `21 通过 / 0 失败 / 0 待收口`，2026-11-28 实跑） |
 | 沙箱网络 / GitHub 通道 | `docs/ops/沙箱网络与GitHub通道说明.md` |
 | targetSdk 为什么是 28 / 升级那天要做什么 | [`docs/ops/targetSdk-升级清单.md`](docs/ops/targetSdk-升级清单.md) |
 
