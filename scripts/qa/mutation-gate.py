@@ -425,16 +425,18 @@ MUTATIONS = [
         "id": "M8 读回重写清零截断计数（第一版的真实 bug）",
         "file": "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
         "group": "storage",
-        "old": "        truncatedChars = truncatedChars + droppedChars(text)\n    )\n\n    is UiItem.Assistant",
-        "new": "        truncatedChars = droppedChars(text)\n    )\n\n    is UiItem.Assistant",
+        # 09ef48b8 把 take() 换成 clipText()、droppedChars 改名 droppedText 后，
+        # 原片段失配（匹配 0 处）。这里锚在同一语义上：累加 → 赋值。
+        "old": "        truncatedChars = truncatedChars +\n            droppedText(text) + droppedText(reasoning.orEmpty()),",
+        "new": "        truncatedChars =\n            droppedText(text) + droppedText(reasoning.orEmpty()),",
         "expect": ["读回重写不清零"],
     },
     {
         "id": "M9 推理过程截断不计数",
         "file": "core/src/main/java/com/beichen/polaris/core/ConversationStore.kt",
         "group": "storage",
-        "old": "        truncatedChars = truncatedChars +\n            droppedChars(text) + droppedChars(reasoning.orEmpty())",
-        "new": "        truncatedChars = truncatedChars + droppedChars(text)",
+        "old": "        truncatedChars = truncatedChars +\n            droppedText(text) + droppedText(reasoning.orEmpty()),",
+        "new": "        truncatedChars = truncatedChars +\n            droppedText(text),",
         "expect": ["多个被截断字段"],
     },
     {
@@ -1114,8 +1116,10 @@ MUTATIONS = [
         "id": "M51 回合状态默认值变成 failed（没设过状态时把成功回合记成失败）",
         "group": "trace",
         "file": "core/src/main/java/com/beichen/polaris/core/agent/TurnClock.kt",
-        "old": "    var value: String = \"completed\"",
-        "new": "    var value: String = \"failed\"",
+        # 默认值改成 fail-closed 的 Unknown 之后，原片段（String = "completed"）失配。
+        # 语义不变：把「没设过状态」记成失败，T6 必须红。
+        "old": "    var value: TurnExit = TurnExit.Unknown",
+        "new": "    var value: TurnExit = TurnExit.Failed",
         "expect": ["T6"],
     },
     {

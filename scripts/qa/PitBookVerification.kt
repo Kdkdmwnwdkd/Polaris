@@ -231,10 +231,10 @@ fun main() {
         val v = guard.check("fp", duplicateInBatch = false)
         assertTrue("本轮错 2 次应拦截", v is GuardVerdict.Blocked)
         val hint = (v as GuardVerdict.Blocked).hint
-        assertTrue("hint 必须带结果码，实际：$hint", hint.contains("element_not_found"))
-        assertTrue("hint 必须带参数摘要，实际：$hint", hint.contains("发送"))
-        assertTrue("hint 必须区分「本轮」与「历史」，实际：$hint", hint.contains("本轮已失败 2 次"))
-        assertTrue("hint 必须给出「换路」而不是「微调」的指引，实际：$hint", hint.contains("换一条路"))
+        assertTrue("hint 必须带结果码，实际：$hint", "element_not_found" in hint)
+        assertTrue("hint 必须带参数摘要，实际：$hint", "发送" in hint)
+        assertTrue("hint 必须区分「本轮」与「历史」，实际：$hint", "本轮已失败 2 次" in hint)
+        assertTrue("hint 必须给出「换路」而不是「微调」的指引，实际：$hint", "换一条路" in hint)
         d.deleteRecursively()
     }
 

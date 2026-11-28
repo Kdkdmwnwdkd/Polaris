@@ -130,7 +130,7 @@ fun main() {
         s.invalidate(old.id)
         val after = s.search("邮箱", topK = 5)
         assertEquals("失效后只应剩一条", 1, after.size)
-        assertTrue("剩下那条必须是新邮箱，实际：${after.first().content}", after.first().content.contains("personal"))
+        assertTrue("剩下那条必须是新邮箱，实际：${after.first().content}", "personal" in after.first().content)
         d.deleteRecursively()
     }
 
@@ -141,8 +141,8 @@ fun main() {
         s.add("我的常用邮箱改成 personal@example.com", kind = "fact", salience = 9)
         s.invalidate(old.id)
         val prompt = s.summaryForPrompt()
-        assertTrue("提示词不该含旧值（含了就是亲手制造「知道却做错」）", !prompt.contains("work@example.com"))
-        assertTrue("提示词应含新值", prompt.contains("personal@example.com"))
+        assertTrue("提示词不该含旧值（含了就是亲手制造「知道却做错」）", "work@example.com" !in prompt)
+        assertTrue("提示词应含新值", "personal@example.com" in prompt)
         d.deleteRecursively()
     }
 
@@ -176,7 +176,7 @@ fun main() {
         val s2 = MemoryStore(d)   // 重新读盘，模拟进程重启
         assertEquals("重开后有效条数 0", 0, s2.size())
         assertEquals("重开后留档 1 条", 1, s2.totalSize())
-        assertTrue("重开后仍能查到旧值", s2.invalidated().first().content.contains("魅族"))
+        assertTrue("重开后仍能查到旧值", "魅族" in s2.invalidated().first().content)
         d.deleteRecursively()
     }
 

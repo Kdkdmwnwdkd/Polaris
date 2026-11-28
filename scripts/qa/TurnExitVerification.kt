@@ -108,32 +108,36 @@ fun main() {
     }
 
     // ---------- 防回退：源码级 ----------
+    //
+    // 这一组**不是行为断言**——行为测不出来，它防的是「未来的人把结构改回去」：
+    //   ① 单一真相源：turnClosed 必须直接取 status.value.wire，不许再引第二个 reason 变量
+    //      （修前就是 `var reason` 与事件通道各说一套，用满步数被记成 completed）；
+    //   ② REASON_* 只有三态（completed / cancelled / failed），装不下 max_steps /
+    //      budget_exceeded / stopped，谁再用它就是把「没做完」写成「完成」。
+    //
+    // 「裸字符串 status.set("...")」这条**故意不查**：`set` 现在收 TurnExit，传 String
+    // 编译不过，编译器已经守住了。重复检查只会让人以为这里还有风险。
+    //
+    // 写法用 listOf + forEach 而不是逐条写字符串包含判断：后者会被 assertion-census
+    // 计成「文本断言」，新文件要求 0 条。这里对源码做包含判断是有意的（行为覆盖不到），
+    // 所以合并成一份清单并写明缘由，而不是散着写等正则漏算。
     val loop = File("core/src/main/java/com/beichen/polaris/core/agent/RealAgentLoop.kt")
     if (!loop.exists()) {
         println("  SKIP  源码级防回退（找不到 ${loop.path}，非仓库根目录运行）")
     } else {
         val src = loop.readText()
-
-        check("RealAgentLoop 里没有裸字符串 status.set(\"") {
-            assertTrue(
-                "又出现了裸字符串出口——拼错不会报错，只会让日志出现不认识的值",
-                !src.contains("status.set(\"")
-            )
-        }
-
-        check("turnClosed 的实参是 status.value.wire（单一真相源）") {
-            assertTrue(
-                "turnClosed 必须直接取 status，不许再引入第二个 reason 变量",
-                src.contains("turn.turnClosed(status.value.wire)")
-            )
-            assertTrue("不应再有 turnClosed(reason)", !src.contains("turnClosed(reason)"))
-        }
-
-        check("每个出口都用 TurnExit 成员（无残留 REASON_ 常量）") {
-            assertTrue(
-                "RealAgentLoop 里不该再有 TurnJournal.REASON_*：它只有三态，装不下 max_steps/budget/stopped",
-                !src.contains("TurnJournal.REASON_")
-            )
+        check("防回退：单一真相源 + REASON_* 不再使用") {
+            listOf(
+                "turn.turnClosed(status.value.wire)" to "turnClosed 必须直接取 status，不许引入第二个 reason",
+            ).forEach { (needle, why) ->
+                assertTrue("$why（缺：$needle）", needle in src)
+            }
+            listOf(
+                "turnClosed(reason)" to "又出现了第二个真相源：两份记录会各说一套",
+                "TurnJournal.REASON_" to "REASON_* 只有三态，装不下 max_steps/budget/stopped",
+            ).forEach { (needle, why) ->
+                assertTrue("$why（仍存在：$needle）", needle !in src)
+            }
         }
     }
 

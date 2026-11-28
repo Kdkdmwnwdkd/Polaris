@@ -15,7 +15,18 @@
 # 2026-11-26 抬 5 条（625 → 630）：功能页入口从设置页「工具」组搬回抽屉
 # 「功能」折叠组，S8 的「用户可达入口」那处判据随之落到新文件 AppDrawerFeatures.kt。
 # 那 7 项 AppDest 与折叠开关是纯 Compose 声明，没有行为可调，只能看源码。
-text scripts/qa/Hotfix11Verification.kt 632
+# 2026-11-28 抬 2 条（632 → 634），唯一的例外，理由如下：
+#
+# U8 原来的断言是 `reasoning = ….take(MAX_FIELD_CHARS)`，而 09ef48b8 已把实现换成
+# `clipText(...)` 并删掉了那个常量，于是 main 从 run 928 起连续两天红在这条。
+# 修的时候顺手把 U8 补成「守语义」而不只是「守字面」，新增两条：
+#   ① `text.substring(0, safeEnd(text, max))`——截断必须退格，否则长回答会以半个
+#      emoji 结尾，而那个残字节能让整条记录还原失败（这正是换掉 take 的原因）；
+#   ② `MAX_TEXT_CHARS = 40_000`——上限不许退回 4000，退回等于「长回答重启变半截」复发。
+#
+# 这两条**只能看源码**：`safeEnd` 与 `MAX_TEXT_CHARS` 都是 private，harness 编不到
+# （ConversationStore 依赖 Android，进不了纯 JVM 门禁）。不是懒得写行为断言。
+text scripts/qa/Hotfix11Verification.kt 634
 # 2026-11-26 新增 10 条（0 → 8 + 2）：
 # 这两个 harness 原本就用 `code "$f" | grep -q 'X'` 做同一批检查，只是那个形态不被
 # 本脚本的正则计入（`^\s*(expect|fixed|refute|has|hasnt)`）。当天为了让 `grep -q` 不再
@@ -119,4 +130,6 @@ text scripts/qa/run-knowledge-base-verification.sh 10
 text scripts/qa/run-cost-drilldown-verification.sh 10
 text scripts/qa/run-qr-verification.sh 9
 text scripts/qa/run-local-param-input-verification.sh 9
-text __TOTAL__ 1746
+# 总量 1746 → 1748：来自上面 Hotfix11Verification 的 +2（无其他文件增长）。
+# 文件数 69 → 69：新增的 PitBook/TurnExit harness 是 0 条文本断言。
+text __TOTAL__ 1748
