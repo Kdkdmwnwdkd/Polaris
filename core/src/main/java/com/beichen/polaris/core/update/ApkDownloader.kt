@@ -343,22 +343,21 @@ object ApkDownloader {
     /**
      * 单条线路探测：读 [PROBE_BYTES] 就停，按「首字节耗时」和「实测吞吐」两个数打分。
      *
-     * 用 `Call.timeout()` 而不是客户端级超时：这是**同一次下载里的探测阶段**，
-     * 不该为了它另建一个客户端（R-13 约束），也不该改动全局的 120s 读超时。
+     * 走 [runCancellable] 而不是裸 `execute()`：探测同样是「用户可能已经点了取消」的
+     * 那几秒，裸 execute 在取消时不会停，要等它自己读到超时。2.5 秒的单次上限
+     * 通过 `runCancellable(req, timeoutMs)` 设，不动客户端预设（R-13 的 120s 读超时照旧）。
      */
-    private fun probeOne(src: GitHubMirror.Source): GitHubMirror.Probe {
+    private suspend fun probeOne(src: GitHubMirror.Source): GitHubMirror.Probe {
         val req = Request.Builder()
             .url(src.url)
             .header("User-Agent", "Polaris")
             .header("Range", "bytes=0-${PROBE_BYTES - 1}")
             .build()
-        val call = client.newCall(req)
-        runCatching { call.timeout().timeout(PROBE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS) }
         val t0 = System.nanoTime()
         var firstByteAt = 0L
         var got = 0L
         return try {
-            call.execute().use { resp ->
+            client.runCancellable(req, PROBE_TIMEOUT_MS) { resp ->
                 if (resp.isSuccessful) {
                     resp.body?.byteStream()?.use { input ->
                         val buf = ByteArray(16 * 1024)
@@ -382,6 +381,9 @@ object ApkDownloader {
                     bytesPerSec = got * 1_000_000_000L / elapsedNs
                 )
             }
+        } catch (ce: CancellationException) {
+            // 取消要往上传播：吞掉会让「点停止」变成「假装探测完了、继续下载」。
+            throw ce
         } catch (t: Throwable) {
             GitHubMirror.Probe(src.label, false, Long.MAX_VALUE, 0L)
         }

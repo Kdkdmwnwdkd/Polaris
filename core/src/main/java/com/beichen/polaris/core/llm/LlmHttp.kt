@@ -149,9 +149,19 @@ object LlmHttp {
  */
 suspend fun <T> OkHttpClient.runCancellable(
     request: Request,
+    timeoutMs: Long = 0L,
     block: suspend (Response) -> T,
 ): T {
     val call = newCall(request)
+    // 单次调用超时（0 = 沿用客户端预设，现状）。
+    //
+    // 为什么需要这个参数：更新包的「线路探测」只允许等两三秒——死源要尽快判定掉，
+    // 否则探测本身就成了新的等待。但它必须仍然走 runCancellable（裸 execute 在取消时
+    // 不会停），而客户端的 callTimeout 是全局的，不能为了探测把整个下载改短。
+    // 所以把「这一次调用等多久」放在入口上，而不是再派生一个客户端（R-13 的收口点仍是一处）。
+    if (timeoutMs > 0L) {
+        call.timeout().timeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
     val job = currentCoroutineContext()[Job]
     // 取消要在协程**开始取消**的那一刻就掐掉连接，而不是等它「完成」。
     //
