@@ -91,6 +91,24 @@ grep -q 'ensureActive()' "$APK_DL" && good "下载循环响应协程取消" \
   || bad "缺少取消检查（点取消后仍会写完整包）"
 grep -q 'part.delete()' "$APK_DL" && good "失败/取消清理半成品" || bad "失败后不清理 .part"
 
+echo "[4b] 多线路择优（2026-11-29）"
+# 这些是「接线存在」的结构断言；排序规则本身由 run-update-source-rank-verification.sh
+# 真调 GitHubMirror.rank() 验证。分开的理由：那 15 条能证明「排序对不对」，
+# 这里只能证明「下载器有没有把排序结果用上」，两类失败原因不同，不该混在一条里。
+grep -q 'GitHubMirror\.rank(' "$APK_DL" \
+  && good "候选顺序由实测吞吐决定（不再固定盲试）" \
+  || bad "仍按固定顺序试源：慢源不会失败，只会一直占着"
+grep -q 'probeAll(' "$APK_DL" \
+  && good "开工前并发探测各线路" || bad "没有探测，排序无从谈起"
+grep -qF 'header("Range"' "$APK_DL" \
+  && good "换源带 Range 续传（不从头下）" || bad "换源不带 Range，已下字节白费"
+grep -qF 'FileOutputStream(part, resumed)' "$APK_DL" \
+  && good "续传按 append 写（截断会毁掉前半段）" || bad "续传仍覆盖写，会拼出坏包"
+grep -q 'SlowSourceException' "$APK_DL" \
+  && good "慢源与网络错误分开处理（慢源保留 .part）" || bad "慢源当普通失败，续传断链"
+grep -q 'index < sources.lastIndex' "$APK_DL" \
+  && good "最后一个源不启用看门狗（否则会主动失败）" || bad "最后一个源也会被切，等于必然失败"
+
 echo "[5] 安装链路"
 grep -q 'canRequestPackageInstalls' "$INSTALLER" && good "安装前检查「安装未知应用」授权" \
   || bad "缺少未知来源授权检查（O+ 会直接失败）"
