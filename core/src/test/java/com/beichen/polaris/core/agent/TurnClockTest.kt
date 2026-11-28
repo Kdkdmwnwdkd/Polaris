@@ -89,13 +89,24 @@ class TurnClockTest {
         clock.emitTurnEnd("failed")
     }
 
-    /** T6：TurnEndStatus 默认 completed，只被 set 改写。 */
+    /**
+     * T6：TurnEndStatus 默认 **Unknown**（fail-closed），只被 set 改写。
+     *
+     * 修前默认是 `completed`：`runTurn` 的 finally 无条件发事件，任何新增出口只要
+     * 忘了 set，日志里就显示「完成」——把「没做完」伪装成「做完了」，而且伪装得
+     * 恰好是最该被看见的那一端（用满步数 / 超预算 / 用户停止）。
+     *
+     * 现在默认 Unknown：忘了 set 会留下 `status=unknown`，排障时一眼看见，
+     * 而不是静默混进「完成」里。
+     */
     @Test
-    fun `T6 TurnEndStatus 默认 completed 且只被 set 改写`() {
+    fun `T6 TurnEndStatus 默认 Unknown 且只被 set 改写`() {
         val status = TurnEndStatus()
-        assertEquals("completed", status.value)
-        status.set("failed")
-        assertEquals("failed", status.value)
+        assertEquals(TurnExit.Unknown, status.value)
+        assertTrue("默认值不能是 Completed——那是 fail-open", status.value != TurnExit.Completed)
+        status.set(TurnExit.MaxSteps)
+        assertEquals(TurnExit.MaxSteps, status.value)
+        assertTrue("用满步数不算完成", !status.value.isCompleted)
     }
 
     /**
